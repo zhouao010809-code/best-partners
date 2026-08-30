@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -68,22 +68,25 @@ describe('loadConfig', () => {
       .toThrowError('OBSIDIAN_API_KEY');
   });
 
-  it('requires an HTTPS Obsidian API URL', () => {
-    expect(() => loadConfig(validEnvironment({ OBSIDIAN_API_URL: 'http://127.0.0.1:27124' })))
-      .toThrowError('OBSIDIAN_API_URL');
-  });
-
   it('requires a model key when a model name is configured', () => {
     expect(() => loadConfig(validEnvironment({ MODEL_NAME: 'deepseek-chat', MODEL_API_KEY: '' })))
       .toThrowError('MODEL_API_KEY');
   });
 
-  it('requires an HTTPS model API URL when model integration is enabled', () => {
-    expect(() => loadConfig(validEnvironment({
-      MODEL_BASE_URL: 'http://api.deepseek.com',
-      MODEL_NAME: 'deepseek-chat',
-      MODEL_API_KEY: 'model-test-secret'
-    }))).toThrowError('MODEL_BASE_URL');
+  it('rejects HTTP integration URLs without making network calls', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network call'));
+    try {
+      expect(() => loadConfig(validEnvironment({ OBSIDIAN_API_URL: 'http://127.0.0.1:27124' })))
+        .toThrowError('OBSIDIAN_API_URL');
+      expect(() => loadConfig(validEnvironment({
+        MODEL_BASE_URL: 'http://api.deepseek.com',
+        MODEL_NAME: 'deepseek-chat',
+        MODEL_API_KEY: 'model-test-secret'
+      }))).toThrowError('MODEL_BASE_URL');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it('allows an omitted model name and key', () => {
