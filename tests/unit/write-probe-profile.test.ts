@@ -137,6 +137,71 @@ describe('write probe profile aggregation', () => {
     expect(profile.evidence.filter((record) => record.operation === 'safeRead')).toHaveLength(1);
   });
 
+  it('inherits only the latest verified safeRead record from a large prior history', async () => {
+    const verified = priorReadProfile().evidence[0]!;
+    const prior = priorReadProfile({
+      evidence: [
+        verified,
+        ...Array.from({ length: 126 }, (_, index) => ({
+          operation: 'cleanup' as const,
+          status: 'passed' as const,
+          timestamp,
+          reasonCode: `OLD_CLEANUP_${index}`,
+          primitive: 'DELETE_NON_PERMANENT' as const
+        }))
+      ]
+    });
+    const profile = await buildWriteProbeProfile({
+      fingerprint: {
+        pluginId: prior.pluginId,
+        pluginVersion: prior.pluginVersion,
+        obsidianVersion: prior.obsidianVersion
+      },
+      openApiSha256: prior.openApiSha256,
+      checkedAt: '2026-08-31T01:00:00.000Z',
+      priorReadProfile: prior,
+      results: [],
+      persist: async () => {}
+    });
+    expect(profile.evidence.length).toBeLessThan(16);
+    expect(profile.evidence.filter((record) => record.operation === 'safeRead')).toEqual([verified]);
+    expect(profile.evidence.some((record) => record.reasonCode.startsWith('OLD_CLEANUP_'))).toBe(false);
+  });
+
+  it('does not let prior cleanup evidence suppress this run manual-cleanup record', async () => {
+    const prior = priorReadProfile({
+      evidence: [
+        priorReadProfile().evidence[0]!,
+        {
+          operation: 'cleanup',
+          status: 'passed',
+          timestamp,
+          reasonCode: 'OLD_CLEANUP_PASSED',
+          primitive: 'DELETE_NON_PERMANENT'
+        }
+      ]
+    });
+    const profile = await buildWriteProbeProfile({
+      fingerprint: {
+        pluginId: prior.pluginId,
+        pluginVersion: prior.pluginVersion,
+        obsidianVersion: prior.obsidianVersion
+      },
+      openApiSha256: prior.openApiSha256,
+      checkedAt: '2026-08-31T01:00:00.000Z',
+      priorReadProfile: prior,
+      results: [],
+      persist: async () => {}
+    });
+    expect(profile.evidence.filter((record) => record.operation === 'cleanup')).toEqual([{
+      operation: 'cleanup',
+      status: 'unverified',
+      timestamp: '2026-08-31T01:00:00.000Z',
+      reasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      primitive: 'DELETE_NON_PERMANENT'
+    }]);
+  });
+
   it.each([
     ['missing', undefined],
     ['fingerprint mismatch', priorReadProfile({ openApiSha256: 'b'.repeat(64) })],

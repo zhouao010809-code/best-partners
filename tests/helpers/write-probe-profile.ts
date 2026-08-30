@@ -44,13 +44,13 @@ function evidence(result: CapabilityResult): ContractEvidence {
   };
 }
 
-function exactVerifiedReadProfile(input: {
+function exactVerifiedReadEvidence(input: {
   readonly prior: StoredContractProfile | undefined;
   readonly fingerprint: Pick<VaultCapabilityProfile, 'pluginId' | 'pluginVersion' | 'obsidianVersion'>;
   readonly openApiSha256: string;
-}): boolean {
+}): ContractEvidence | undefined {
   const prior = input.prior;
-  if (prior === undefined) return false;
+  if (prior === undefined) return undefined;
   const expectedKey = computeContractProfileKey({ ...input.fingerprint, openApiSha256: input.openApiSha256 });
   const fingerprintMatches = prior.profileKey === expectedKey
     && prior.pluginId === input.fingerprint.pluginId
@@ -62,7 +62,9 @@ function exactVerifiedReadProfile(input: {
     && prior.safeRead
     && latestRead?.status === 'passed'
     && latestRead.reasonCode === 'READ_FIDELITY_VERIFIED'
-    && latestRead.primitive === 'RAW_REREAD';
+    && latestRead.primitive === 'RAW_REREAD'
+    ? latestRead
+    : undefined;
 }
 
 export async function buildWriteProbeProfile(input: {
@@ -78,14 +80,15 @@ export async function buildWriteProbeProfile(input: {
   const exactPrior = input.priorReadProfile?.profileKey === expectedKey
     ? input.priorReadProfile
     : undefined;
-  const safeRead = exactVerifiedReadProfile({
+  const priorReadEvidence = exactVerifiedReadEvidence({
     prior: exactPrior,
     fingerprint: input.fingerprint,
     openApiSha256: input.openApiSha256
   });
+  const safeRead = priorReadEvidence !== undefined;
   const externalResult = input.results.find((result) => result.operation === 'externalMutationObservation');
   const allEvidence = [
-    ...(exactPrior?.evidence ?? []),
+    ...(priorReadEvidence === undefined ? [] : [priorReadEvidence]),
     ...input.results.filter((result) => result.operation !== 'safeRead').map(evidence)
   ];
   if (!safeRead) {
