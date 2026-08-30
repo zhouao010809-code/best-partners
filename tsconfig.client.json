@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "types": ["vitest/globals"]
+  },
+  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "tests/component/**/*.ts", "tests/component/**/*.tsx", "tests/helpers/**/*.ts"]
+}
