@@ -151,6 +151,42 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...environment, APP_DATA_DIR: siblingAppData })).not.toThrow();
   });
 
+  it('rejects a nonexistent app data child below a canonicalized vault alias', () => {
+    const environment = validEnvironment();
+    const vaultAlias = join(dirname(environment.VAULT_REAL_ROOT), 'vault-alias');
+    symlinkSync(environment.VAULT_REAL_ROOT, vaultAlias);
+
+    expect(() => loadConfig({
+      ...environment,
+      VAULT_REAL_ROOT: vaultAlias,
+      APP_DATA_DIR: join(vaultAlias, 'missing-app-data')
+    })).toThrowError('APP_DATA_DIR');
+  });
+
+  it('rejects a nonexistent app data child below a symlink into the vault', () => {
+    const environment = validEnvironment();
+    const vaultChild = join(environment.VAULT_REAL_ROOT, 'linked-parent-target');
+    const symlinkedParent = join(dirname(environment.VAULT_REAL_ROOT), 'linked-parent');
+    mkdirSync(vaultChild);
+    symlinkSync(vaultChild, symlinkedParent);
+
+    expect(() => loadConfig({
+      ...environment,
+      APP_DATA_DIR: join(symlinkedParent, 'missing-app-data')
+    })).toThrowError('APP_DATA_DIR');
+  });
+
+  it('rejects a nonexistent vault root child below a symlink into app data', () => {
+    const environment = validEnvironment();
+    const symlinkedAppData = join(dirname(environment.APP_DATA_DIR), 'app-data-alias');
+    symlinkSync(environment.APP_DATA_DIR, symlinkedAppData);
+
+    expect(() => loadConfig({
+      ...environment,
+      VAULT_REAL_ROOT: join(symlinkedAppData, 'missing-vault-root')
+    })).toThrowError('VAULT_REAL_ROOT');
+  });
+
   it('does not disclose supplied secret values in validation errors', () => {
     const secret = 'do-not-disclose-this-secret';
     let thrown: unknown;

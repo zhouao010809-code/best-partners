@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 
 export interface AppConfig {
@@ -57,6 +57,27 @@ function canonicalPath(value: string, field: 'APP_DATA_DIR' | 'VAULT_REAL_ROOT')
   }
 }
 
+function canonicalComparisonPath(value: string, field: 'APP_DATA_DIR' | 'VAULT_REAL_ROOT'): string {
+  let ancestor = resolve(value);
+  const missingSuffix: string[] = [];
+
+  while (true) {
+    try {
+      return resolve(realpathSync(ancestor), ...missingSuffix);
+    } catch (error: unknown) {
+      if (!isMissingPath(error)) {
+        throw new Error(`Invalid configuration: ${field}`);
+      }
+      const parent = dirname(ancestor);
+      if (parent === ancestor) {
+        throw new Error(`Invalid configuration: ${field}`);
+      }
+      missingSuffix.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+}
+
 function isMissingPath(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
@@ -79,10 +100,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
 
   const appDataDir = canonicalPath(parsed.data.APP_DATA_DIR, 'APP_DATA_DIR');
   const vaultRealRoot = canonicalPath(parsed.data.VAULT_REAL_ROOT, 'VAULT_REAL_ROOT');
-  if (isSameOrContainedBy(vaultRealRoot, appDataDir)) {
+  const comparisonAppDataDir = canonicalComparisonPath(parsed.data.APP_DATA_DIR, 'APP_DATA_DIR');
+  const comparisonVaultRealRoot = canonicalComparisonPath(parsed.data.VAULT_REAL_ROOT, 'VAULT_REAL_ROOT');
+  if (isSameOrContainedBy(comparisonVaultRealRoot, comparisonAppDataDir)) {
     throw new Error('Invalid configuration: APP_DATA_DIR');
   }
-  if (isSameOrContainedBy(appDataDir, vaultRealRoot)) {
+  if (isSameOrContainedBy(comparisonAppDataDir, comparisonVaultRealRoot)) {
     throw new Error('Invalid configuration: VAULT_REAL_ROOT');
   }
 
