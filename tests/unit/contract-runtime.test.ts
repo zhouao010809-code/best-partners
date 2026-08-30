@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { assertSandboxVaultPath, contractSandboxRoots } from '../helpers/contract-runtime.js';
+import {
+  assertSandboxVaultPath,
+  contractSandboxRoots,
+  requireContractEnvironment
+} from '../helpers/contract-runtime.js';
 
 const RUN_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV';
 
@@ -25,5 +29,13 @@ describe('contract runtime path guard', () => {
       expect(() => assertSandboxVaultPath(path, RUN_ID)).toThrowError('CONTRACT_PATH_NOT_ALLOWED');
     }
     expect(() => contractSandboxRoots('not-a-ulid')).toThrowError('CONTRACT_RUN_ID_INVALID');
+  });
+});
+
+describe('contract environment', () => {
+  it('fails with one sanitized code when any required context is absent', () => {
+    expect(() => requireContractEnvironment({})).toThrowError('CONTRACT_CONTEXT_MISSING');
+    expect(() => requireContractEnvironment({ OBSIDIAN_API_KEY: 'secret-only' }))
+      .toThrowError('CONTRACT_CONTEXT_MISSING');
   });
 });

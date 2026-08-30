@@ -8,6 +8,7 @@ import {
   computeContractProfileKey,
   computeFormalWriteGate,
   loadCurrentContractProfile,
+  renderContractProfileMarkdown,
   writeContractProfile,
   type ContractProfileInput
 } from '../../src/server/vault/contract-profile-store.js';
@@ -116,6 +117,35 @@ describe('contract profile model', () => {
       }]
     }))).toThrowError('CONTRACT_PROFILE_INVALID');
   });
+
+  it('renders a deterministic sanitized capability report', () => {
+    const profile = buildContractProfile(profileInput());
+    const report = renderContractProfileMarkdown(profile);
+    expect(report).toContain(`# Contract capability profile ${profile.profileKey}`);
+    expect(report).toContain('| safeCreate | PASSED |');
+    expect(report).toContain('| restartPersistence | PASSED |');
+    expect(report).toContain('| cleanup | UNVERIFIED |');
+    expect(report).toContain('EXECUTABLE_PROBE_PASSED');
+    expect(report).not.toContain('/private/');
+  });
+
+  it('reports unprobed capabilities as UNVERIFIED and explicit failures as FAILED', () => {
+    const unprobed = buildContractProfile(profileInput({
+      safeCreate: false,
+      evidence: []
+    }));
+    expect(renderContractProfileMarkdown(unprobed)).toContain('| safeCreate | UNVERIFIED |');
+    const failed = buildContractProfile(profileInput({
+      safeCreate: false,
+      evidence: [{
+        operation: 'safeCreate',
+        status: 'failed',
+        timestamp: '2026-08-31T00:00:00.000Z',
+        reasonCode: 'SAFE_CREATE_UNPROVEN'
+      }]
+    }));
+    expect(renderContractProfileMarkdown(failed)).toContain('| safeCreate | FAILED |');
+  });
 });
 
 describe('contract profile store', () => {
@@ -136,6 +166,9 @@ describe('contract profile store', () => {
       expect((await stat(join(directory, name))).mode & 0o777).toBe(0o600);
     }
     await expect(loadCurrentContractProfile(directory, second)).resolves.toEqual(second);
+    expect(await readFile(join(directory, 'report.md'), 'utf8')).toBe(
+      `${renderContractProfileMarkdown(second)}\n`
+    );
   });
 
   it('fails closed for checksum corruption, invalid schema, and fingerprint mismatch', async () => {

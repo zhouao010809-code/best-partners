@@ -4,13 +4,15 @@ Status as of 2026-08-31: **FORMAL WRITE GATE BLOCKED**.
 
 No independent sentinel-marked test vault was available when this harness was implemented. The executable write, external-mutation, cleanup, and restart probes have not been run. OpenAPI declarations are design inputs only and do not count as passed capability evidence.
 
+Missing contract context is a hard failure (`CONTRACT_CONTEXT_MISSING`), not a skipped or passing test. The generated non-secret current report is refreshed atomically at `APP_DATA_DIR/contract-profiles/report.md` whenever a profile is persisted. It derives each capability state from the latest executable evidence: no evidence is `UNVERIFIED`, explicit negative evidence is `FAILED`, and only passed evidence is `PASSED`; it includes sanitized reason codes but never paths, bodies, or secrets.
+
 ## Current evidence
 
 | Capability | Status | Current evidence |
 |---|---|---|
 | safeRead | UNVERIFIED in an independent test vault | A separate read-only smoke against the formal vault observed the plugin fingerprint and response shapes listed below. It did not establish test-fixture byte fidelity. |
 | safeReplace | UNVERIFIED | PATCH declares an optional `If-Match`; no executable independent-vault probe has run. |
-| safeCreate | UNVERIFIED | COPY with `Allow-Overwrite:false` is a candidate only; PUT is not assumed to be atomic create-if-absent. |
+| safeCreate | UNVERIFIED | PUT with `Reject-If-Content-Preexists` and COPY with `Allow-Overwrite:false` are probed separately for create, collision, and raw reread behavior. Neither declaration is assumed atomic. |
 | safeRestore | UNVERIFIED | Requires a successful conditional replace, exact raw reread, and conditional restore probe. |
 | safeDelete | UNVERIFIED | DELETE declares no conditional token. A pre-read followed by unconditional DELETE is not accepted as safe. |
 | rereadVerified | UNVERIFIED | Every successful mutation must be followed by an exact raw-byte/hash reread. |
@@ -44,8 +46,10 @@ npm run test:contract:obsidian:probe -- read.contract
 Guarded write probe, only after the independent test vault is open and verified:
 
 ```bash
-ALLOW_OBSIDIAN_CONTRACT_WRITE=1 npm run test:contract:obsidian:probe -- write-gate.contract
+ALLOW_OBSIDIAN_CONTRACT_WRITE=1 npm run test:contract:obsidian:probe
 ```
+
+The no-filter command runs only the read contract followed by the guarded write contract; it never runs either restart phase. `-- write` selects only the guarded write file.
 
 Two-phase restart probe:
 
@@ -61,7 +65,7 @@ The runtime write gate requires the exact expected profile key in `OBSIDIAN_CONT
 npm run gate:write-capability
 ```
 
-Exit `0` means every executable capability and restart persistence passed for that exact key. Exit `1` means blocked or unavailable; output contains capability names and reason codes only.
+Exit `0` means every executable capability and restart persistence passed for that exact key. Exit `1` means blocked or unavailable; CLI output contains missing capability names only.
 
 ## Separate formal-vault read-only smoke
 

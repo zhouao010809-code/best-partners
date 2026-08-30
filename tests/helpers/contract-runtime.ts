@@ -59,6 +59,14 @@ export function loadContractEnvironment(env: NodeJS.ProcessEnv): ContractEnviron
   return values as ContractEnvironment;
 }
 
+export function requireContractEnvironment(env: NodeJS.ProcessEnv): ContractEnvironment {
+  const environment = loadContractEnvironment(env);
+  if (environment === undefined) {
+    throw new Error('CONTRACT_CONTEXT_MISSING');
+  }
+  return environment;
+}
+
 export function createContractGateway(environment: ContractEnvironment): LocalRest51Gateway {
   return new LocalRest51Gateway(environment.apiUrl, environment.apiKey, fetch);
 }
@@ -114,10 +122,13 @@ export class ContractRestClient {
     });
   }
 
-  async trash(path: string): Promise<number> {
+  async trash(path: string, version?: string): Promise<number> {
     const endpoint = vaultEndpoint(this.baseUrl, path);
     endpoint.searchParams.set('permanent', 'false');
-    return this.fetchStatus(endpoint, { method: 'DELETE' });
+    return this.fetchStatus(endpoint, {
+      method: 'DELETE',
+      ...(version === undefined ? {} : { headers: { 'If-Match': version } })
+    });
   }
 
   private async request(path: string, init: RequestInit): Promise<number> {
@@ -134,7 +145,7 @@ export class ContractRestClient {
       }
     });
     try {
-      await response.body?.cancel();
+      void response.body?.cancel().catch(() => {});
     } catch {
       // Contract assertions use only status facts; body release is best-effort.
     }

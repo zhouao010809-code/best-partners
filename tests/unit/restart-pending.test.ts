@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadRestartPending, writeRestartPending } from '../helpers/restart-pending.js';
+import {
+  consumeRestartPending,
+  isVerifiedNonPermanentCleanup,
+  loadRestartPending,
+  restartPendingMatchesProfile,
+  writeRestartPending
+} from '../helpers/restart-pending.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -46,5 +52,27 @@ describe('restart pending store', () => {
     await writeRestartPending(directory, record());
     await writeFile(join(directory, 'restart-pending.json'), 'secret malformed json');
     await expect(loadRestartPending(directory)).resolves.toBeUndefined();
+  });
+
+  it('matches the exact profile key and consumes a verified record once', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'restart-pending-'));
+    roots.push(base);
+    const directory = join(base, 'contract-profiles');
+    const pending = record();
+    expect(restartPendingMatchesProfile(pending, pending.profileKey)).toBe(true);
+    expect(restartPendingMatchesProfile(pending, 'c'.repeat(64))).toBe(false);
+    await writeRestartPending(directory, pending);
+    expect(restartPendingMatchesProfile((await loadRestartPending(directory))!, 'c'.repeat(64))).toBe(false);
+    await expect(loadRestartPending(directory)).resolves.toEqual(pending);
+    await consumeRestartPending(directory, pending);
+    await expect(loadRestartPending(directory)).resolves.toBeUndefined();
+    await expect(consumeRestartPending(directory, pending))
+      .rejects.toThrowError('RESTART_PENDING_NOT_CURRENT');
+  });
+
+  it('passes cleanup only after a successful trash response and a 404 raw reread', () => {
+    expect(isVerifiedNonPermanentCleanup(204, 404)).toBe(true);
+    expect(isVerifiedNonPermanentCleanup(204, 200)).toBe(false);
+    expect(isVerifiedNonPermanentCleanup(500, 404)).toBe(false);
   });
 });

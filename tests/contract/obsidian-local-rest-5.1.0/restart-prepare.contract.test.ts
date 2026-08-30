@@ -2,14 +2,14 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ulid } from 'ulid';
-import { describe, expect, it } from 'vitest';
+import { describe, it } from 'vitest';
 import { assertContractTestVault } from '../../helpers/test-vault-guard.js';
 import {
   assertSandboxVaultPath,
   contractSandboxRoots,
   createContractGateway,
   diskPath,
-  loadContractEnvironment
+  requireContractEnvironment
 } from '../../helpers/contract-runtime.js';
 import { writeRestartPending } from '../../helpers/restart-pending.js';
 import {
@@ -19,11 +19,9 @@ import {
   writeContractProfile
 } from '../../../src/server/vault/contract-profile-store.js';
 
-const environment = loadContractEnvironment(process.env);
-
-describe.skipIf(environment === undefined)('Local REST restart persistence prepare', () => {
+describe('Local REST restart persistence prepare', () => {
   it('guards, creates one sandbox note, and records only sanitized restart facts', async () => {
-    const currentEnvironment = environment!;
+    const currentEnvironment = requireContractEnvironment(process.env);
     const gateway = createContractGateway(currentEnvironment);
     await assertContractTestVault({
       gateway,
@@ -35,11 +33,18 @@ describe.skipIf(environment === undefined)('Local REST restart persistence prepa
     });
 
     const fingerprint = await gateway.fingerprint();
+    if (fingerprint.pluginId !== 'obsidian-local-rest-api' || fingerprint.pluginVersion.split('.')[0] !== '5') {
+      throw new Error('PLUGIN_CONTRACT_INCOMPATIBLE');
+    }
     const openApiSha256 = createHash('sha256').update(await gateway.readOpenApi(), 'utf8').digest('hex');
+    const expectedOpenApiSha256 = process.env.OBSIDIAN_EXPECTED_OPENAPI_SHA256;
+    if (expectedOpenApiSha256 !== undefined && expectedOpenApiSha256 !== openApiSha256) {
+      throw new Error('OPENAPI_FINGERPRINT_MISMATCH');
+    }
     const profileKey = computeContractProfileKey({ ...fingerprint, openApiSha256 });
     const profileDirectory = join(currentEnvironment.appDataRoot, 'contract-profiles');
     const existing = await loadContractProfileByKey(profileDirectory, profileKey);
-    expect(existing).toBeDefined();
+    if (existing === undefined) throw new Error('RESTART_PROFILE_UNAVAILABLE');
     const profile = existing!;
     const {
       schemaVersion: _schemaVersion,
@@ -71,8 +76,12 @@ describe.skipIf(environment === undefined)('Local REST restart persistence prepa
     const bytes = new TextEncoder().encode('# Restart contract\npersist\n');
     await writeFile(noteDiskPath, bytes, { flag: 'wx' });
     const observed = await gateway.readRaw(notePath);
-    expect(observed.rawSha256).toBe(createHash('sha256').update(bytes).digest('hex'));
-    expect(observed.upstreamVersion).toEqual(expect.any(String));
+    if (
+      observed.rawSha256 !== createHash('sha256').update(bytes).digest('hex')
+      || observed.upstreamVersion === undefined
+    ) {
+      throw new Error('RESTART_PREPARE_READ_MISMATCH');
+    }
 
     await writeRestartPending(profileDirectory, {
       schemaVersion: 1,

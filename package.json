@@ -17,7 +17,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts tests/integration",
     "test:component": "vitest run --config vitest.client.config.ts tests/component",
     "test:security": "vitest run --config vitest.integration.config.ts tests/integration/security",
-    "test:contract:obsidian:probe": "vitest run --config vitest.contract.config.ts tests/contract/obsidian-local-rest-5.1.0 --no-file-parallelism",
+    "test:contract:obsidian:probe": "tsx scripts/run-obsidian-contract.ts",
     "test:contract:obsidian:restart:prepare": "vitest run --config vitest.contract.config.ts tests/contract/obsidian-local-rest-5.1.0/restart-prepare.contract.test.ts --no-file-parallelism",
     "test:contract:obsidian:restart:verify": "vitest run --config vitest.contract.config.ts tests/contract/obsidian-local-rest-5.1.0/restart-verify.contract.test.ts --no-file-parallelism",
     "gate:write-capability": "tsx scripts/gate-write-capability.ts",

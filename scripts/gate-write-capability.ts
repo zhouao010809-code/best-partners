@@ -71,9 +71,7 @@ export function composeGateOutput(result: WriteGateEvaluation): string {
   if (result.passed) {
     return 'PASSED';
   }
-  return `BLOCKED ${result.missing
-    .map(({ capability, reasonCode }) => `${capability}:${reasonCode}`)
-    .join(' ')}`;
+  return `BLOCKED ${result.missing.map(({ capability }) => capability).join(' ')}`;
 }
 
 export async function runWriteCapabilityGate(input: {
@@ -81,7 +79,7 @@ export async function runWriteCapabilityGate(input: {
   readonly expectedProfileKey: string | undefined;
 }): Promise<{ readonly exitCode: 0 | 1; readonly output: string }> {
   if (input.expectedProfileKey === undefined || !/^[a-f0-9]{64}$/.test(input.expectedProfileKey)) {
-    return { exitCode: 1, output: 'BLOCKED profile:PROFILE_UNAVAILABLE' };
+    return { exitCode: 1, output: 'BLOCKED profile' };
   }
   const profile = await loadContractProfileByKey(input.profileDirectory, input.expectedProfileKey);
   const evaluation = evaluateWriteCapability(profile, input.expectedProfileKey);
@@ -94,7 +92,7 @@ export async function runWriteCapabilityGate(input: {
 async function main(): Promise<void> {
   const appDataDir = process.env.APP_DATA_DIR;
   const result = appDataDir === undefined
-    ? { exitCode: 1 as const, output: 'BLOCKED profile:PROFILE_UNAVAILABLE' }
+    ? { exitCode: 1 as const, output: 'BLOCKED profile' }
     : await runWriteCapabilityGate({
         profileDirectory: join(appDataDir, 'contract-profiles'),
         expectedProfileKey: process.env.OBSIDIAN_CONTRACT_PROFILE_KEY
@@ -106,7 +104,7 @@ async function main(): Promise<void> {
 const invokedPath = process.argv[1];
 if (invokedPath !== undefined && pathToFileURL(invokedPath).href === import.meta.url) {
   void main().catch(() => {
-    process.stdout.write('BLOCKED profile:PROFILE_UNAVAILABLE\n');
+    process.stdout.write('BLOCKED profile\n');
     process.exitCode = 1;
   });
 }

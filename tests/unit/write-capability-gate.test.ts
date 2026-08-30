@@ -73,10 +73,8 @@ describe('write capability gate', () => {
       ]
     });
     expect(composeGateOutput(result)).toBe(
-      'BLOCKED safeRead:CAPABILITY_NOT_PASSED safeCreate:CAPABILITY_NOT_PASSED '
-      + 'safeRestore:CAPABILITY_NOT_PASSED rereadVerified:CAPABILITY_NOT_PASSED '
-      + 'externalMutationObservation:EXTERNAL_MUTATION_FAILED '
-      + 'restartPersistence:RESTART_UNVERIFIED formalWriteGate:FORMAL_GATE_BLOCKED'
+      'BLOCKED safeRead safeCreate safeRestore rereadVerified '
+      + 'externalMutationObservation restartPersistence formalWriteGate'
     );
   });
 
@@ -98,7 +96,7 @@ describe('write capability gate', () => {
       expectedProfileKey: undefined
     })).resolves.toEqual({
       exitCode: 1,
-      output: 'BLOCKED profile:PROFILE_UNAVAILABLE'
+      output: 'BLOCKED profile'
     });
   });
 });

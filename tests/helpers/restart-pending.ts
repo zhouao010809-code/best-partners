@@ -55,3 +55,38 @@ export async function loadRestartPending(
     return undefined;
   }
 }
+
+export function restartPendingMatchesProfile(
+  pending: RestartPending,
+  profileKey: string
+): boolean {
+  return pending.profileKey === profileKey;
+}
+
+export function isVerifiedNonPermanentCleanup(
+  deleteStatus: number,
+  rereadStatus: number
+): boolean {
+  return deleteStatus >= 200 && deleteStatus < 300 && rereadStatus === 404;
+}
+
+export async function consumeRestartPending(
+  profileDirectory: string,
+  expected: RestartPending
+): Promise<void> {
+  const target = join(profileDirectory, 'restart-pending.json');
+  const claimed = join(profileDirectory, `restart-pending.consumed.${randomUUID()}.tmp`);
+  try {
+    await rename(target, claimed);
+    const actual = restartPendingSchema.parse(
+      JSON.parse(await readFile(claimed, 'utf8')) as unknown
+    );
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      await rename(claimed, target);
+      throw new Error('mismatch');
+    }
+    await unlink(claimed);
+  } catch {
+    throw new Error('RESTART_PENDING_NOT_CURRENT');
+  }
+}

@@ -47,4 +47,27 @@ describe('ContractRestClient', () => {
     });
     expect(requests[2]!.url).toBe('https://127.0.0.1:27124/vault/trash.md?permanent=false');
   });
+
+  it('can send a previously verified conditional non-permanent cleanup token', async () => {
+    const requests: RequestInit[] = [];
+    const client = new ContractRestClient('https://127.0.0.1:27124', 'test-key', async (_input, init) => {
+      requests.push(init!);
+      return new Response(null, { status: 204 });
+    });
+    await client.trash('trash.md', 'current-version');
+    expect(requests[0]!.headers).toMatchObject({ 'If-Match': 'current-version' });
+  });
+
+  it('does not await a response-body cancellation promise', async () => {
+    const never = new Promise<void>(() => {});
+    const client = new ContractRestClient(
+      'https://127.0.0.1:27124',
+      'test-key',
+      async () => ({ status: 204, body: { cancel: () => never } }) as unknown as Response
+    );
+    await expect(Promise.race([
+      client.copy('source.md', 'target.md'),
+      new Promise<number>((resolve) => setTimeout(() => resolve(599), 25))
+    ])).resolves.toBe(204);
+  });
 });

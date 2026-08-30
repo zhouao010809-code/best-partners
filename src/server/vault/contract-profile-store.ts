@@ -176,6 +176,61 @@ export function buildContractProfile(input: ContractProfileInput): StoredContrac
   }
 }
 
+function reportStatus(value: ContractCapabilityStatus | 'passed' | 'blocked'): string {
+  if (value === 'passed') return 'PASSED';
+  if (value === 'failed') return 'FAILED';
+  if (value === 'blocked') return 'BLOCKED';
+  return 'UNVERIFIED';
+}
+
+export function renderContractProfileMarkdown(profile: StoredContractProfile): string {
+  const parsed = contractProfileSchema.parse(profile);
+  const latestEvidence = (operation: ContractEvidence['operation']): ContractEvidence | undefined => (
+    parsed.evidence.filter((record) => record.operation === operation).at(-1)
+  );
+  const evidenceRow = (
+    operation: ContractEvidence['operation']
+  ): [string, ContractCapabilityStatus, string, string] => {
+    const current = latestEvidence(operation);
+    return [
+      operation,
+      current?.status ?? 'unverified',
+      current?.timestamp ?? parsed.checkedAt,
+      current?.reasonCode ?? 'NO_EVIDENCE'
+    ];
+  };
+  const rows: Array<[string, ContractCapabilityStatus | 'passed' | 'blocked', string, string]> = [
+    evidenceRow('safeRead'),
+    evidenceRow('safeCreate'),
+    evidenceRow('safeReplace'),
+    evidenceRow('safeRestore'),
+    evidenceRow('safeDelete'),
+    evidenceRow('rereadVerified'),
+    evidenceRow('externalMutationObservation'),
+    evidenceRow('restartPersistence'),
+    evidenceRow('cleanup'),
+    [
+      'formalWriteGate',
+      parsed.formalWriteGate,
+      parsed.checkedAt,
+      parsed.formalWriteGate === 'passed' ? 'FORMAL_GATE_PASSED' : 'FORMAL_GATE_BLOCKED'
+    ]
+  ];
+  return [
+    `# Contract capability profile ${parsed.profileKey}`,
+    '',
+    `Plugin: ${parsed.pluginId} ${parsed.pluginVersion}`,
+    `Obsidian: ${parsed.obsidianVersion}`,
+    `OpenAPI SHA-256: ${parsed.openApiSha256}`,
+    '',
+    '| Capability | Status | Checked at | Reason code |',
+    '|---|---|---|---|',
+    ...rows.map(([capability, status, checkedAt, reasonCode]) => (
+      `| ${capability} | ${reportStatus(status)} | ${checkedAt} | ${reasonCode} |`
+    ))
+  ].join('\n');
+}
+
 async function atomicWrite(path: string, value: string): Promise<void> {
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
@@ -218,6 +273,7 @@ export async function writeContractProfile(
     profile: parsed
   };
   await atomicWrite(join(directory, `${parsed.profileKey}.json`), canonicalJson(envelope));
+  await atomicWrite(join(directory, 'report.md'), renderContractProfileMarkdown(parsed));
   await atomicWrite(join(directory, 'current.json'), canonicalJson({
     schemaVersion: CONTRACT_PROFILE_SCHEMA_VERSION,
     profileKey: parsed.profileKey
