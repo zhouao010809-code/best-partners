@@ -4,7 +4,7 @@ Status as of 2026-08-31: **FORMAL WRITE GATE BLOCKED**.
 
 No independent sentinel-marked test vault was available when this harness was implemented. The executable write, external-mutation, cleanup, and restart probes have not been run. OpenAPI declarations are design inputs only and do not count as passed capability evidence.
 
-Missing contract context is a hard failure (`CONTRACT_CONTEXT_MISSING`), not a skipped or passing test. The generated non-secret current report is refreshed atomically at `APP_DATA_DIR/contract-profiles/report.md` whenever a profile is persisted. It derives each capability state from the latest executable evidence: no evidence is `UNVERIFIED`, explicit negative evidence is `FAILED`, and only passed evidence is `PASSED`; it includes sanitized reason codes but never paths, bodies, or secrets.
+Missing contract context is a hard failure (`CONTRACT_CONTEXT_MISSING`), not a skipped or passing test. Each persisted profile and its non-secret Markdown report are immutable revision files under `APP_DATA_DIR/contract-profiles/`. An fsynced fail-closed activation marker precedes the atomic `current.json` switch; loaders reject every profile while that marker exists, so an indeterminate pointer commit cannot revive an older passing gate. The runtime gate loads only the exact guarded revision named by the pointer. Reports derive each capability state from the latest executable evidence: no evidence is `UNVERIFIED`, explicit negative evidence is `FAILED`, and only passed evidence with the operation-specific primitive is `PASSED`. They include sanitized reason codes but never paths, bodies, or secrets.
 
 ## Current evidence
 
@@ -32,6 +32,8 @@ Vault mutation is armed only when `ALLOW_OBSIDIAN_CONTRACT_WRITE` equals exactly
 - `02知识库/99其他/__xiaozhao_contract__/`
 
 Cleanup may target only that run and may use only non-permanent trash behavior. If safe cleanup is not established, the harness leaves the sandbox for manual cleanup and records a sanitized reason code.
+
+Restart verification is run-bound. The 0600 pending record advances from `prepared` to `restart-verified` only after restart evidence and a cleanup-armed profile revision are committed, and only then may non-permanent trash run. A failed or unverified cleanup leaves that record active for retry/manual cleanup; a successful trash must be followed by a 404 raw reread before the record is consumed.
 
 Required runtime context is supplied through `OBSIDIAN_API_URL`, `OBSIDIAN_API_KEY`, `CONTRACT_TEST_VAULT_ROOT`, `VAULT_REAL_ROOT`, `CONTRACT_SOURCE_ROOT`, and `APP_DATA_DIR`. The read fixture run is selected by `OBSIDIAN_CONTRACT_FIXTURE_RUN_ID`. Secrets are never stored in profiles or printed by the gate.
 

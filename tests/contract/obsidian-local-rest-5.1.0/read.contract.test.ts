@@ -19,7 +19,7 @@ describe('Local REST 5.1 read contract', () => {
     const runId = process.env.OBSIDIAN_CONTRACT_FIXTURE_RUN_ID;
     if (runId === undefined) throw new Error('CONTRACT_READ_FIXTURE_MISSING');
     const gateway = createContractGateway(environment);
-    await assertContractReadVault({
+    const canonicalRoots = await assertContractReadVault({
       gateway,
       testVaultRoot: environment.testVaultRoot,
       formalVaultRoot: environment.formalVaultRoot,
@@ -71,7 +71,7 @@ describe('Local REST 5.1 read contract', () => {
     }
 
     await writeContractProfile(
-      join(environment.appDataRoot, 'contract-profiles'),
+      join(canonicalRoots.appDataRoot, 'contract-profiles'),
       buildContractProfile({
         ...fingerprint,
         openApiSha256,

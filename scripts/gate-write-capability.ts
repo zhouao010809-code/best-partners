@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import {
+  contractEvidencePassed,
   loadContractProfileByKey,
   type StoredContractProfile
 } from '../src/server/vault/contract-profile-store.js';
@@ -41,11 +42,14 @@ export function evaluateWriteCapability(
     'safeDelete',
     'rereadVerified'
   ] as const) {
-    if (!profile[capability]) {
+    if (!profile[capability] || !contractEvidencePassed(profile.evidence, capability)) {
       missing.push({ capability, reasonCode: 'CAPABILITY_NOT_PASSED' });
     }
   }
-  if (profile.externalMutationObservation !== 'passed') {
+  if (
+    profile.externalMutationObservation !== 'passed'
+    || !contractEvidencePassed(profile.evidence, 'externalMutationObservation')
+  ) {
     missing.push({
       capability: 'externalMutationObservation',
       reasonCode: profile.externalMutationObservation === 'failed'
@@ -53,7 +57,10 @@ export function evaluateWriteCapability(
         : 'EXTERNAL_MUTATION_UNVERIFIED'
     });
   }
-  if (profile.restartPersistence !== 'passed') {
+  if (
+    profile.restartPersistence !== 'passed'
+    || !contractEvidencePassed(profile.evidence, 'restartPersistence')
+  ) {
     missing.push({
       capability: 'restartPersistence',
       reasonCode: profile.restartPersistence === 'failed'

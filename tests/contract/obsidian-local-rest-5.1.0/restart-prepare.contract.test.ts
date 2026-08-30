@@ -1,21 +1,22 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { ulid } from 'ulid';
 import { describe, it } from 'vitest';
 import { assertContractTestVault } from '../../helpers/test-vault-guard.js';
+import { createContractDiskSandbox } from '../../helpers/contract-disk-sandbox.js';
+import { waitForRawObservation } from '../../helpers/contract-observation.js';
+import { runRestartPrepareFlow } from '../../helpers/restart-prepare-flow.js';
 import {
   assertSandboxVaultPath,
   contractSandboxRoots,
   createContractGateway,
-  diskPath,
   requireContractEnvironment
 } from '../../helpers/contract-runtime.js';
-import { writeRestartPending } from '../../helpers/restart-pending.js';
+import { writeCleanupPending, writeRestartPending } from '../../helpers/restart-pending.js';
 import {
   buildContractProfile,
   computeContractProfileKey,
-  loadContractProfileByKey,
+  loadContractProfileStateByKey,
   writeContractProfile
 } from '../../../src/server/vault/contract-profile-store.js';
 
@@ -23,7 +24,7 @@ describe('Local REST restart persistence prepare', () => {
   it('guards, creates one sandbox note, and records only sanitized restart facts', async () => {
     const currentEnvironment = requireContractEnvironment(process.env);
     const gateway = createContractGateway(currentEnvironment);
-    await assertContractTestVault({
+    const canonicalRoots = await assertContractTestVault({
       gateway,
       testVaultRoot: currentEnvironment.testVaultRoot,
       formalVaultRoot: currentEnvironment.formalVaultRoot,
@@ -42,10 +43,10 @@ describe('Local REST restart persistence prepare', () => {
       throw new Error('OPENAPI_FINGERPRINT_MISMATCH');
     }
     const profileKey = computeContractProfileKey({ ...fingerprint, openApiSha256 });
-    const profileDirectory = join(currentEnvironment.appDataRoot, 'contract-profiles');
-    const existing = await loadContractProfileByKey(profileDirectory, profileKey);
+    const profileDirectory = join(canonicalRoots.appDataRoot, 'contract-profiles');
+    const existing = await loadContractProfileStateByKey(profileDirectory, profileKey);
     if (existing === undefined) throw new Error('RESTART_PROFILE_UNAVAILABLE');
-    const profile = existing!;
+    const profile = existing.profile;
     const {
       schemaVersion: _schemaVersion,
       profileKey: _profileKey,
@@ -53,44 +54,50 @@ describe('Local REST restart persistence prepare', () => {
       restartCheckedAt: _restartCheckedAt,
       ...profileInput
     } = profile;
-    await writeContractProfile(profileDirectory, buildContractProfile({
-      ...profileInput,
-      restartPersistence: 'unverified',
-      evidence: [
-        ...profile.evidence.filter((record) => record.operation !== 'restartPersistence'),
-        {
-          operation: 'restartPersistence',
-          status: 'unverified',
-          timestamp: new Date().toISOString(),
-          reasonCode: 'PREPARED_AWAITING_RESTART',
-          primitive: 'RAW_REREAD'
-        }
-      ]
-    }));
-
     const runId = ulid();
     const noteId = 'restart.md';
     const notePath = assertSandboxVaultPath(`${contractSandboxRoots(runId).library}/${noteId}`, runId);
-    const noteDiskPath = diskPath(currentEnvironment.testVaultRoot, notePath, runId);
-    await mkdir(dirname(noteDiskPath), { recursive: true });
+    const disk = createContractDiskSandbox({
+      canonicalTestVaultRoot: canonicalRoots.testVaultRoot,
+      runId
+    });
     const bytes = new TextEncoder().encode('# Restart contract\npersist\n');
-    await writeFile(noteDiskPath, bytes, { flag: 'wx' });
-    const observed = await gateway.readRaw(notePath);
-    if (
-      observed.rawSha256 !== createHash('sha256').update(bytes).digest('hex')
-      || observed.upstreamVersion === undefined
-    ) {
-      throw new Error('RESTART_PREPARE_READ_MISMATCH');
-    }
-
-    await writeRestartPending(profileDirectory, {
-      schemaVersion: 1,
-      runId,
-      root: 'library',
-      noteId,
-      rawSha256: observed.rawSha256,
-      upstreamVersion: observed.upstreamVersion!,
-      profileKey
+    await runRestartPrepareFlow({
+      prepareObservedRecord: async () => {
+        await disk.createFile(notePath, bytes);
+        const observed = await waitForRawObservation({
+          gateway,
+          path: notePath,
+          expectedRawSha256: createHash('sha256').update(bytes).digest('hex'),
+          requireVersion: true
+        });
+        return {
+          schemaVersion: 1,
+          phase: 'prepared',
+          runId,
+          root: 'library',
+          noteId,
+          rawSha256: observed.rawSha256,
+          upstreamVersion: observed.upstreamVersion!,
+          profileKey
+        };
+      },
+      updateProfile: () => writeContractProfile(profileDirectory, buildContractProfile({
+        ...profileInput,
+        restartPersistence: 'unverified',
+        evidence: [
+          ...profile.evidence.filter((record) => record.operation !== 'restartPersistence'),
+          {
+            operation: 'restartPersistence',
+            status: 'unverified',
+            timestamp: new Date().toISOString(),
+            reasonCode: 'PREPARED_AWAITING_RESTART',
+            primitive: 'RAW_REREAD'
+          }
+        ]
+      }), { expectedRevision: existing.revision }),
+      writePending: (pending) => writeRestartPending(profileDirectory, pending),
+      writeCleanup: (pending, cleanup) => writeCleanupPending(profileDirectory, pending, cleanup)
     });
     process.stdout.write('Restart Obsidian, then run npm run test:contract:obsidian:restart:verify\n');
   });

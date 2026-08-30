@@ -18,14 +18,24 @@ export type CapabilityResult = {
 export function aggregateSafeCreate(results: ReadonlyArray<CapabilityResult>): {
   readonly passed: boolean;
   readonly complete: boolean;
+  readonly primitive: Extract<ContractEvidence['primitive'],
+    'PUT_REJECT_IF_CONTENT_PREEXISTS' | 'COPY_ALLOW_OVERWRITE_FALSE'> | undefined;
 } {
   const create = results.filter((result) => result.operation === 'safeCreate');
   const primitives = new Set(create.map((result) => result.primitive));
   const complete = primitives.has('PUT_REJECT_IF_CONTENT_PREEXISTS')
     && primitives.has('COPY_ALLOW_OVERWRITE_FALSE');
+  const candidate = complete
+    ? create.find((result) => result.status === 'passed' && (
+      result.primitive === 'PUT_REJECT_IF_CONTENT_PREEXISTS'
+      || result.primitive === 'COPY_ALLOW_OVERWRITE_FALSE'
+    ))
+    : undefined;
   return {
     complete,
-    passed: complete && create.some((result) => result.status === 'passed')
+    passed: candidate !== undefined,
+    primitive: candidate?.primitive as Extract<ContractEvidence['primitive'],
+      'PUT_REJECT_IF_CONTENT_PREEXISTS' | 'COPY_ALLOW_OVERWRITE_FALSE'> | undefined
   };
 }
 
@@ -73,7 +83,7 @@ export async function buildWriteProbeProfile(input: {
   readonly checkedAt: string;
   readonly priorReadProfile?: StoredContractProfile;
   readonly results: ReadonlyArray<CapabilityResult>;
-  readonly persist: (profile: StoredContractProfile) => Promise<void>;
+  readonly persist: (profile: StoredContractProfile) => Promise<unknown>;
 }): Promise<StoredContractProfile> {
   const create = aggregateSafeCreate(input.results);
   const expectedKey = computeContractProfileKey({ ...input.fingerprint, openApiSha256: input.openApiSha256 });
@@ -106,7 +116,8 @@ export async function buildWriteProbeProfile(input: {
     timestamp: input.checkedAt,
     reasonCode: create.complete
       ? (create.passed ? 'SAFE_CREATE_CANDIDATE_VERIFIED' : 'SAFE_CREATE_UNPROVEN')
-      : 'SAFE_CREATE_PROBE_INCOMPLETE'
+      : 'SAFE_CREATE_PROBE_INCOMPLETE',
+    ...(create.primitive === undefined ? {} : { primitive: create.primitive })
   });
   allEvidence.push({
     operation: 'restartPersistence',

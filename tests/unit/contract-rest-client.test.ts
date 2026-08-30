@@ -48,6 +48,24 @@ describe('ContractRestClient', () => {
     expect(requests[2]!.url).toBe('https://127.0.0.1:27124/vault/trash.md?permanent=false');
   });
 
+  it('percent-encodes every COPY Destination segment before constructing HTTP headers', async () => {
+    let destination: string | null = null;
+    const client = new ContractRestClient('https://127.0.0.1:27124', 'test-key', async (input, init) => {
+      const request = new Request(input, init);
+      destination = request.headers.get('Destination');
+      return new Response(null, { status: 201 });
+    });
+
+    await expect(client.copy(
+      'source.md',
+      '02知识库/99其他/目标 #100%.md'
+    )).resolves.toBe(201);
+    expect(destination).toBe(
+      '02%E7%9F%A5%E8%AF%86%E5%BA%93/99%E5%85%B6%E4%BB%96/%E7%9B%AE%E6%A0%87%20%23100%25.md'
+    );
+    expect(destination).toMatch(/^[\x00-\x7f]+$/);
+  });
+
   it('can send a previously verified conditional non-permanent cleanup token', async () => {
     const requests: RequestInit[] = [];
     const client = new ContractRestClient('https://127.0.0.1:27124', 'test-key', async (_input, init) => {

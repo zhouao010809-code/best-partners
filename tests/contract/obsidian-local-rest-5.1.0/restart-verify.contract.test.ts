@@ -13,12 +13,15 @@ import {
   consumeRestartPending,
   isVerifiedNonPermanentCleanup,
   loadRestartPending,
+  markRestartPendingVerified,
+  restartPendingAlreadyCompleted,
+  restartPendingHasVerifiedRestart,
   restartPendingMatchesProfile
 } from '../../helpers/restart-pending.js';
 import {
   buildContractProfile,
   computeContractProfileKey,
-  loadContractProfileByKey,
+  loadContractProfileStateByKey,
   writeContractProfile
 } from '../../../src/server/vault/contract-profile-store.js';
 import { VaultGatewayError } from '../../../src/server/vault/LocalRest51Gateway.js';
@@ -27,7 +30,7 @@ describe('Local REST restart persistence verify', () => {
   it('matches the current fingerprint, updates restart evidence, and consumes only a successful pending record', async () => {
     const environment = requireContractEnvironment(process.env);
     const gateway = createContractGateway(environment);
-    await assertContractTestVault({
+    const canonicalRoots = await assertContractTestVault({
       gateway,
       testVaultRoot: environment.testVaultRoot,
       formalVaultRoot: environment.formalVaultRoot,
@@ -36,8 +39,8 @@ describe('Local REST restart persistence verify', () => {
       allowWrite: process.env.ALLOW_OBSIDIAN_CONTRACT_WRITE
     });
 
-    const profileDirectory = join(environment.appDataRoot, 'contract-profiles');
-    const pending = await loadRestartPending(profileDirectory);
+    const profileDirectory = join(canonicalRoots.appDataRoot, 'contract-profiles');
+    let pending = await loadRestartPending(profileDirectory);
     if (pending === undefined) throw new Error('RESTART_PENDING_UNAVAILABLE');
     const fingerprint = await gateway.fingerprint();
     if (fingerprint.pluginId !== 'obsidian-local-rest-api' || fingerprint.pluginVersion.split('.')[0] !== '5') {
@@ -52,41 +55,143 @@ describe('Local REST restart persistence verify', () => {
     if (!restartPendingMatchesProfile(pending, currentProfileKey)) {
       throw new Error('RESTART_PROFILE_MISMATCH');
     }
-    const profile = await loadContractProfileByKey(profileDirectory, currentProfileKey);
-    if (profile === undefined) throw new Error('RESTART_PROFILE_UNAVAILABLE');
+    const profileState = await loadContractProfileStateByKey(profileDirectory, currentProfileKey);
+    if (profileState === undefined) throw new Error('RESTART_PROFILE_UNAVAILABLE');
+    const profile = profileState.profile;
+    if (restartPendingAlreadyCompleted(pending, profile)) {
+      await consumeRestartPending(profileDirectory, pending);
+      return;
+    }
 
     const roots = contractSandboxRoots(pending.runId);
     const root = pending.root === 'library' ? roots.library : roots.knowledge;
     const notePath = assertSandboxVaultPath(`${root}/${pending.noteId}`, pending.runId);
-    let restartPassed = false;
-    try {
-      const observed = await gateway.readRaw(notePath);
-      restartPassed = observed.rawSha256 === pending.rawSha256
-        && observed.upstreamVersion === pending.upstreamVersion;
-    } catch {
-      restartPassed = false;
+    const latestSafeDelete = profile.evidence
+      .filter((record) => record.operation === 'safeDelete')
+      .at(-1);
+    const verifiedSafeDelete = profile.safeDelete
+      && latestSafeDelete?.status === 'passed'
+      && latestSafeDelete.reasonCode === 'CONDITIONAL_NONPERMANENT_DELETE_VERIFIED'
+      && latestSafeDelete.primitive === 'DELETE_NON_PERMANENT';
+    const restartWasVerified = restartPendingHasVerifiedRestart(pending, profile);
+    let restartObserved: Awaited<ReturnType<typeof gateway.readRaw>> | undefined;
+    if (!restartWasVerified) {
+      try {
+        const observed = await gateway.readRaw(notePath);
+        if (
+          observed.rawSha256 === pending.rawSha256
+          && observed.upstreamVersion === pending.upstreamVersion
+        ) {
+          restartObserved = observed;
+        }
+      } catch {
+        restartObserved = undefined;
+      }
     }
 
+    const restartCheckedAt = new Date().toISOString();
     const {
       schemaVersion: _schemaVersion,
       profileKey: _profileKey,
       formalWriteGate: _formalWriteGate,
-      restartCheckedAt: _previousRestartCheckedAt,
-      ...input
+      restartCheckedAt: previousRestartCheckedAt,
+      ...profileInput
     } = profile;
-    const restartCheckedAt = new Date().toISOString();
-    const verifiedSafeDelete = profile.safeDelete && profile.evidence.some((record) => (
-      record.operation === 'safeDelete'
-      && record.status === 'passed'
-      && record.reasonCode === 'CONDITIONAL_NONPERMANENT_DELETE_VERIFIED'
-      && record.primitive === 'DELETE_NON_PERMANENT'
-    ));
-    let cleanupStatus: 'passed' | 'failed' | 'unverified' = 'unverified';
-    let cleanupReason = 'MANUAL_CLEANUP_REQUIRED';
-    if (restartPassed && verifiedSafeDelete) {
+    if (!restartWasVerified && restartObserved === undefined) {
+      await writeContractProfile(profileDirectory, buildContractProfile({
+        ...profileInput,
+        restartPersistence: 'failed',
+        restartCheckedAt,
+        evidence: [
+          ...profile.evidence.filter((record) => (
+            record.operation !== 'restartPersistence' && record.operation !== 'cleanup'
+          )),
+          {
+            operation: 'restartPersistence',
+            status: 'failed',
+            timestamp: restartCheckedAt,
+            reasonCode: 'RESTART_STATE_MISMATCH',
+            primitive: 'RAW_REREAD'
+          },
+          {
+            operation: 'cleanup',
+            status: 'unverified',
+            timestamp: restartCheckedAt,
+            reasonCode: 'MANUAL_CLEANUP_REQUIRED'
+          }
+        ]
+      }), { expectedRevision: profileState.revision });
+      return;
+    }
+
+    let verifiedState = profileState;
+    let verifiedProfile = profile;
+    if (!restartWasVerified) {
+      verifiedProfile = buildContractProfile({
+        ...profileInput,
+        restartPersistence: 'passed',
+        restartCheckedAt,
+        evidence: [
+          ...profile.evidence.filter((record) => (
+            record.operation !== 'restartPersistence' && record.operation !== 'cleanup'
+          )),
+          {
+            operation: 'restartPersistence',
+            status: 'passed',
+            httpStatuses: [200],
+            timestamp: restartCheckedAt,
+            reasonCode: 'RAW_HASH_AND_VERSION_PERSISTED',
+            primitive: 'RAW_REREAD'
+          },
+          {
+            operation: 'cleanup',
+            status: 'unverified',
+            timestamp: restartCheckedAt,
+            reasonCode: verifiedSafeDelete
+              ? 'CONDITIONAL_NONPERMANENT_CLEANUP_ARMED'
+              : 'MANUAL_CLEANUP_REQUIRED',
+            ...(verifiedSafeDelete ? { primitive: 'DELETE_NON_PERMANENT' as const } : {})
+          }
+        ]
+      });
+      verifiedState = await writeContractProfile(
+        profileDirectory,
+        verifiedProfile,
+        { expectedRevision: profileState.revision }
+      );
+      pending = await markRestartPendingVerified(profileDirectory, pending);
+    }
+
+    if (!verifiedSafeDelete) {
+      // The exact run-bound restart record remains active for sanitized manual cleanup.
+      return;
+    }
+
+    let cleanupStatus: 'passed' | 'failed' = 'failed';
+    let trashAttempted = false;
+    try {
+      let current: Awaited<ReturnType<typeof gateway.readRaw>> | undefined;
       try {
+        // Always re-read after the restart phase/armed record commits; the
+        // earlier restart observation is too stale to authorize cleanup.
+        current = await gateway.readRaw(notePath);
+      } catch (error) {
+        if (error instanceof VaultGatewayError && error.upstreamStatus === 404) {
+          cleanupStatus = 'passed';
+        } else {
+          throw error;
+        }
+      }
+      if (current !== undefined) {
+        if (
+          current.rawSha256 !== pending.rawSha256
+          || current.upstreamVersion !== pending.upstreamVersion
+        ) {
+          throw new Error('cleanup precondition mismatch');
+        }
         const client = new ContractRestClient(environment.apiUrl, environment.apiKey);
-        const status = await client.trash(notePath, pending.upstreamVersion);
+        trashAttempted = true;
+        const status = await client.trash(notePath, current.upstreamVersion);
         let rereadStatus = 200;
         try {
           await gateway.readRaw(notePath);
@@ -94,41 +199,53 @@ describe('Local REST restart persistence verify', () => {
           rereadStatus = error instanceof VaultGatewayError ? error.upstreamStatus : 599;
         }
         cleanupStatus = isVerifiedNonPermanentCleanup(status, rereadStatus) ? 'passed' : 'failed';
-        cleanupReason = cleanupStatus === 'passed'
-          ? 'CONDITIONAL_NONPERMANENT_CLEANUP_PASSED'
-          : 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED';
-      } catch {
-        cleanupStatus = 'failed';
-        cleanupReason = 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED';
       }
+    } catch {
+      cleanupStatus = 'failed';
     }
+
+    const cleanupCheckedAt = new Date().toISOString();
+    const {
+      schemaVersion: _verifiedSchemaVersion,
+      profileKey: _verifiedProfileKey,
+      formalWriteGate: _verifiedFormalWriteGate,
+      restartCheckedAt: verifiedRestartCheckedAt,
+      ...verifiedInput
+    } = verifiedProfile;
     const updated = buildContractProfile({
-      ...input,
-      restartPersistence: restartPassed ? 'passed' : 'failed',
-      restartCheckedAt,
+      ...verifiedInput,
+      restartPersistence: 'passed',
+      restartCheckedAt: verifiedRestartCheckedAt ?? previousRestartCheckedAt ?? restartCheckedAt,
       evidence: [
-        ...profile.evidence.filter((record) => (
+        ...verifiedProfile.evidence.filter((record) => (
           record.operation !== 'restartPersistence' && record.operation !== 'cleanup'
         )),
         {
           operation: 'restartPersistence',
-          status: restartPassed ? 'passed' : 'failed',
-          ...(restartPassed ? { httpStatuses: [200] } : {}),
-          timestamp: restartCheckedAt,
-          reasonCode: restartPassed ? 'RAW_HASH_AND_VERSION_PERSISTED' : 'RESTART_STATE_MISMATCH',
+          status: 'passed',
+          httpStatuses: [200],
+          timestamp: verifiedRestartCheckedAt ?? previousRestartCheckedAt ?? restartCheckedAt,
+          reasonCode: 'RAW_HASH_AND_VERSION_PERSISTED',
           primitive: 'RAW_REREAD'
         },
         {
           operation: 'cleanup',
           status: cleanupStatus,
-          timestamp: restartCheckedAt,
-          reasonCode: cleanupReason,
-          primitive: 'DELETE_NON_PERMANENT'
+          timestamp: cleanupCheckedAt,
+          reasonCode: cleanupStatus === 'passed'
+            ? 'CONDITIONAL_NONPERMANENT_CLEANUP_PASSED'
+            : 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED',
+          ...(trashAttempted || cleanupStatus === 'passed'
+            ? { primitive: 'DELETE_NON_PERMANENT' as const } : {})
         }
       ]
     });
-    await writeContractProfile(profileDirectory, updated);
-    if (restartPassed) {
+    await writeContractProfile(
+      profileDirectory,
+      updated,
+      { expectedRevision: verifiedState.revision }
+    );
+    if (cleanupStatus === 'passed') {
       await consumeRestartPending(profileDirectory, pending);
     }
   });

@@ -20,7 +20,16 @@ type ContractVaultContext = {
   appDataRoot: string;
 };
 
-async function assertIsolationAndSentinel(input: ContractVaultContext): Promise<void> {
+export type ContractCanonicalRoots = {
+  readonly testVaultRoot: string;
+  readonly formalVaultRoot: string;
+  readonly sourceRoot: string;
+  readonly appDataRoot: string;
+};
+
+async function assertIsolationAndSentinel(
+  input: ContractVaultContext
+): Promise<ContractCanonicalRoots> {
   let roots: string[];
   try {
     roots = await Promise.all([
@@ -54,18 +63,27 @@ async function assertIsolationAndSentinel(input: ContractVaultContext): Promise<
   } catch {
     throw new Error('TEST_VAULT_SENTINEL_MISSING');
   }
+
+  return {
+    testVaultRoot: roots[0]!,
+    formalVaultRoot: roots[1]!,
+    sourceRoot: roots[2]!,
+    appDataRoot: roots[3]!
+  };
 }
 
-export async function assertContractReadVault(input: ContractVaultContext): Promise<void> {
-  await assertIsolationAndSentinel(input);
+export async function assertContractReadVault(
+  input: ContractVaultContext
+): Promise<ContractCanonicalRoots> {
+  return assertIsolationAndSentinel(input);
 }
 
 export async function assertContractTestVault(input: ContractVaultContext & {
   allowWrite: string | undefined;
-}): Promise<void> {
+}): Promise<ContractCanonicalRoots> {
   if (input.allowWrite !== '1') {
     throw new Error('CONTRACT_WRITE_NOT_ARMED');
   }
 
-  await assertIsolationAndSentinel(input);
+  return assertIsolationAndSentinel(input);
 }

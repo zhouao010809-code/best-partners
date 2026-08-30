@@ -7,6 +7,16 @@ import {
 import { buildContractProfile, type ContractProfileInput } from '../../src/server/vault/contract-profile-store.js';
 
 function input(overrides: Partial<ContractProfileInput> = {}): ContractProfileInput {
+  const primitiveByOperation = {
+    safeRead: 'RAW_REREAD',
+    safeCreate: 'COPY_ALLOW_OVERWRITE_FALSE',
+    safeReplace: 'PATCH_IF_MATCH',
+    safeRestore: 'PATCH_IF_MATCH',
+    safeDelete: 'DELETE_NON_PERMANENT',
+    rereadVerified: 'RAW_REREAD',
+    externalMutationObservation: 'DIRECTORY_POLL',
+    restartPersistence: 'RAW_REREAD'
+  } as const;
   return {
     pluginId: 'obsidian-local-rest-api',
     pluginVersion: '5.1.0',
@@ -34,7 +44,10 @@ function input(overrides: Partial<ContractProfileInput> = {}): ContractProfileIn
       operation: operation as ContractProfileInput['evidence'][number]['operation'],
       status: 'passed' as const,
       timestamp: '2026-08-31T00:00:00.000Z',
-      reasonCode: 'EXECUTABLE_PROBE_PASSED'
+      reasonCode: operation === 'safeDelete'
+        ? 'CONDITIONAL_NONPERMANENT_DELETE_VERIFIED'
+        : 'EXECUTABLE_PROBE_PASSED',
+      primitive: primitiveByOperation[operation as keyof typeof primitiveByOperation]
     })),
     ...overrides
   };
@@ -88,6 +101,24 @@ describe('write capability gate', () => {
       passed: false,
       missing: [{ capability: 'profileKey', reasonCode: 'PROFILE_KEY_MISMATCH' }]
     });
+  });
+
+  it('names a capability whose latest evidence revoked an older pass', () => {
+    const base = input();
+    const profile = buildContractProfile(input({
+      evidence: [
+        ...base.evidence,
+        {
+          operation: 'safeReplace',
+          status: 'failed',
+          timestamp: '2026-08-31T01:00:00.000Z',
+          reasonCode: 'LATEST_REPLACE_FAILED',
+          primitive: 'PATCH_IF_MATCH'
+        }
+      ]
+    }));
+    expect(composeGateOutput(evaluateWriteCapability(profile, profile.profileKey)))
+      .toBe('BLOCKED safeReplace formalWriteGate');
   });
 
   it('composes a non-throwing blocked CLI result when expected context is absent', async () => {

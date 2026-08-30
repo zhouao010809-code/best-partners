@@ -51,10 +51,10 @@ describe('write probe profile aggregation', () => {
     expect(aggregateSafeCreate([
       failed('safeCreate', 'PUT_REJECT_IF_CONTENT_PREEXISTS'),
       passed('safeCreate', 'COPY_ALLOW_OVERWRITE_FALSE')
-    ])).toEqual({ passed: true, complete: true });
+    ])).toEqual({ passed: true, complete: true, primitive: 'COPY_ALLOW_OVERWRITE_FALSE' });
     expect(aggregateSafeCreate([
       failed('safeCreate', 'PUT_REJECT_IF_CONTENT_PREEXISTS')
-    ])).toEqual({ passed: false, complete: false });
+    ])).toEqual({ passed: false, complete: false, primitive: undefined });
   });
 
   it('places an aggregate safeCreate result after both primitive records for reporting', async () => {
@@ -76,7 +76,7 @@ describe('write probe profile aggregation', () => {
     expect(createEvidence.map((record) => record.primitive)).toEqual([
       'PUT_REJECT_IF_CONTENT_PREEXISTS',
       'COPY_ALLOW_OVERWRITE_FALSE',
-      undefined
+      'PUT_REJECT_IF_CONTENT_PREEXISTS'
     ]);
     expect(createEvidence.at(-1)?.status).toBe('passed');
   });

@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { LocalRest51Gateway } from '../../src/server/vault/LocalRest51Gateway.js';
 
 const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -40,10 +39,6 @@ export function assertSandboxVaultPath(path: string, runId: string): string {
   return path;
 }
 
-export function diskPath(testVaultRoot: string, vaultPath: string, runId: string): string {
-  return join(testVaultRoot, ...assertSandboxVaultPath(vaultPath, runId).split('/'));
-}
-
 export function loadContractEnvironment(env: NodeJS.ProcessEnv): ContractEnvironment | undefined {
   const values = {
     apiUrl: env.OBSIDIAN_API_URL,
@@ -72,8 +67,12 @@ export function createContractGateway(environment: ContractEnvironment): LocalRe
 }
 
 function vaultEndpoint(baseUrl: string, path: string): URL {
-  const encoded = path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+  const encoded = encodeVaultPath(path);
   return new URL(`/vault/${encoded}`, baseUrl);
+}
+
+function encodeVaultPath(path: string): string {
+  return path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
 }
 
 export class ContractRestClient {
@@ -105,7 +104,7 @@ export class ContractRestClient {
     return this.request(sourcePath, {
       method: 'COPY',
       headers: {
-        Destination: destinationPath,
+        Destination: encodeVaultPath(destinationPath),
         'Allow-Overwrite': 'false'
       }
     });

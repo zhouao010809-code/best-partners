@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { VaultGateway } from '../../src/server/vault/VaultGateway.js';
@@ -52,8 +52,8 @@ function gateway(marker = `${SENTINEL}\n`): VaultGateway {
 async function assertFixture(
   current: Awaited<ReturnType<typeof fixture>>,
   overrides: Partial<Parameters<typeof assertContractTestVault>[0]> = {}
-): Promise<void> {
-  await assertContractTestVault({
+) {
+  return assertContractTestVault({
     gateway: gateway(),
     testVaultRoot: current.testVaultRoot,
     formalVaultRoot: current.formalVaultRoot,
@@ -131,7 +131,12 @@ describe('assertContractTestVault', () => {
 
   it('accepts isolated canonical roots and matching trimmed sentinels', async () => {
     const current = await fixture();
-    await expect(assertFixture(current)).resolves.toBeUndefined();
+    await expect(assertFixture(current)).resolves.toEqual({
+      testVaultRoot: await realpath(current.testVaultRoot),
+      formalVaultRoot: await realpath(current.formalVaultRoot),
+      sourceRoot: await realpath(current.sourceRoot),
+      appDataRoot: await realpath(current.appDataRoot)
+    });
   });
 
   it('allows the same isolation and sentinel checks for a read-only probe without write arming', async () => {
@@ -142,6 +147,11 @@ describe('assertContractTestVault', () => {
       formalVaultRoot: current.formalVaultRoot,
       sourceRoot: current.sourceRoot,
       appDataRoot: current.appDataRoot
-    })).resolves.toBeUndefined();
+    })).resolves.toEqual({
+      testVaultRoot: await realpath(current.testVaultRoot),
+      formalVaultRoot: await realpath(current.formalVaultRoot),
+      sourceRoot: await realpath(current.sourceRoot),
+      appDataRoot: await realpath(current.appDataRoot)
+    });
   });
 });

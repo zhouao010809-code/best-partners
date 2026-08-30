@@ -1,8 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { describe, expect, it, vi } from 'vitest';
 import {
   runContractSelection,
+  runVitestFile,
   selectContractFiles
 } from '../../scripts/run-obsidian-contract.js';
+
+class FakeChildProcess extends EventEmitter {
+  readonly forwardedSignals: NodeJS.Signals[] = [];
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    if (typeof signal === 'string') {
+      this.forwardedSignals.push(signal);
+    }
+    return true;
+  }
+}
 
 describe('Obsidian contract runner selection', () => {
   it('selects read plus guarded write, but no restart files, when no filter is supplied', () => {
@@ -62,5 +75,88 @@ describe('Obsidian contract runner selection', () => {
       throw new Error('private runner failure');
     })).resolves.toBe(1);
     expect(failedCalls).toEqual(selectContractFiles(['read']));
+  });
+
+  it.each(['SIGINT', 'SIGTERM', 'SIGHUP'] as const)(
+    'forwards %s to the active child and waits for its exit before resolving',
+    async (signal) => {
+      const child = new FakeChildProcess();
+      const signalSource = new EventEmitter();
+      const resultPromise = runVitestFile('read.contract.test.ts', {
+        spawnProcess: () => child,
+        signalSource,
+        writeStderr: vi.fn()
+      });
+      let settled = false;
+      void resultPromise.then(() => {
+        settled = true;
+      });
+
+      signalSource.emit(signal);
+      await Promise.resolve();
+
+      expect(child.forwardedSignals).toEqual([signal]);
+      expect(settled).toBe(false);
+
+      child.emit('exit', null, signal);
+
+      await expect(resultPromise).resolves.toBe(1);
+      expect(signalSource.listenerCount('SIGINT')).toBe(0);
+      expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+      expect(signalSource.listenerCount('SIGHUP')).toBe(0);
+
+      signalSource.emit(signal);
+      expect(child.forwardedSignals).toEqual([signal]);
+    }
+  );
+
+  it('propagates a child nonzero exit and never spawns write after read fails', async () => {
+    const child = new FakeChildProcess();
+    const signalSource = new EventEmitter();
+    const spawnProcess = vi.fn(() => child);
+    const resultPromise = runContractSelection([], (file) => runVitestFile(file, {
+      spawnProcess,
+      signalSource,
+      writeStderr: vi.fn()
+    }));
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    child.emit('exit', 7, null);
+
+    await expect(resultPromise).resolves.toBe(7);
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns a child runner error into exit 1, cleans listeners, and never starts write', async () => {
+    const child = new FakeChildProcess();
+    const signalSource = new EventEmitter();
+    const spawnProcess = vi.fn(() => child);
+    const writeStderr = vi.fn();
+    const resultPromise = runContractSelection([], (file) => runVitestFile(file, {
+      spawnProcess,
+      signalSource,
+      writeStderr
+    }));
+    let settled = false;
+    void resultPromise.then(() => {
+      settled = true;
+    });
+
+    child.emit('error', new Error('private spawn failure'));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(settled).toBe(false);
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+
+    child.emit('close', 0, null);
+
+    await expect(resultPromise).resolves.toBe(1);
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    expect(writeStderr).toHaveBeenCalledWith('CONTRACT_RUNNER_FAILED\n');
+    expect(signalSource.listenerCount('SIGINT')).toBe(0);
+    expect(signalSource.listenerCount('SIGTERM')).toBe(0);
+    expect(signalSource.listenerCount('SIGHUP')).toBe(0);
   });
 });

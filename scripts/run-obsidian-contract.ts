@@ -3,6 +3,37 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const CONTRACT_ROOT = 'tests/contract/obsidian-local-rest-5.1.0';
+const FORWARDED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+
+type ForwardedSignal = typeof FORWARDED_SIGNALS[number];
+
+interface ContractChildProcess {
+  once(
+    event: 'exit',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void
+  ): this;
+  once(
+    event: 'close',
+    listener: (code: number | null, signal: NodeJS.Signals | null) => void
+  ): this;
+  once(event: 'error', listener: (error: Error) => void): this;
+  kill(signal: ForwardedSignal): boolean;
+}
+
+interface ContractSignalSource {
+  on(signal: ForwardedSignal, listener: () => void): unknown;
+  removeListener(signal: ForwardedSignal, listener: () => void): unknown;
+}
+
+interface VitestFileRunnerDependencies {
+  spawnProcess?: (
+    command: string,
+    arguments_: string[],
+    options: { stdio: 'inherit' }
+  ) => ContractChildProcess;
+  signalSource?: ContractSignalSource;
+  writeStderr?: (message: string) => void;
+}
 
 export function selectContractFiles(arguments_: ReadonlyArray<string>): string[] {
   if (arguments_.length === 0) {
@@ -39,9 +70,20 @@ export async function runContractSelection(
   return 0;
 }
 
-async function runVitestFile(file: string): Promise<number> {
+export async function runVitestFile(
+  file: string,
+  dependencies: VitestFileRunnerDependencies = {}
+): Promise<number> {
   const vitest = join(process.cwd(), 'node_modules/vitest/vitest.mjs');
-  const child = spawn(process.execPath, [
+  const spawnProcess: NonNullable<VitestFileRunnerDependencies['spawnProcess']> =
+    dependencies.spawnProcess ?? ((command, arguments_, options) => (
+      spawn(command, arguments_, options)
+    ));
+  const signalSource = dependencies.signalSource ?? process;
+  const writeStderr = dependencies.writeStderr ?? ((message: string) => {
+    process.stderr.write(message);
+  });
+  const child = spawnProcess(process.execPath, [
     vitest,
     'run',
     '--config',
@@ -51,16 +93,36 @@ async function runVitestFile(file: string): Promise<number> {
   ], { stdio: 'inherit' });
   return new Promise<number>((resolve) => {
     let settled = false;
+    let runnerFailed = false;
+    const signalListeners = new Map<ForwardedSignal, () => void>();
+    const removeSignalListeners = (): void => {
+      for (const [signal, listener] of signalListeners) {
+        signalSource.removeListener(signal, listener);
+      }
+      signalListeners.clear();
+    };
     const finish = (code: number): void => {
       if (settled) return;
       settled = true;
+      removeSignalListeners();
       resolve(code);
     };
-    child.once('exit', (code) => finish(code ?? 1));
+    const finishFromChild = (code: number | null): void => {
+      finish(runnerFailed ? 1 : code ?? 1);
+    };
+    child.once('exit', finishFromChild);
+    child.once('close', finishFromChild);
     child.once('error', () => {
-      process.stderr.write('CONTRACT_RUNNER_FAILED\n');
-      finish(1);
+      runnerFailed = true;
+      writeStderr('CONTRACT_RUNNER_FAILED\n');
     });
+    for (const signal of FORWARDED_SIGNALS) {
+      const listener = (): void => {
+        child.kill(signal);
+      };
+      signalListeners.set(signal, listener);
+      signalSource.on(signal, listener);
+    }
   });
 }
 
