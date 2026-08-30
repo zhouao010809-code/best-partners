@@ -40,7 +40,7 @@ Required runtime context is supplied through `OBSIDIAN_API_URL`, `OBSIDIAN_API_K
 Read-only fixture probe, after the independent vault and fixture exist:
 
 ```bash
-npm run test:contract:obsidian:probe -- read.contract
+npm run test:contract:obsidian:probe -- read
 ```
 
 Guarded write probe, only after the independent test vault is open and verified:
@@ -49,7 +49,7 @@ Guarded write probe, only after the independent test vault is open and verified:
 ALLOW_OBSIDIAN_CONTRACT_WRITE=1 npm run test:contract:obsidian:probe
 ```
 
-The no-filter command runs only the read contract followed by the guarded write contract; it never runs either restart phase. `-- write` selects only the guarded write file.
+The no-filter command runs the read contract in its own process first and starts the guarded write process only after read exits successfully. A read or runner failure stops the sequence. It never runs either restart phase. `-- write` selects only the guarded write file.
 
 Two-phase restart probe:
 

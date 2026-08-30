@@ -16,7 +16,11 @@ import {
   buildWriteProbeProfile,
   type CapabilityResult
 } from '../../helpers/write-probe-profile.js';
-import { writeContractProfile } from '../../../src/server/vault/contract-profile-store.js';
+import {
+  computeContractProfileKey,
+  loadContractProfileByKey,
+  writeContractProfile
+} from '../../../src/server/vault/contract-profile-store.js';
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -72,11 +76,14 @@ describe('Local REST 5.1 guarded write capability probe', () => {
       : 'OPENAPI_FINGERPRINT_MISMATCH';
     const checkedAt = new Date().toISOString();
     const profileDirectory = join(environment.appDataRoot, 'contract-profiles');
+    const profileKey = computeContractProfileKey({ ...fingerprint, openApiSha256 });
+    const priorReadProfile = compatible
+      ? await loadContractProfileByKey(profileDirectory, profileKey)
+      : undefined;
     const results: CapabilityResult[] = [];
 
     if (!compatible) {
       for (const [operation, primitive] of [
-        ['safeRead', 'RAW_REREAD'],
         ['safeCreate', 'PUT_REJECT_IF_CONTENT_PREEXISTS'],
         ['safeCreate', 'COPY_ALLOW_OVERWRITE_FALSE'],
         ['safeReplace', 'PATCH_IF_MATCH'],
@@ -125,12 +132,9 @@ describe('Local REST 5.1 guarded write capability probe', () => {
       await writeFile(diskPath(environment.testVaultRoot, paths.note, runId), beforeBytes, { flag: 'wx' });
       if (await poll(async () => (await gateway.readRaw(paths.note)).rawSha256 === sha256(beforeBytes))) {
         initial = await gateway.readRaw(paths.note);
-        results.push(result('safeRead', 'RAW_REREAD', 'passed', 'RAW_BYTES_AND_VERSION_VERIFIED', checkedAt, [200]));
-      } else {
-        results.push(result('safeRead', 'RAW_REREAD', 'failed', 'RAW_READ_NOT_OBSERVED', checkedAt));
       }
     } catch {
-      results.push(result('safeRead', 'RAW_REREAD', 'failed', 'RAW_READ_PROBE_FAILED', checkedAt));
+      initial = undefined;
     }
 
     if (initial?.upstreamVersion !== undefined) {
@@ -161,7 +165,7 @@ describe('Local REST 5.1 guarded write capability probe', () => {
         results.push(result('safeReplace', 'PATCH_IF_MATCH', 'failed', 'PATCH_CAS_PROBE_FAILED', checkedAt));
       }
     } else {
-      results.push(result('safeReplace', 'PATCH_IF_MATCH', 'unverified', 'SAFE_READ_REQUIRED', checkedAt));
+      results.push(result('safeReplace', 'PATCH_IF_MATCH', 'unverified', 'PATCH_SETUP_NOTE_UNAVAILABLE', checkedAt));
     }
 
     if (after?.upstreamVersion !== undefined) {
@@ -290,6 +294,7 @@ describe('Local REST 5.1 guarded write capability probe', () => {
       fingerprint,
       openApiSha256,
       checkedAt,
+      ...(priorReadProfile === undefined ? {} : { priorReadProfile }),
       results,
       persist: (value) => writeContractProfile(profileDirectory, value)
     });

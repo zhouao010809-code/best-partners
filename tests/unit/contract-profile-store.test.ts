@@ -146,6 +146,15 @@ describe('contract profile model', () => {
     }));
     expect(renderContractProfileMarkdown(failed)).toContain('| safeCreate | FAILED |');
   });
+
+  it('uses restartCheckedAt for the formal gate report timestamp when present', () => {
+    const report = renderContractProfileMarkdown(buildContractProfile(profileInput({
+      restartCheckedAt: '2026-08-31T02:00:00.000Z'
+    })));
+    expect(report).toContain(
+      '| formalWriteGate | PASSED | 2026-08-31T02:00:00.000Z | FORMAL_GATE_PASSED |'
+    );
+  });
 });
 
 describe('contract profile store', () => {

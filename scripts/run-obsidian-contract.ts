@@ -20,15 +20,26 @@ export function selectContractFiles(arguments_: ReadonlyArray<string>): string[]
     : `${CONTRACT_ROOT}/write-gate.contract.test.ts`];
 }
 
-async function main(): Promise<void> {
-  let files: string[];
-  try {
-    files = selectContractFiles(process.argv.slice(2));
-  } catch {
-    process.stderr.write('CONTRACT_SELECTION_INVALID\n');
-    process.exitCode = 1;
-    return;
+export async function runContractSelection(
+  arguments_: ReadonlyArray<string>,
+  runFile: (file: string) => Promise<number>
+): Promise<number> {
+  const files = selectContractFiles(arguments_);
+  for (const file of files) {
+    let exitCode: number;
+    try {
+      exitCode = await runFile(file);
+    } catch {
+      return 1;
+    }
+    if (exitCode !== 0) {
+      return exitCode;
+    }
   }
+  return 0;
+}
+
+async function runVitestFile(file: string): Promise<number> {
   const vitest = join(process.cwd(), 'node_modules/vitest/vitest.mjs');
   const child = spawn(process.execPath, [
     vitest,
@@ -36,19 +47,30 @@ async function main(): Promise<void> {
     '--config',
     'vitest.contract.config.ts',
     '--no-file-parallelism',
-    ...files
+    file
   ], { stdio: 'inherit' });
-  await new Promise<void>((resolve) => {
-    child.once('exit', (code) => {
-      process.exitCode = code ?? 1;
-      resolve();
-    });
+  return new Promise<number>((resolve) => {
+    let settled = false;
+    const finish = (code: number): void => {
+      if (settled) return;
+      settled = true;
+      resolve(code);
+    };
+    child.once('exit', (code) => finish(code ?? 1));
     child.once('error', () => {
       process.stderr.write('CONTRACT_RUNNER_FAILED\n');
-      process.exitCode = 1;
-      resolve();
+      finish(1);
     });
   });
+}
+
+async function main(): Promise<void> {
+  try {
+    process.exitCode = await runContractSelection(process.argv.slice(2), runVitestFile);
+  } catch {
+    process.stderr.write('CONTRACT_SELECTION_INVALID\n');
+    process.exitCode = 1;
+  }
 }
 
 const invokedPath = process.argv[1];

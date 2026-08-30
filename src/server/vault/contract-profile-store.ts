@@ -212,7 +212,7 @@ export function renderContractProfileMarkdown(profile: StoredContractProfile): s
     [
       'formalWriteGate',
       parsed.formalWriteGate,
-      parsed.checkedAt,
+      parsed.restartCheckedAt ?? parsed.checkedAt,
       parsed.formalWriteGate === 'passed' ? 'FORMAL_GATE_PASSED' : 'FORMAL_GATE_BLOCKED'
     ]
   ];
