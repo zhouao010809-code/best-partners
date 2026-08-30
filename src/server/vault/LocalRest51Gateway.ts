@@ -14,6 +14,14 @@ type FingerprintPayload = {
   versions: { obsidian: string };
 };
 
+type DirectoryPayload = {
+  files: string[];
+};
+
+type DocumentMapPayload = {
+  version: string;
+};
+
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -35,6 +43,14 @@ function isFingerprintPayload(value: unknown): value is FingerprintPayload {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+function isDirectoryPayload(value: unknown): value is DirectoryPayload {
+  return isStringArray(asObject(value)?.files);
+}
+
+function isDocumentMapPayload(value: unknown): value is DocumentMapPayload {
+  return isNonEmptyString(asObject(value)?.version);
 }
 
 export class VaultGatewayError extends AppError {
@@ -144,11 +160,11 @@ export class LocalRest51Gateway implements VaultGateway {
 
   async listDirectory(path: string): Promise<ReadonlyArray<string>> {
     const response = await this.request(this.vaultEndpoint(path, true), 'application/json');
-    const entries = await this.readBoundedJson(response);
-    if (!isStringArray(entries)) {
+    const payload = await this.readBoundedJson(response);
+    if (!isDirectoryPayload(payload)) {
       throw new VaultResponseShapeError(this.publicOperationId(response));
     }
-    return Object.freeze([...entries]);
+    return Object.freeze([...payload.files]);
   }
 
   async readRaw(path: string): Promise<VersionedBytes> {
@@ -157,13 +173,10 @@ export class LocalRest51Gateway implements VaultGateway {
       const first = await this.request(endpoint, 'text/markdown');
       const firstBytes = await this.readBoundedBytes(first);
       const firstSha256 = sha256Bytes(firstBytes);
-      const documentMap = await this.request(endpoint, 'application/vnd.olrapi.document-map+json');
-      let upstreamVersion: string | undefined;
-      try {
-        this.assertDeclaredBodyWithinLimit(documentMap);
-        upstreamVersion = documentMap.headers.get('etag') ?? undefined;
-      } finally {
-        this.cancelBody(documentMap);
+      const documentMapResponse = await this.request(endpoint, 'application/vnd.olrapi.document-map+json');
+      const documentMap = await this.readBoundedJson(documentMapResponse);
+      if (!isDocumentMapPayload(documentMap)) {
+        throw new VaultResponseShapeError(this.publicOperationId(documentMapResponse));
       }
       const second = await this.request(endpoint, 'text/markdown');
       const secondBytes = await this.readBoundedBytes(second);
@@ -174,7 +187,7 @@ export class LocalRest51Gateway implements VaultGateway {
           path,
           bytes: secondBytes,
           rawSha256: secondSha256,
-          ...(upstreamVersion === undefined ? {} : { upstreamVersion })
+          upstreamVersion: documentMap.version
         };
       }
     }

@@ -62,6 +62,23 @@ function rawResponse(bytes: Uint8Array): Response {
   });
 }
 
+function documentMapPayload(version: string) {
+  return {
+    blocks: [],
+    frontmatterFields: [],
+    headings: [],
+    version
+  };
+}
+
+function documentMapBytes(version: string): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(documentMapPayload(version)));
+}
+
+function documentMapResponse(version: string, headers: HeadersInit = {}): Response {
+  return new Response(documentMapBytes(version), { headers });
+}
+
 function trackedStreamResponse(
   bytes: Uint8Array,
   headers: HeadersInit = {},
@@ -162,14 +179,13 @@ function expectGetRequests(calls: ReadonlyArray<PublicCall>, count: number): voi
 describe('LocalRest51Gateway', () => {
   it('preserves raw bytes and returns a coherent hash and version without exposing authorization', async () => {
     const note = new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x0d, 0x0a]);
-    let documentMapCancelled = false;
+    const documentMap = trackedStreamResponse(
+      documentMapBytes('v2-token'),
+      { etag: '"unrelated-etag-value-1234567890"' }
+    );
     const fakeFetch = createFakeFetch([
       () => rawResponse(note),
-      () => new Response(new ReadableStream({
-        cancel: () => {
-          documentMapCancelled = true;
-        }
-      }), { headers: { etag: '"version-1"' } }),
+      () => documentMap.response,
       () => rawResponse(note)
     ]);
     const gateway = new LocalRest51Gateway(
@@ -183,17 +199,19 @@ describe('LocalRest51Gateway', () => {
 
     expect(result.bytes).toEqual(note);
     expect(result.rawSha256).toBe('ea3948106c12d96eaf84d4bb8be214b194c3442acb99a3005251960b0ec2ba63');
-    expect(result.upstreamVersion).toBe('"version-1"');
+    expect(result.upstreamVersion).toBe('v2-token');
+    expect(result.upstreamVersion).not.toBe('"unrelated-etag-value-1234567890"');
     expect(fakeFetch.lastAuthorization()).toBe('[redacted]');
     expectGetRequests(fakeFetch.calls, 3);
-    expect(documentMapCancelled).toBe(true);
+    expect(documentMap.pullCount()).toBe(2);
+    expect(documentMap.cancelCount()).toBe(0);
   });
 
   it('encodes each file path segment exactly once and preserves separators', async () => {
     const note = new TextEncoder().encode('note');
     const fakeFetch = createFakeFetch([
       () => rawResponse(note),
-      () => new Response('{}', { headers: { etag: '"version-path"' } }),
+      () => documentMapResponse('path-v1'),
       () => rawResponse(note)
     ]);
     const gateway = new LocalRest51Gateway(
@@ -329,8 +347,8 @@ describe('LocalRest51Gateway', () => {
 
   it('lists an encoded directory with a trailing slash and returns an immutable string list', async () => {
     const fakeFetch = createFakeFetch([
-      () => Response.json(['a.md', '子 目录/', '#index.md']),
-      () => Response.json(['a.md', '子 目录/', '#index.md'])
+      () => Response.json({ files: ['a.md', '子目录/'] }),
+      () => Response.json({ files: ['a.md', '子目录/'] })
     ]);
     const gateway = new LocalRest51Gateway(
       'https://127.0.0.1:27124',
@@ -341,8 +359,8 @@ describe('LocalRest51Gateway', () => {
     const withoutTrailingSlash = await gateway.listDirectory('01图书馆/中文 目录');
     const withTrailingSlash = await gateway.listDirectory('01图书馆/中文 目录/');
 
-    expect(withoutTrailingSlash).toEqual(['a.md', '子 目录/', '#index.md']);
-    expect(withTrailingSlash).toEqual(['a.md', '子 目录/', '#index.md']);
+    expect(withoutTrailingSlash).toEqual(['a.md', '子目录/']);
+    expect(withTrailingSlash).toEqual(['a.md', '子目录/']);
     expect(Object.isFrozen(withoutTrailingSlash)).toBe(true);
     expect(Object.isFrozen(withTrailingSlash)).toBe(true);
     const expectedCall = {
@@ -354,11 +372,11 @@ describe('LocalRest51Gateway', () => {
   });
 
   it.each([
-    ['string payload', (marker: string) => marker],
-    ['object payload', (marker: string) => ({ entry: marker })],
-    ['null payload', () => null],
-    ['array containing a number', (marker: string) => ['a.md', 42, marker]]
-  ])('rejects directory %s instead of returning character or mixed arrays', async (name, createPayload) => {
+    ['bare array', (marker: string) => ['a.md', marker]],
+    ['missing files', (marker: string) => ({ diagnostic: marker })],
+    ['non-array files', (marker: string) => ({ files: marker })],
+    ['non-string files entry', (marker: string) => ({ files: ['a.md', 42, marker] })]
+  ])('rejects directory object with %s using a body-redacted shape error', async (name, createPayload) => {
     const bodyMarker = `unique-list-shape-marker:${name}:test-api-key`;
     const fakeFetch = createFakeFetch([
       () => Response.json(createPayload(bodyMarker), {
@@ -412,10 +430,10 @@ describe('LocalRest51Gateway', () => {
     const bytes = (value: string) => new TextEncoder().encode(value);
     const fakeFetch = createFakeFetch([
       () => rawResponse(bytes('attempt-1-a')),
-      () => new Response('{}', { headers: { etag: '"version-1"' } }),
+      () => documentMapResponse('version-1'),
       () => rawResponse(bytes('attempt-1-b')),
       () => rawResponse(bytes('attempt-2-a')),
-      () => new Response('{}', { headers: { etag: '"version-2"' } }),
+      () => documentMapResponse('version-2'),
       () => rawResponse(bytes('attempt-2-b'))
     ]);
     const gateway = new LocalRest51Gateway(
@@ -444,14 +462,14 @@ describe('LocalRest51Gateway', () => {
     ]);
   });
 
-  it('returns only second-attempt bytes, hash, and ETag after the first triple changes', async () => {
+  it('returns only second-attempt bytes, hash, and document-map version after the first triple changes', async () => {
     const stableNote = new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x0d, 0x0a]);
     const fakeFetch = createFakeFetch([
       () => rawResponse(new Uint8Array([1])),
-      () => new Response('{}', { headers: { etag: '"stale-version"' } }),
+      () => documentMapResponse('stale-version', { etag: '"unrelated-stale-etag"' }),
       () => rawResponse(new Uint8Array([2])),
       () => rawResponse(stableNote),
-      () => new Response('{}', { headers: { etag: '"stable-version"' } }),
+      () => documentMapResponse('stable-version', { etag: '"unrelated-stable-etag"' }),
       () => rawResponse(stableNote)
     ]);
     const gateway = new LocalRest51Gateway(
@@ -464,7 +482,7 @@ describe('LocalRest51Gateway', () => {
 
     expect(result.bytes).toEqual(stableNote);
     expect(result.rawSha256).toBe('ea3948106c12d96eaf84d4bb8be214b194c3442acb99a3005251960b0ec2ba63');
-    expect(result.upstreamVersion).toBe('"stable-version"');
+    expect(result.upstreamVersion).toBe('stable-version');
     expectGetRequests(fakeFetch.calls, 6);
   });
 
@@ -501,7 +519,7 @@ describe('LocalRest51Gateway', () => {
     maximumBody[maximumBody.byteLength - 1] = 1;
     const fakeFetch = createFakeFetch([
       () => rawResponse(maximumBody),
-      () => new Response('{}', { headers: { etag: '"version-maximum"' } }),
+      () => documentMapResponse('version-maximum'),
       () => rawResponse(maximumBody)
     ]);
     const gateway = new LocalRest51Gateway(
@@ -552,7 +570,7 @@ describe('LocalRest51Gateway', () => {
     {
       name: 'directory listing',
       createResponse: () => trackedStreamResponse(
-        new TextEncoder().encode(JSON.stringify(['a.md'])),
+        new TextEncoder().encode(JSON.stringify({ files: ['a.md'] })),
         { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
       ),
       invoke: (gateway: LocalRest51Gateway) => gateway.listDirectory('01图书馆/子目录')
@@ -600,7 +618,7 @@ describe('LocalRest51Gateway', () => {
     {
       name: 'directory JSON without a declared length',
       createResponse: () => new Response(
-        paddedAsciiBody(JSON.stringify(['a.md']), MAX_RESPONSE_BYTES + 1)
+        paddedAsciiBody(JSON.stringify({ files: ['a.md'] }), MAX_RESPONSE_BYTES + 1)
       ),
       invoke: (gateway: LocalRest51Gateway) => gateway.listDirectory('01图书馆/子目录')
     },
@@ -841,19 +859,13 @@ describe('LocalRest51Gateway', () => {
 
   it('rejects an oversized document map by declared length and still releases its body', async () => {
     const note = new TextEncoder().encode('note');
-    let documentMapCancelled = false;
+    const documentMap = trackedStreamResponse(
+      documentMapBytes('must-not-be-accepted'),
+      { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
+    );
     const fakeFetch = createFakeFetch([
       () => rawResponse(note),
-      () => new Response(new ReadableStream({
-        cancel: () => {
-          documentMapCancelled = true;
-        }
-      }), {
-        headers: {
-          'content-length': String(MAX_RESPONSE_BYTES + 1),
-          etag: '"must-not-be-accepted"'
-        }
-      }),
+      () => documentMap.response,
       () => rawResponse(note)
     ]);
     const gateway = new LocalRest51Gateway(
@@ -871,15 +883,19 @@ describe('LocalRest51Gateway', () => {
 
     expect(thrown).toBeInstanceOf(AppError);
     expect((thrown as AppError).code).toBe('VAULT_RESPONSE_TOO_LARGE');
-    expect(documentMapCancelled).toBe(true);
+    expect(documentMap.pullCount()).toBe(0);
+    expect(documentMap.cancelCount()).toBe(1);
     expectGetRequests(fakeFetch.calls, 2);
   });
 
-  it('continues to raw B without waiting for permanently pending document-map cancellation', async () => {
+  it('fully consumes a valid document map at exactly 10 MiB without cancelling it', async () => {
     const note = new TextEncoder().encode('stable note');
-    const documentMap = pendingCancelResponse(
-      new TextEncoder().encode('unused document map'),
-      { etag: '"version-pending-cancel"' }
+    const documentMap = trackedStreamResponse(
+      paddedAsciiBody(JSON.stringify(documentMapPayload('map-at-limit')), MAX_RESPONSE_BYTES),
+      {
+        'content-length': String(MAX_RESPONSE_BYTES),
+        etag: '"unrelated-map-at-limit-etag"'
+      }
     );
     const fakeFetch = createFakeFetch([
       () => rawResponse(note),
@@ -892,17 +908,130 @@ describe('LocalRest51Gateway', () => {
       fakeFetch.fetchImplementation
     );
 
-    const settlement = await settleWithin(gateway.readRaw('01图书馆/pending-map.md'));
+    const result = await gateway.readRaw('01图书馆/map-at-limit.md');
 
-    if (settlement.kind !== 'fulfilled') {
-      expect(settlement.kind).toBe('fulfilled');
-      throw new Error('expected a prompt coherent raw result');
-    }
-    expect(settlement.value.bytes).toEqual(note);
-    expect(settlement.value.upstreamVersion).toBe('"version-pending-cancel"');
-    expect(documentMap.pullCount()).toBe(0);
-    expect(documentMap.cancelCount()).toBe(1);
+    expect(result.bytes).toEqual(note);
+    expect(result.upstreamVersion).toBe('map-at-limit');
+    expect(documentMap.pullCount()).toBe(2);
+    expect(documentMap.cancelCount()).toBe(0);
     expectGetRequests(fakeFetch.calls, 3);
+  });
+
+  it('stops and cancels an actual oversized document map without requesting raw B', async () => {
+    const note = new TextEncoder().encode('stable note');
+    const chunks = [
+      new Uint8Array(6 * 1024 * 1024),
+      new Uint8Array(4 * 1024 * 1024 + 1),
+      new TextEncoder().encode('unique-document-map-never-read-marker')
+    ];
+    let pullCount = 0;
+    let cancelCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        const chunk = chunks[pullCount];
+        pullCount += 1;
+        if (chunk === undefined) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+      cancel: () => {
+        cancelCount += 1;
+      }
+    }, { highWaterMark: 0 });
+    const fakeFetch = createFakeFetch([
+      () => rawResponse(note),
+      () => new Response(body),
+      () => rawResponse(note)
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readRaw('01图书馆/actual-oversized-map.md');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_RESPONSE_TOO_LARGE');
+    expect(String(thrown)).not.toContain('unique-document-map-never-read-marker');
+    expect(pullCount).toBe(2);
+    expect(cancelCount).toBe(1);
+    expectGetRequests(fakeFetch.calls, 2);
+  });
+
+  it.each([
+    {
+      name: 'missing version',
+      expectedCode: 'VAULT_RESPONSE_INVALID_SHAPE',
+      createBody: (marker: string) => JSON.stringify({
+        blocks: [],
+        frontmatterFields: [],
+        headings: [],
+        diagnostic: marker
+      })
+    },
+    {
+      name: 'empty version',
+      expectedCode: 'VAULT_RESPONSE_INVALID_SHAPE',
+      createBody: (marker: string) => JSON.stringify({
+        ...documentMapPayload(''),
+        diagnostic: marker
+      })
+    },
+    {
+      name: 'non-string version',
+      expectedCode: 'VAULT_RESPONSE_INVALID_SHAPE',
+      createBody: (marker: string) => JSON.stringify({
+        ...documentMapPayload('placeholder'),
+        version: 51,
+        diagnostic: marker
+      })
+    },
+    {
+      name: 'invalid JSON',
+      expectedCode: 'VAULT_RESPONSE_INVALID_JSON',
+      createBody: (marker: string) => `${marker}:not-json:test-api-key`
+    }
+  ])('rejects a document map with $name using a redacted safe 502 error', async ({ name, expectedCode, createBody }) => {
+    const note = new TextEncoder().encode('stable note');
+    const bodyMarker = `unique-document-map-${name}-marker:test-api-key`;
+    const fakeFetch = createFakeFetch([
+      () => rawResponse(note),
+      () => new Response(createBody(bodyMarker), {
+        headers: { 'x-operation-id': 'document-map-shape-13' }
+      }),
+      () => rawResponse(note)
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readRaw('01图书馆/invalid-map.md');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe(expectedCode);
+    expect((thrown as AppError).statusCode).toBe(502);
+    expect((thrown as AppError & { operationId?: string }).operationId).toBe('document-map-shape-13');
+    expect((thrown as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(String(thrown)).not.toContain(bodyMarker);
+    expect((thrown as Error).stack).not.toContain(bodyMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(bodyMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain('test-api-key');
+    expectGetRequests(fakeFetch.calls, 2);
   });
 
   it('preserves the document-map size error when best-effort body cancellation rejects', async () => {
