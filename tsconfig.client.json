@@ -11,5 +11,5 @@
     "noEmit": true,
     "types": ["vitest/globals"]
   },
-  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "tests/component/**/*.ts", "tests/component/**/*.tsx", "tests/helpers/**/*.ts"]
+  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "tests/component/**/*.ts", "tests/component/**/*.tsx", "tests/helpers/setup-dom.ts"]
 }
