@@ -95,6 +95,57 @@ function trackedStreamResponse(
   };
 }
 
+function pendingCancelResponse(
+  bytes: Uint8Array,
+  headers: HeadersInit = {},
+  status = 200
+) {
+  let sent = false;
+  let pullCount = 0;
+  let cancelCount = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull: (controller) => {
+      pullCount += 1;
+      if (sent) {
+        controller.close();
+        return;
+      }
+      sent = true;
+      controller.enqueue(bytes);
+    },
+    cancel: () => {
+      cancelCount += 1;
+      return new Promise<void>(() => {});
+    }
+  }, { highWaterMark: 0 });
+  return {
+    response: new Response(body, { headers, status }),
+    pullCount: () => pullCount,
+    cancelCount: () => cancelCount
+  };
+}
+
+type TimedSettlement<T> =
+  | { kind: 'fulfilled'; value: T }
+  | { kind: 'rejected'; error: unknown }
+  | { kind: 'timeout' };
+
+function settleWithin<T>(promise: Promise<T>, timeoutMs = 150): Promise<TimedSettlement<T>> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve({ kind: 'fulfilled', value });
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        resolve({ kind: 'rejected', error });
+      }
+    );
+  });
+}
+
 function paddedAsciiBody(prefix: string, byteLength: number): Uint8Array {
   const prefixBytes = new TextEncoder().encode(prefix);
   const bytes = new Uint8Array(byteLength);
@@ -651,6 +702,49 @@ describe('LocalRest51Gateway', () => {
     expectGetRequests(fakeFetch.calls, 1);
   });
 
+  it('does not wait for a permanently pending reader cancellation after the stream cap is crossed', async () => {
+    const chunks = [
+      new Uint8Array(6 * 1024 * 1024),
+      new Uint8Array(4 * 1024 * 1024 + 1),
+      new TextEncoder().encode('unique-never-read-after-pending-cancel')
+    ];
+    let pullCount = 0;
+    let cancelCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        const chunk = chunks[pullCount];
+        pullCount += 1;
+        if (chunk === undefined) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+      cancel: () => {
+        cancelCount += 1;
+        return new Promise<void>(() => {});
+      }
+    }, { highWaterMark: 0 });
+    const fakeFetch = createFakeFetch([() => new Response(body)]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    const settlement = await settleWithin(gateway.readOpenApi());
+
+    if (settlement.kind !== 'rejected') {
+      expect(settlement.kind).toBe('rejected');
+      throw new Error('expected a prompt cap rejection');
+    }
+    expect(settlement.error).toBeInstanceOf(AppError);
+    expect((settlement.error as AppError).code).toBe('VAULT_RESPONSE_TOO_LARGE');
+    expect(pullCount).toBe(2);
+    expect(cancelCount).toBe(1);
+    expectGetRequests(fakeFetch.calls, 1);
+  });
+
   it('maps stream reader failures to a body-redacted safe 502 error without retaining the cause', async () => {
     const failureMarker = 'unique-stream-reader-failure-marker:test-api-key';
     const body = new ReadableStream<Uint8Array>({
@@ -781,6 +875,36 @@ describe('LocalRest51Gateway', () => {
     expectGetRequests(fakeFetch.calls, 2);
   });
 
+  it('continues to raw B without waiting for permanently pending document-map cancellation', async () => {
+    const note = new TextEncoder().encode('stable note');
+    const documentMap = pendingCancelResponse(
+      new TextEncoder().encode('unused document map'),
+      { etag: '"version-pending-cancel"' }
+    );
+    const fakeFetch = createFakeFetch([
+      () => rawResponse(note),
+      () => documentMap.response,
+      () => rawResponse(note)
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    const settlement = await settleWithin(gateway.readRaw('01图书馆/pending-map.md'));
+
+    if (settlement.kind !== 'fulfilled') {
+      expect(settlement.kind).toBe('fulfilled');
+      throw new Error('expected a prompt coherent raw result');
+    }
+    expect(settlement.value.bytes).toEqual(note);
+    expect(settlement.value.upstreamVersion).toBe('"version-pending-cancel"');
+    expect(documentMap.pullCount()).toBe(0);
+    expect(documentMap.cancelCount()).toBe(1);
+    expectGetRequests(fakeFetch.calls, 3);
+  });
+
   it('preserves the document-map size error when best-effort body cancellation rejects', async () => {
     const note = new TextEncoder().encode('note');
     let cancellationAttempted = false;
@@ -897,6 +1021,233 @@ describe('LocalRest51Gateway', () => {
     expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(secretMarker);
     expect(JSON.stringify(fakeFetch.calls)).not.toContain(secretMarker);
     expect(fakeFetch.lastAuthorization()).toBe('[redacted]');
+  });
+
+  it('returns a non-2xx error promptly when response cancellation never settles', async () => {
+    const tracked = pendingCancelResponse(
+      new TextEncoder().encode('unique-unread-non-2xx-body-marker'),
+      { 'x-operation-id': 'pending-non-2xx-10' },
+      503
+    );
+    const fakeFetch = createFakeFetch([() => tracked.response]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    const settlement = await settleWithin(gateway.readOpenApi());
+
+    if (settlement.kind !== 'rejected') {
+      expect(settlement.kind).toBe('rejected');
+      throw new Error('expected a prompt non-2xx rejection');
+    }
+    expect(settlement.error).toBeInstanceOf(AppError);
+    expect((settlement.error as AppError).code).toBe('VAULT_UPSTREAM_ERROR');
+    expect((settlement.error as AppError).statusCode).toBe(503);
+    expect(tracked.pullCount()).toBe(0);
+    expect(tracked.cancelCount()).toBe(1);
+    expectGetRequests(fakeFetch.calls, 1);
+  });
+
+  it('returns a declared-size error promptly when response cancellation never settles', async () => {
+    const tracked = pendingCancelResponse(
+      new Uint8Array([1]),
+      { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
+    );
+    const fakeFetch = createFakeFetch([() => tracked.response]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    const settlement = await settleWithin(gateway.readOpenApi());
+
+    if (settlement.kind !== 'rejected') {
+      expect(settlement.kind).toBe('rejected');
+      throw new Error('expected a prompt declared-size rejection');
+    }
+    expect(settlement.error).toBeInstanceOf(AppError);
+    expect((settlement.error as AppError).code).toBe('VAULT_RESPONSE_TOO_LARGE');
+    expect(tracked.pullCount()).toBe(0);
+    expect(tracked.cancelCount()).toBe(1);
+    expectGetRequests(fakeFetch.calls, 1);
+  });
+
+  it('maps rejected fetch transport failures to a redacted safe 502 error', async () => {
+    const failureMarker = 'unique-fetch-rejection-marker:test-api-key';
+    let requestCount = 0;
+    const fetchImplementation: FetchImplementation = async () => {
+      requestCount += 1;
+      throw new Error(failureMarker);
+    };
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fetchImplementation,
+      () => 'transport-operation-11'
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readOpenApi();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(requestCount).toBe(1);
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_TRANSPORT_ERROR');
+    expect((thrown as AppError).statusCode).toBe(502);
+    expect((thrown as AppError & { operationId?: string }).operationId).toBe('transport-operation-11');
+    expect((thrown as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(String(thrown)).not.toContain(failureMarker);
+    expect((thrown as Error).stack).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain('test-api-key');
+  });
+
+  it('maps synchronous fetch transport throws to a redacted safe 502 error', async () => {
+    const failureMarker = 'unique-synchronous-fetch-marker:test-api-key';
+    let requestCount = 0;
+    const fetchImplementation: FetchImplementation = () => {
+      requestCount += 1;
+      throw new Error(failureMarker);
+    };
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fetchImplementation,
+      () => 'synchronous-transport-12'
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readOpenApi();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(requestCount).toBe(1);
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_TRANSPORT_ERROR');
+    expect((thrown as AppError).statusCode).toBe(502);
+    expect((thrown as AppError & { operationId?: string }).operationId).toBe('synchronous-transport-12');
+    expect((thrown as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(String(thrown)).not.toContain(failureMarker);
+    expect((thrown as Error).stack).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain('test-api-key');
+  });
+
+  it.each([
+    {
+      name: 'a malformed base URL',
+      baseUrl: 'not a URL unique-malformed-base-marker',
+      apiKey: 'test-api-key',
+      marker: 'unique-malformed-base-marker'
+    },
+    {
+      name: 'an insecure HTTP base URL',
+      baseUrl: 'http://unique-insecure-base-marker.example:27124',
+      apiKey: 'test-api-key',
+      marker: 'unique-insecure-base-marker'
+    },
+    {
+      name: 'a credential-bearing base URL',
+      baseUrl: 'https://unique-credential-marker:secret@127.0.0.1:27124',
+      apiKey: 'test-api-key',
+      marker: 'unique-credential-marker'
+    },
+    {
+      name: 'control characters in the API key',
+      baseUrl: 'https://127.0.0.1:27124',
+      apiKey: 'test-api-key\nunique-key-control-marker\0',
+      marker: 'unique-key-control-marker'
+    },
+    {
+      name: 'an empty API key',
+      baseUrl: 'https://127.0.0.1:27124',
+      apiKey: '',
+      marker: undefined
+    },
+    {
+      name: 'a whitespace-only API key',
+      baseUrl: 'https://127.0.0.1:27124',
+      apiKey: '   ',
+      marker: undefined
+    },
+    {
+      name: 'a non-ByteString API key',
+      baseUrl: 'https://127.0.0.1:27124',
+      apiKey: '密钥-unique-unicode-key-marker',
+      marker: 'unique-unicode-key-marker'
+    }
+  ])('rejects $name with a fixed redacted configuration error before fetch', ({ baseUrl, apiKey, marker }) => {
+    let requestCount = 0;
+    const fetchImplementation: FetchImplementation = async () => {
+      requestCount += 1;
+      return new Response('must not be requested');
+    };
+
+    let thrown: unknown;
+    try {
+      new LocalRest51Gateway(baseUrl, apiKey, fetchImplementation);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(requestCount).toBe(0);
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_GATEWAY_CONFIG_INVALID');
+    expect((thrown as AppError).statusCode).toBe(500);
+    const operationId = (thrown as AppError & { operationId?: string }).operationId;
+    expect(operationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect((thrown as Error & { cause?: unknown }).cause).toBeUndefined();
+    if (marker !== undefined) {
+      expect(String(thrown)).not.toContain(marker);
+      expect((thrown as Error).stack).not.toContain(marker);
+      expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(marker);
+    }
+    if (apiKey.trim().length > 0) {
+      expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(apiKey);
+    }
+  });
+
+  it('falls back to an internal operation id when the injected factory throws and still releases a non-2xx body', async () => {
+    const failureMarker = 'unique-operation-id-factory-marker:test-api-key';
+    const tracked = trackedStreamResponse(new Uint8Array([1]), {}, undefined, 500);
+    const fakeFetch = createFakeFetch([() => tracked.response]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation,
+      () => {
+        throw new Error(failureMarker);
+      }
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readOpenApi();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_UPSTREAM_ERROR');
+    expect((thrown as AppError).statusCode).toBe(500);
+    const operationId = (thrown as AppError & { operationId?: string }).operationId;
+    expect(operationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(tracked.pullCount()).toBe(0);
+    expect(tracked.cancelCount()).toBe(1);
+    expect((thrown as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(String(thrown)).not.toContain(failureMarker);
+    expect((thrown as Error).stack).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain('test-api-key');
+    expectGetRequests(fakeFetch.calls, 1);
   });
 
   it('generates an operation id for a non-2xx response that does not provide one', async () => {

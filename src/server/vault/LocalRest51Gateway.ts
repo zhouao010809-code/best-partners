@@ -80,13 +80,54 @@ export class VaultResponseReadError extends AppError {
   }
 }
 
+export class VaultGatewayTransportError extends AppError {
+  constructor(public readonly operationId: string) {
+    super(
+      'VAULT_TRANSPORT_ERROR',
+      `Vault transport failed (operationId ${operationId})`,
+      502
+    );
+  }
+}
+
+export class VaultGatewayConfigError extends AppError {
+  constructor(public readonly operationId: string) {
+    super(
+      'VAULT_GATEWAY_CONFIG_INVALID',
+      `Vault gateway configuration invalid (operationId ${operationId})`,
+      500
+    );
+  }
+}
+
 export class LocalRest51Gateway implements VaultGateway {
+  private readonly baseUrl: string;
+  private readonly apiKey: string;
+
   constructor(
-    private readonly baseUrl: string,
-    private readonly apiKey: string,
+    baseUrl: string,
+    apiKey: string,
     private readonly fetchImplementation: FetchImplementation,
     private readonly operationIdFactory: () => string = randomUUID
-  ) {}
+  ) {
+    let parsedBaseUrl: URL;
+    try {
+      parsedBaseUrl = new URL(baseUrl);
+    } catch {
+      throw new VaultGatewayConfigError(randomUUID());
+    }
+    if (
+      parsedBaseUrl.protocol !== 'https:'
+      || parsedBaseUrl.username.length > 0
+      || parsedBaseUrl.password.length > 0
+      || typeof apiKey !== 'string'
+      || !/^[\u0021-\u007e]+$/.test(apiKey)
+    ) {
+      throw new VaultGatewayConfigError(randomUUID());
+    }
+    this.baseUrl = parsedBaseUrl.origin;
+    this.apiKey = apiKey;
+  }
 
   async fingerprint(): Promise<Pick<VaultCapabilityProfile, 'pluginId' | 'pluginVersion' | 'obsidianVersion'>> {
     const response = await this.request(new URL('/', this.baseUrl), 'application/json');
@@ -122,7 +163,7 @@ export class LocalRest51Gateway implements VaultGateway {
         this.assertDeclaredBodyWithinLimit(documentMap);
         upstreamVersion = documentMap.headers.get('etag') ?? undefined;
       } finally {
-        await this.cancelBody(documentMap);
+        this.cancelBody(documentMap);
       }
       const second = await this.request(endpoint, 'text/markdown');
       const secondBytes = await this.readBoundedBytes(second);
@@ -147,18 +188,22 @@ export class LocalRest51Gateway implements VaultGateway {
   }
 
   private async request(endpoint: URL, accept: string): Promise<Response> {
-    const response = await this.fetchImplementation(endpoint, {
-      method: 'GET',
-      headers: {
-        Accept: accept,
-        Authorization: `Bearer ${this.apiKey}`
-      }
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImplementation(endpoint, {
+        method: 'GET',
+        headers: {
+          Accept: accept,
+          Authorization: `Bearer ${this.apiKey}`
+        }
+      });
+    } catch {
+      throw new VaultGatewayTransportError(this.generatedOperationId());
+    }
     if (!response.ok) {
-      const operationId = this.publicOperationId(response);
-      const error = new VaultGatewayError(response.status, operationId);
-      await this.cancelBody(response);
-      throw error;
+      const upstreamStatus = response.status;
+      this.cancelBody(response);
+      throw new VaultGatewayError(upstreamStatus, this.publicOperationId(response));
     }
     return response;
   }
@@ -168,12 +213,23 @@ export class LocalRest51Gateway implements VaultGateway {
     if (this.isSafeOperationId(received)) {
       return received;
     }
-    const generated = this.operationIdFactory();
-    return this.isSafeOperationId(generated) ? generated : randomUUID();
+    return this.generatedOperationId();
   }
 
-  private isSafeOperationId(value: string | null): value is string {
-    return value !== null
+  private generatedOperationId(): string {
+    try {
+      const generated = this.operationIdFactory();
+      if (this.isSafeOperationId(generated)) {
+        return generated;
+      }
+    } catch {
+      // Fall through to an internal identifier without retaining the factory error.
+    }
+    return randomUUID();
+  }
+
+  private isSafeOperationId(value: unknown): value is string {
+    return typeof value === 'string'
       && value.length <= 128
       && /^[a-z0-9._:-]+$/i.test(value)
       && !value.includes(this.apiKey);
@@ -193,7 +249,7 @@ export class LocalRest51Gateway implements VaultGateway {
     try {
       this.assertDeclaredBodyWithinLimit(response);
     } catch (error) {
-      await this.cancelBody(response);
+      this.cancelBody(response);
       throw error;
     }
 
@@ -205,7 +261,7 @@ export class LocalRest51Gateway implements VaultGateway {
     try {
       reader = response.body.getReader();
     } catch {
-      await this.cancelBody(response);
+      this.cancelBody(response);
       throw new VaultResponseReadError(this.publicOperationId(response));
     }
 
@@ -232,7 +288,7 @@ export class LocalRest51Gateway implements VaultGateway {
       }
       return bytes;
     } catch (error) {
-      await this.cancelReader(reader);
+      this.cancelReader(reader);
       if (error instanceof ResponseBodyTooLargeError) {
         throw new AppError('VAULT_RESPONSE_TOO_LARGE', 'VAULT_RESPONSE_TOO_LARGE', 413);
       }
@@ -259,17 +315,18 @@ export class LocalRest51Gateway implements VaultGateway {
     }
   }
 
-  private async cancelBody(response: Response): Promise<void> {
+  private cancelBody(response: Response): void {
     try {
-      await response.body?.cancel();
+      const cancellation = response.body?.cancel();
+      cancellation?.catch(() => {});
     } catch {
       // Body release is best-effort and must not replace the primary gateway result or error.
     }
   }
 
-  private async cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  private cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
     try {
-      await reader.cancel();
+      reader.cancel().catch(() => {});
     } catch {
       // Reader release is best-effort and must not replace the primary result or error.
     }
