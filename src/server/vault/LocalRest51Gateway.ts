@@ -7,6 +7,36 @@ export type FetchImplementation = typeof fetch;
 
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
+class ResponseBodyTooLargeError extends Error {}
+
+type FingerprintPayload = {
+  manifest: { id: string; version: string };
+  versions: { obsidian: string };
+};
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isFingerprintPayload(value: unknown): value is FingerprintPayload {
+  const payload = asObject(value);
+  const manifest = asObject(payload?.manifest);
+  const versions = asObject(payload?.versions);
+  return isNonEmptyString(manifest?.id)
+    && isNonEmptyString(manifest?.version)
+    && isNonEmptyString(versions?.obsidian);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
 export class VaultGatewayError extends AppError {
   constructor(
     public readonly upstreamStatus: number,
@@ -30,6 +60,26 @@ export class VaultResponseJsonError extends AppError {
   }
 }
 
+export class VaultResponseShapeError extends AppError {
+  constructor(public readonly operationId: string) {
+    super(
+      'VAULT_RESPONSE_INVALID_SHAPE',
+      `Vault response shape invalid (operationId ${operationId})`,
+      502
+    );
+  }
+}
+
+export class VaultResponseReadError extends AppError {
+  constructor(public readonly operationId: string) {
+    super(
+      'VAULT_RESPONSE_READ_FAILED',
+      `Vault response read failed (operationId ${operationId})`,
+      502
+    );
+  }
+}
+
 export class LocalRest51Gateway implements VaultGateway {
   constructor(
     private readonly baseUrl: string,
@@ -40,10 +90,10 @@ export class LocalRest51Gateway implements VaultGateway {
 
   async fingerprint(): Promise<Pick<VaultCapabilityProfile, 'pluginId' | 'pluginVersion' | 'obsidianVersion'>> {
     const response = await this.request(new URL('/', this.baseUrl), 'application/json');
-    const payload = await this.readBoundedJson<{
-      manifest: { id: string; version: string };
-      versions: { obsidian: string };
-    }>(response);
+    const payload = await this.readBoundedJson(response);
+    if (!isFingerprintPayload(payload)) {
+      throw new VaultResponseShapeError(this.publicOperationId(response));
+    }
     return {
       pluginId: payload.manifest.id,
       pluginVersion: payload.manifest.version,
@@ -53,7 +103,10 @@ export class LocalRest51Gateway implements VaultGateway {
 
   async listDirectory(path: string): Promise<ReadonlyArray<string>> {
     const response = await this.request(this.vaultEndpoint(path, true), 'application/json');
-    const entries = await this.readBoundedJson<string[]>(response);
+    const entries = await this.readBoundedJson(response);
+    if (!isStringArray(entries)) {
+      throw new VaultResponseShapeError(this.publicOperationId(response));
+    }
     return Object.freeze([...entries]);
   }
 
@@ -103,22 +156,27 @@ export class LocalRest51Gateway implements VaultGateway {
     });
     if (!response.ok) {
       const operationId = this.publicOperationId(response);
-      throw new VaultGatewayError(response.status, operationId);
+      const error = new VaultGatewayError(response.status, operationId);
+      await this.cancelBody(response);
+      throw error;
     }
     return response;
   }
 
   private publicOperationId(response: Response): string {
     const received = response.headers.get('x-operation-id') ?? response.headers.get('x-request-id');
-    if (
-      received !== null
-      && received.length <= 128
-      && /^[a-z0-9._:-]+$/i.test(received)
-      && !received.includes(this.apiKey)
-    ) {
+    if (this.isSafeOperationId(received)) {
       return received;
     }
-    return this.operationIdFactory();
+    const generated = this.operationIdFactory();
+    return this.isSafeOperationId(generated) ? generated : randomUUID();
+  }
+
+  private isSafeOperationId(value: string | null): value is string {
+    return value !== null
+      && value.length <= 128
+      && /^[a-z0-9._:-]+$/i.test(value)
+      && !value.includes(this.apiKey);
   }
 
   private assertDeclaredBodyWithinLimit(response: Response): void {
@@ -132,22 +190,70 @@ export class LocalRest51Gateway implements VaultGateway {
   }
 
   private async readBoundedBytes(response: Response): Promise<Uint8Array> {
-    this.assertDeclaredBodyWithinLimit(response);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_RESPONSE_BYTES) {
-      throw new AppError('VAULT_RESPONSE_TOO_LARGE', 'VAULT_RESPONSE_TOO_LARGE', 413);
+    try {
+      this.assertDeclaredBodyWithinLimit(response);
+    } catch (error) {
+      await this.cancelBody(response);
+      throw error;
     }
-    return bytes;
+
+    if (response.body === null) {
+      return new Uint8Array();
+    }
+
+    let reader: ReadableStreamDefaultReader<Uint8Array>;
+    try {
+      reader = response.body.getReader();
+    } catch {
+      await this.cancelBody(response);
+      throw new VaultResponseReadError(this.publicOperationId(response));
+    }
+
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    try {
+      while (true) {
+        const result = await reader.read();
+        if (result.done) {
+          break;
+        }
+        if (result.value.byteLength > MAX_RESPONSE_BYTES - byteLength) {
+          throw new ResponseBodyTooLargeError();
+        }
+        chunks.push(result.value);
+        byteLength += result.value.byteLength;
+      }
+
+      const bytes = new Uint8Array(byteLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return bytes;
+    } catch (error) {
+      await this.cancelReader(reader);
+      if (error instanceof ResponseBodyTooLargeError) {
+        throw new AppError('VAULT_RESPONSE_TOO_LARGE', 'VAULT_RESPONSE_TOO_LARGE', 413);
+      }
+      throw new VaultResponseReadError(this.publicOperationId(response));
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // Reader cleanup is best-effort and must not replace the primary result or error.
+      }
+    }
   }
 
   private async readBoundedText(response: Response): Promise<string> {
     return new TextDecoder().decode(await this.readBoundedBytes(response));
   }
 
-  private async readBoundedJson<T>(response: Response): Promise<T> {
+  private async readBoundedJson(response: Response): Promise<unknown> {
     const text = await this.readBoundedText(response);
     try {
-      return JSON.parse(text) as T;
+      return JSON.parse(text) as unknown;
     } catch {
       throw new VaultResponseJsonError(this.publicOperationId(response));
     }
@@ -161,9 +267,29 @@ export class LocalRest51Gateway implements VaultGateway {
     }
   }
 
+  private async cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+    try {
+      await reader.cancel();
+    } catch {
+      // Reader release is best-effort and must not replace the primary result or error.
+    }
+  }
+
   private vaultEndpoint(path: string, directory = false): URL {
     const normalizedPath = directory ? path.replace(/\/+$/, '') : path;
-    const encodedPath = normalizedPath.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+    const segments = normalizedPath.split('/');
+    if (
+      normalizedPath.length === 0
+      || segments.some((segment) => (
+        segment.length === 0
+        || segment.startsWith('.')
+        || segment.includes('\\')
+        || segment.includes('\0')
+      ))
+    ) {
+      throw new AppError(ErrorCode.PathNotAllowed, 'PATH_NOT_ALLOWED');
+    }
+    const encodedPath = segments.map((segment) => encodeURIComponent(segment)).join('/');
     return new URL(`/vault/${encodedPath}${directory ? '/' : ''}`, this.baseUrl);
   }
 }

@@ -62,20 +62,37 @@ function rawResponse(bytes: Uint8Array): Response {
   });
 }
 
-function declaredLengthResponse(
-  contentLength: number,
+function trackedStreamResponse(
   bytes: Uint8Array,
-  onArrayBuffer: () => void
-): Response {
-  return {
-    ok: true,
-    status: 200,
-    headers: new Headers({ 'content-length': String(contentLength) }),
-    arrayBuffer: async () => {
-      onArrayBuffer();
-      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  headers: HeadersInit = {},
+  cancelFailureMarker?: string,
+  status = 200
+) {
+  let sent = false;
+  let pullCount = 0;
+  let cancelCount = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull: (controller) => {
+      pullCount += 1;
+      if (sent) {
+        controller.close();
+        return;
+      }
+      sent = true;
+      controller.enqueue(bytes);
+    },
+    cancel: () => {
+      cancelCount += 1;
+      if (cancelFailureMarker !== undefined) {
+        throw new Error(cancelFailureMarker);
+      }
     }
-  } as Response;
+  }, { highWaterMark: 0 });
+  return {
+    response: new Response(body, { headers, status }),
+    pullCount: () => pullCount,
+    cancelCount: () => cancelCount
+  };
 }
 
 function paddedAsciiBody(prefix: string, byteLength: number): Uint8Array {
@@ -150,6 +167,39 @@ describe('LocalRest51Gateway', () => {
     expectGetRequests(fakeFetch.calls, 3);
   });
 
+  it.each([
+    '',
+    '../openapi.yaml',
+    './a.md',
+    '01图书馆/./a.md',
+    '01图书馆/../a.md',
+    '/01图书馆/a.md',
+    '01图书馆//a.md',
+    '01图书馆/a.md/',
+    '01图书馆\\a.md',
+    '01图书馆/\0a.md',
+    '01图书馆/.obsidian/a.md',
+    '01图书馆/.hidden.md'
+  ])('rejects unsafe vault path %j before dispatch', async (path) => {
+    const fakeFetch = createFakeFetch([]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readRaw(path);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe(ErrorCode.PathNotAllowed);
+    expect(fakeFetch.calls).toHaveLength(0);
+  });
+
   it('fingerprints the exact plugin identity and Obsidian version from GET /', async () => {
     const fakeFetch = createFakeFetch([
       () => Response.json(fingerprintPayload)
@@ -170,6 +220,60 @@ describe('LocalRest51Gateway', () => {
       method: 'GET',
       accept: 'application/json'
     }]);
+  });
+
+  it.each([
+    ['null payload', () => null],
+    ['numeric payload', () => 42],
+    ['empty plugin id', (marker: string) => ({
+      ...fingerprintPayload,
+      manifest: { ...fingerprintPayload.manifest, id: '' },
+      diagnostic: marker
+    })],
+    ['numeric plugin id', (marker: string) => ({
+      ...fingerprintPayload,
+      manifest: { ...fingerprintPayload.manifest, id: 51 },
+      diagnostic: marker
+    })],
+    ['null plugin version', (marker: string) => ({
+      ...fingerprintPayload,
+      manifest: { ...fingerprintPayload.manifest, version: null },
+      diagnostic: marker
+    })],
+    ['empty Obsidian version', (marker: string) => ({
+      ...fingerprintPayload,
+      versions: { ...fingerprintPayload.versions, obsidian: '' },
+      diagnostic: marker
+    })]
+  ])('rejects fingerprint with %s using a body-redacted shape error', async (name, createPayload) => {
+    const bodyMarker = `unique-fingerprint-shape-marker:${name}:test-api-key`;
+    const fakeFetch = createFakeFetch([
+      () => Response.json(createPayload(bodyMarker), {
+        headers: { 'x-operation-id': 'fingerprint-shape-7' }
+      })
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.fingerprint();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_RESPONSE_INVALID_SHAPE');
+    expect((thrown as AppError).statusCode).toBe(502);
+    expect((thrown as AppError & { operationId?: string }).operationId).toBe('fingerprint-shape-7');
+    expect(String(thrown)).not.toContain(bodyMarker);
+    expect(String(thrown)).not.toContain('test-api-key');
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(bodyMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain('test-api-key');
+    expectGetRequests(fakeFetch.calls, 1);
   });
 
   it('lists an encoded directory with a trailing slash and returns an immutable string list', async () => {
@@ -196,6 +300,42 @@ describe('LocalRest51Gateway', () => {
       accept: 'application/json'
     };
     expect(fakeFetch.calls).toEqual([expectedCall, expectedCall]);
+  });
+
+  it.each([
+    ['string payload', (marker: string) => marker],
+    ['object payload', (marker: string) => ({ entry: marker })],
+    ['null payload', () => null],
+    ['array containing a number', (marker: string) => ['a.md', 42, marker]]
+  ])('rejects directory %s instead of returning character or mixed arrays', async (name, createPayload) => {
+    const bodyMarker = `unique-list-shape-marker:${name}:test-api-key`;
+    const fakeFetch = createFakeFetch([
+      () => Response.json(createPayload(bodyMarker), {
+        headers: { 'x-operation-id': 'list-shape-3' }
+      })
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.listDirectory('01图书馆/子目录');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_RESPONSE_INVALID_SHAPE');
+    expect((thrown as AppError).statusCode).toBe(502);
+    expect((thrown as AppError & { operationId?: string }).operationId).toBe('list-shape-3');
+    expect(String(thrown)).not.toContain(bodyMarker);
+    expect(String(thrown)).not.toContain('test-api-key');
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(bodyMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain('test-api-key');
+    expectGetRequests(fakeFetch.calls, 1);
   });
 
   it('reads the OpenAPI YAML document from GET /openapi.yaml', async () => {
@@ -277,12 +417,13 @@ describe('LocalRest51Gateway', () => {
     expectGetRequests(fakeFetch.calls, 6);
   });
 
-  it('rejects a declared raw body over 10 MiB before reading or converting the body', async () => {
-    let arrayBufferCalled = false;
+  it('rejects and releases a declared raw body over 10 MiB before reading it', async () => {
+    const tracked = trackedStreamResponse(
+      new Uint8Array([1]),
+      { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
+    );
     const fakeFetch = createFakeFetch([
-      () => declaredLengthResponse(10 * 1024 * 1024 + 1, new Uint8Array([1]), () => {
-        arrayBufferCalled = true;
-      })
+      () => tracked.response
     ]);
     const gateway = new LocalRest51Gateway(
       'https://127.0.0.1:27124',
@@ -297,7 +438,8 @@ describe('LocalRest51Gateway', () => {
       thrown = error;
     }
 
-    expect(arrayBufferCalled).toBe(false);
+    expect(tracked.pullCount()).toBe(0);
+    expect(tracked.cancelCount()).toBe(1);
     expect(thrown).toBeInstanceOf(AppError);
     expect((thrown as AppError).code).toBe('VAULT_RESPONSE_TOO_LARGE');
     expectGetRequests(fakeFetch.calls, 1);
@@ -350,28 +492,31 @@ describe('LocalRest51Gateway', () => {
   it.each([
     {
       name: 'fingerprint',
-      createResponse: () => Response.json(fingerprintPayload, {
-        headers: { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
-      }),
+      createResponse: () => trackedStreamResponse(
+        new TextEncoder().encode(JSON.stringify(fingerprintPayload)),
+        { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
+      ),
       invoke: (gateway: LocalRest51Gateway) => gateway.fingerprint()
     },
     {
       name: 'directory listing',
-      createResponse: () => Response.json(['a.md'], {
-        headers: { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
-      }),
+      createResponse: () => trackedStreamResponse(
+        new TextEncoder().encode(JSON.stringify(['a.md'])),
+        { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
+      ),
       invoke: (gateway: LocalRest51Gateway) => gateway.listDirectory('01图书馆/子目录')
     },
     {
       name: 'OpenAPI document',
-      createResponse: () => new Response('openapi: 3.0.3\n', {
-        headers: { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
-      }),
+      createResponse: () => trackedStreamResponse(
+        new TextEncoder().encode('openapi: 3.0.3\n'),
+        { 'content-length': String(MAX_RESPONSE_BYTES + 1) }
+      ),
       invoke: (gateway: LocalRest51Gateway) => gateway.readOpenApi()
     }
   ])('rejects a declared oversized $name response before buffering', async ({ createResponse, invoke }) => {
-    const response = createResponse();
-    const fakeFetch = createFakeFetch([() => response]);
+    const tracked = createResponse();
+    const fakeFetch = createFakeFetch([() => tracked.response]);
     const gateway = new LocalRest51Gateway(
       'https://127.0.0.1:27124',
       'test-api-key',
@@ -385,7 +530,8 @@ describe('LocalRest51Gateway', () => {
       thrown = error;
     }
 
-    expect(response.bodyUsed).toBe(false);
+    expect(tracked.pullCount()).toBe(0);
+    expect(tracked.cancelCount()).toBe(1);
     expect(thrown).toBeInstanceOf(AppError);
     expect((thrown as AppError).code).toBe('VAULT_RESPONSE_TOO_LARGE');
     expectGetRequests(fakeFetch.calls, 1);
@@ -435,13 +581,154 @@ describe('LocalRest51Gateway', () => {
     expectGetRequests(fakeFetch.calls, 1);
   });
 
+  it.each(['not-a-number', '-1', '10, 11'])('falls back to capped streaming for malformed Content-Length %j', async (contentLength) => {
+    const tracked = trackedStreamResponse(
+      paddedAsciiBody('openapi: 3.0.3\n', MAX_RESPONSE_BYTES + 1),
+      { 'content-length': contentLength }
+    );
+    const fakeFetch = createFakeFetch([() => tracked.response]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readOpenApi();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_RESPONSE_TOO_LARGE');
+    expect(tracked.pullCount()).toBe(1);
+    expect(tracked.cancelCount()).toBe(1);
+    expectGetRequests(fakeFetch.calls, 1);
+  });
+
+  it('stops and cancels a chunked response immediately when the 10 MiB cap is crossed', async () => {
+    const chunks = [
+      new Uint8Array(6 * 1024 * 1024),
+      new Uint8Array(4 * 1024 * 1024 + 1),
+      new TextEncoder().encode('unique-never-read-chunk-marker')
+    ];
+    let pullCount = 0;
+    let cancelCount = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => {
+        const chunk = chunks[pullCount];
+        pullCount += 1;
+        if (chunk === undefined) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+      cancel: () => {
+        cancelCount += 1;
+      }
+    }, { highWaterMark: 0 });
+    const fakeFetch = createFakeFetch([() => new Response(body)]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readOpenApi();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_RESPONSE_TOO_LARGE');
+    expect(String(thrown)).not.toContain('unique-never-read-chunk-marker');
+    expect(pullCount).toBe(2);
+    expect(cancelCount).toBe(1);
+    expectGetRequests(fakeFetch.calls, 1);
+  });
+
+  it('maps stream reader failures to a body-redacted safe 502 error without retaining the cause', async () => {
+    const failureMarker = 'unique-stream-reader-failure-marker:test-api-key';
+    const body = new ReadableStream<Uint8Array>({
+      pull: () => {
+        throw new Error(failureMarker);
+      }
+    }, { highWaterMark: 0 });
+    const fakeFetch = createFakeFetch([
+      () => new Response(body, { headers: { 'x-operation-id': 'stream-read-5' } })
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readOpenApi();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_RESPONSE_READ_FAILED');
+    expect((thrown as AppError).statusCode).toBe(502);
+    expect((thrown as AppError & { operationId?: string }).operationId).toBe('stream-read-5');
+    expect((thrown as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(String(thrown)).not.toContain(failureMarker);
+    expect((thrown as Error).stack).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain('test-api-key');
+    expectGetRequests(fakeFetch.calls, 1);
+  });
+
+  it('redacts an externally sourced AppError thrown by the response reader', async () => {
+    const failureMarker = 'unique-app-error-reader-marker:test-api-key';
+    const body = new ReadableStream<Uint8Array>({
+      pull: () => {
+        throw new AppError('UPSTREAM_STREAM_ERROR', failureMarker, 500);
+      }
+    }, { highWaterMark: 0 });
+    const fakeFetch = createFakeFetch([
+      () => new Response(body, { headers: { 'x-operation-id': 'stream-app-error-6' } })
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readOpenApi();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('VAULT_RESPONSE_READ_FAILED');
+    expect((thrown as AppError).statusCode).toBe(502);
+    expect((thrown as AppError & { operationId?: string }).operationId).toBe('stream-app-error-6');
+    expect((thrown as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(String(thrown)).not.toContain(failureMarker);
+    expect((thrown as Error).stack).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(failureMarker);
+    expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain('test-api-key');
+    expectGetRequests(fakeFetch.calls, 1);
+  });
+
   it('accepts OpenAPI text at exactly the 10 MiB bounded-reader limit', async () => {
     const maximumBody = paddedAsciiBody('openapi: 3.0.3\n', MAX_RESPONSE_BYTES);
-    let arrayBufferCalls = 0;
+    const tracked = trackedStreamResponse(
+      maximumBody,
+      { 'content-length': String(MAX_RESPONSE_BYTES) }
+    );
     const fakeFetch = createFakeFetch([
-      () => declaredLengthResponse(MAX_RESPONSE_BYTES, maximumBody, () => {
-        arrayBufferCalls += 1;
-      })
+      () => tracked.response
     ]);
     const gateway = new LocalRest51Gateway(
       'https://127.0.0.1:27124',
@@ -453,7 +740,8 @@ describe('LocalRest51Gateway', () => {
 
     expect(result).toHaveLength(MAX_RESPONSE_BYTES);
     expect(result.startsWith('openapi: 3.0.3\n')).toBe(true);
-    expect(arrayBufferCalls).toBe(1);
+    expect(tracked.pullCount()).toBe(2);
+    expect(tracked.cancelCount()).toBe(0);
     expectGetRequests(fakeFetch.calls, 1);
   });
 
@@ -566,11 +854,14 @@ describe('LocalRest51Gateway', () => {
     const responseMarker = 'unique-upstream-response-body-marker';
     const secretMarker = 'test-api-key';
     let operationIdFactoryCalled = false;
+    const tracked = trackedStreamResponse(
+      new TextEncoder().encode(`${responseMarker}:${secretMarker}`),
+      { 'x-operation-id': 'upstream-operation-9' },
+      'unique-non-2xx-cancel-failed-marker',
+      503
+    );
     const fakeFetch = createFakeFetch([
-      () => new Response(`${responseMarker}:${secretMarker}`, {
-        status: 503,
-        headers: { 'x-operation-id': 'upstream-operation-9' }
-      })
+      () => tracked.response
     ]);
     const gateway = new LocalRest51Gateway(
       'https://127.0.0.1:27124',
@@ -597,8 +888,11 @@ describe('LocalRest51Gateway', () => {
     );
     expect((thrown as AppError & { operationId?: string }).operationId).toBe('upstream-operation-9');
     expect(operationIdFactoryCalled).toBe(false);
+    expect(tracked.pullCount()).toBe(0);
+    expect(tracked.cancelCount()).toBe(1);
     expect(String(thrown)).not.toContain(responseMarker);
     expect(String(thrown)).not.toContain(secretMarker);
+    expect(String(thrown)).not.toContain('unique-non-2xx-cancel-failed-marker');
     expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(responseMarker);
     expect(JSON.stringify(thrown, Object.getOwnPropertyNames(thrown as object))).not.toContain(secretMarker);
     expect(JSON.stringify(fakeFetch.calls)).not.toContain(secretMarker);
@@ -628,6 +922,33 @@ describe('LocalRest51Gateway', () => {
       'Vault request failed (status 404, operationId generated-operation-4)'
     );
     expect((thrown as AppError & { operationId?: string }).operationId).toBe('generated-operation-4');
+  });
+
+  it('replaces an unsafe injected operation id with an internally generated safe id', async () => {
+    const unsafeGeneratedId = 'generated-test-api-key with spaces';
+    const fakeFetch = createFakeFetch([
+      () => new Response('not public', { status: 404 })
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation,
+      () => unsafeGeneratedId
+    );
+
+    let thrown: unknown;
+    try {
+      await gateway.readOpenApi();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AppError);
+    const operationId = (thrown as AppError & { operationId?: string }).operationId;
+    expect(operationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(operationId).not.toBe(unsafeGeneratedId);
+    expect(String(thrown)).not.toContain('test-api-key');
+    expect(String(thrown)).not.toContain('with spaces');
   });
 
   it('replaces an unsafe received operation id instead of exposing the API key', async () => {

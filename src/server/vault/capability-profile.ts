@@ -2,12 +2,14 @@ import type { VaultCapabilityProfile } from './VaultGateway.js';
 import { parse } from 'yaml';
 
 export type OpenApiDeclarations = {
-  readonly safeReplace: boolean;
-  readonly safeCreate: boolean;
-  readonly safeDelete: boolean;
+  readonly declaredReplace: boolean;
+  readonly declaredCreate: boolean;
+  readonly declaredDelete: boolean;
   readonly formalWriteGate: 'blocked';
   readonly evidence: ReadonlyArray<string>;
 };
+
+export type ExecutableVaultCapabilityEvidence = Omit<VaultCapabilityProfile, 'formalWriteGate'>;
 
 type JsonObject = Record<string, unknown>;
 
@@ -74,35 +76,33 @@ function operationDeclaresHeader(
 export function classifyOpenApiDeclarations(document: string): OpenApiDeclarations {
   const root = asObject(parse(document));
   const paths = root === undefined ? undefined : asObject(root.paths);
-  const pathItems = paths === undefined
-    ? []
-    : Object.values(paths).flatMap((value) => {
-      const pathItem = asObject(value);
-      return pathItem === undefined ? [] : [pathItem];
-    });
-  const safeReplace = root !== undefined
-    && pathItems.some((pathItem) => operationDeclaresHeader(root, pathItem, 'patch', 'If-Match'));
-  const safeCreate = root !== undefined
-    && pathItems.some((pathItem) => operationDeclaresHeader(root, pathItem, 'put', 'If-Match'));
-  const safeDelete = root !== undefined
-    && pathItems.some((pathItem) => operationDeclaresHeader(root, pathItem, 'delete', 'If-Match'));
+  const vaultFilePath = paths === undefined ? undefined : asObject(paths['/vault/{filename}']);
+  const declaredReplace = root !== undefined
+    && vaultFilePath !== undefined
+    && operationDeclaresHeader(root, vaultFilePath, 'patch', 'If-Match');
+  const declaredCreate = root !== undefined
+    && vaultFilePath !== undefined
+    && operationDeclaresHeader(root, vaultFilePath, 'put', 'If-Match');
+  const declaredDelete = root !== undefined
+    && vaultFilePath !== undefined
+    && operationDeclaresHeader(root, vaultFilePath, 'delete', 'If-Match');
   const evidence = Object.freeze([
-    ...(safeReplace ? ['PATCH declares If-Match'] : []),
-    ...(safeCreate ? ['PUT declares If-Match'] : []),
-    ...(safeDelete ? ['DELETE declares If-Match'] : [])
+    ...(declaredReplace ? ['PATCH declares If-Match'] : []),
+    ...(declaredCreate ? ['PUT declares If-Match'] : []),
+    ...(declaredDelete ? ['DELETE declares If-Match'] : [])
   ]);
 
   return {
-    safeReplace,
-    safeCreate,
-    safeDelete,
+    declaredReplace,
+    declaredCreate,
+    declaredDelete,
     formalWriteGate: 'blocked',
     evidence
   };
 }
 
 export function closeWriteGate(
-  profile: Omit<VaultCapabilityProfile, 'formalWriteGate'>
+  profile: ExecutableVaultCapabilityEvidence
 ): VaultCapabilityProfile {
   const passed = profile.safeRead
     && profile.safeReplace

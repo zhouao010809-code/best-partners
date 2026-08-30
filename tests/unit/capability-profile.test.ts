@@ -52,9 +52,9 @@ describe('classifyOpenApiDeclarations', () => {
   it('classifies actual method header parameters while keeping the formal gate blocked', () => {
     const declarations = classifyOpenApiDeclarations(openApiWithPatchPrecondition);
 
-    expect(declarations.safeReplace).toBe(true);
-    expect(declarations.safeCreate).toBe(false);
-    expect(declarations.safeDelete).toBe(false);
+    expect(declarations.declaredReplace).toBe(true);
+    expect(declarations.declaredCreate).toBe(false);
+    expect(declarations.declaredDelete).toBe(false);
     expect(declarations.formalWriteGate).toBe('blocked');
     expect(declarations.evidence).toContain('PATCH declares If-Match');
   });
@@ -78,9 +78,9 @@ paths:
       description: If-Match would make this safe to delete.
 `);
 
-    expect(declarations.safeReplace).toBe(false);
-    expect(declarations.safeCreate).toBe(false);
-    expect(declarations.safeDelete).toBe(false);
+    expect(declarations.declaredReplace).toBe(false);
+    expect(declarations.declaredCreate).toBe(false);
+    expect(declarations.declaredDelete).toBe(false);
     expect(declarations.formalWriteGate).toBe('blocked');
   });
 
@@ -107,9 +107,9 @@ paths:
           description: replaced
 `);
 
-    expect(declarations.safeReplace).toBe(true);
-    expect(declarations.safeCreate).toBe(false);
-    expect(declarations.safeDelete).toBe(false);
+    expect(declarations.declaredReplace).toBe(true);
+    expect(declarations.declaredCreate).toBe(false);
+    expect(declarations.declaredDelete).toBe(false);
     expect(declarations.formalWriteGate).toBe('blocked');
   });
 
@@ -139,9 +139,81 @@ paths:
           description: replaced
 `);
 
-    expect(declarations.safeReplace).toBe(false);
-    expect(declarations.safeCreate).toBe(false);
-    expect(declarations.safeDelete).toBe(false);
+    expect(declarations.declaredReplace).toBe(false);
+    expect(declarations.declaredCreate).toBe(false);
+    expect(declarations.declaredDelete).toBe(false);
+    expect(declarations.formalWriteGate).toBe('blocked');
+  });
+
+  it('keeps declaration keys structurally separate from executable capability keys', () => {
+    const declarations = classifyOpenApiDeclarations(`
+openapi: 3.0.3
+info:
+  title: All declarations
+  version: 5.1.0
+paths:
+  /vault/{filename}:
+    patch:
+      parameters:
+        - name: If-Match
+          in: header
+    put:
+      parameters:
+        - name: If-Match
+          in: header
+    delete:
+      parameters:
+        - name: If-Match
+          in: header
+`);
+
+    expect(declarations).toMatchObject({
+      declaredReplace: true,
+      declaredCreate: true,
+      declaredDelete: true,
+      formalWriteGate: 'blocked'
+    });
+    const executableKeys = [
+      'safeRead',
+      'safeReplace',
+      'safeCreate',
+      'safeRestore',
+      'safeDelete'
+    ];
+    expect(Object.keys(declarations).filter((key) => executableKeys.includes(key))).toEqual([]);
+
+    const mixed = {
+      ...evidenceProfile({ safeReplace: false, safeCreate: false, safeDelete: false }),
+      ...declarations
+    };
+    expect(closeWriteGate(mixed).formalWriteGate).toBe('blocked');
+  });
+
+  it('ignores matching PATCH headers on unrelated OpenAPI paths', () => {
+    const declarations = classifyOpenApiDeclarations(`
+openapi: 3.0.3
+info:
+  title: Unrelated endpoint
+  version: 5.1.0
+paths:
+  /vault/{filename}:
+    get:
+      responses:
+        '200':
+          description: read
+  /unrelated/{filename}:
+    patch:
+      parameters:
+        - name: If-Match
+          in: header
+      responses:
+        '200':
+          description: unrelated replace
+`);
+
+    expect(declarations.declaredReplace).toBe(false);
+    expect(declarations.declaredCreate).toBe(false);
+    expect(declarations.declaredDelete).toBe(false);
     expect(declarations.formalWriteGate).toBe('blocked');
   });
 });
