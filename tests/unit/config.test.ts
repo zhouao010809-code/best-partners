@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { loadConfig } from '../../src/server/config.js';
 
 const temporaryRoots: string[] = [];
@@ -42,6 +42,22 @@ describe('loadConfig', () => {
     expect(loadConfig(environment).writeEnabled).toBe(false);
   });
 
+  it('parses a valid APP_PORT as a number', () => {
+    expect(loadConfig(validEnvironment({ APP_PORT: '4317' })).appPort).toBe(4317);
+  });
+
+  it.each(['0', '65536', '4317.5', 'not-a-number'])('rejects invalid APP_PORT %s', (port) => {
+    expect(() => loadConfig(validEnvironment({ APP_PORT: port }))).toThrowError('APP_PORT');
+  });
+
+  it('enables writes only for an explicit true value', () => {
+    expect(loadConfig(validEnvironment({ WRITE_ENABLED: 'true' })).writeEnabled).toBe(true);
+  });
+
+  it.each(['TRUE', 'True', 'yes', ''])('rejects invalid WRITE_ENABLED %s', (value) => {
+    expect(() => loadConfig(validEnvironment({ WRITE_ENABLED: value }))).toThrowError('WRITE_ENABLED');
+  });
+
   it('requires the exact loopback host', () => {
     expect(() => loadConfig(validEnvironment({ APP_HOST: 'localhost' })))
       .toThrowError('APP_HOST');
@@ -52,9 +68,22 @@ describe('loadConfig', () => {
       .toThrowError('OBSIDIAN_API_KEY');
   });
 
+  it('requires an HTTPS Obsidian API URL', () => {
+    expect(() => loadConfig(validEnvironment({ OBSIDIAN_API_URL: 'http://127.0.0.1:27124' })))
+      .toThrowError('OBSIDIAN_API_URL');
+  });
+
   it('requires a model key when a model name is configured', () => {
     expect(() => loadConfig(validEnvironment({ MODEL_NAME: 'deepseek-chat', MODEL_API_KEY: '' })))
       .toThrowError('MODEL_API_KEY');
+  });
+
+  it('requires an HTTPS model API URL when model integration is enabled', () => {
+    expect(() => loadConfig(validEnvironment({
+      MODEL_BASE_URL: 'http://api.deepseek.com',
+      MODEL_NAME: 'deepseek-chat',
+      MODEL_API_KEY: 'model-test-secret'
+    }))).toThrowError('MODEL_BASE_URL');
   });
 
   it('allows an omitted model name and key', () => {
@@ -74,6 +103,13 @@ describe('loadConfig', () => {
       .toThrowError('APP_DATA_DIR');
   });
 
+  it('rejects an app data directory equal to the vault root', () => {
+    const environment = validEnvironment();
+
+    expect(() => loadConfig({ ...environment, APP_DATA_DIR: environment.VAULT_REAL_ROOT }))
+      .toThrowError('APP_DATA_DIR');
+  });
+
   it('rejects a vault root inside the app data directory', () => {
     const environment = validEnvironment();
     const vault = join(environment.APP_DATA_DIR, 'vault');
@@ -81,6 +117,35 @@ describe('loadConfig', () => {
 
     expect(() => loadConfig({ ...environment, VAULT_REAL_ROOT: vault }))
       .toThrowError('VAULT_REAL_ROOT');
+  });
+
+  it('rejects a symlinked app data directory resolving inside the vault', () => {
+    const environment = validEnvironment();
+    const actualAppData = join(environment.VAULT_REAL_ROOT, 'actual-app-data');
+    const symlinkedAppData = join(dirname(environment.VAULT_REAL_ROOT), 'symlinked-app-data');
+    mkdirSync(actualAppData);
+    symlinkSync(actualAppData, symlinkedAppData);
+
+    expect(() => loadConfig({ ...environment, APP_DATA_DIR: symlinkedAppData }))
+      .toThrowError('APP_DATA_DIR');
+  });
+
+  it('resolves a nonexistent app data directory lexically without creating it', () => {
+    const environment = validEnvironment();
+    const missingAppData = join(dirname(environment.APP_DATA_DIR), 'not-created-yet');
+
+    expect(existsSync(missingAppData)).toBe(false);
+    expect(loadConfig({ ...environment, APP_DATA_DIR: missingAppData }).appDataDir)
+      .toBe(missingAppData);
+    expect(existsSync(missingAppData)).toBe(false);
+  });
+
+  it('does not treat a sibling vault2 directory as contained in vault', () => {
+    const environment = validEnvironment();
+    const siblingAppData = join(dirname(environment.VAULT_REAL_ROOT), 'vault2');
+    mkdirSync(siblingAppData);
+
+    expect(() => loadConfig({ ...environment, APP_DATA_DIR: siblingAppData })).not.toThrow();
   });
 
   it('does not disclose supplied secret values in validation errors', () => {

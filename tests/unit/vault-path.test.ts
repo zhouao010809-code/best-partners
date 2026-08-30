@@ -13,9 +13,9 @@ describe('normalizeVaultPath', () => {
     expect(() => normalizeVaultPath(value, 'read')).toThrowError('PATH_NOT_ALLOWED');
   });
 
-  it('normalizes Unicode and accepts an allowed markdown path', () => {
-    expect(normalizeVaultPath('01图书馆/来自个人/资料.md', 'read'))
-      .toBe('01图书馆/来自个人/资料.md');
+  it('normalizes decomposed Unicode in an allowed markdown path', () => {
+    expect(normalizeVaultPath('01图书馆/来自个人/Cafe\u0301.md', 'read'))
+      .toBe('01图书馆/来自个人/Café.md');
   });
 
   it('prevents writes to the rules area', () => {
