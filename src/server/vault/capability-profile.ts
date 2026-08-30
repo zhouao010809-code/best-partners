@@ -17,12 +17,20 @@ function asObject(value: unknown): JsonObject | undefined {
     : undefined;
 }
 
-function resolveLocalReference(root: JsonObject, reference: string): unknown {
+function resolveParameterReference(root: JsonObject, reference: string): unknown {
   if (!reference.startsWith('#/')) {
     return undefined;
   }
+  const rawSegments = reference.slice(2).split('/');
+  if (
+    rawSegments.length !== 3
+    || rawSegments[0] !== 'components'
+    || rawSegments[1] !== 'parameters'
+  ) {
+    return undefined;
+  }
   let current: unknown = root;
-  for (const rawSegment of reference.slice(2).split('/')) {
+  for (const rawSegment of rawSegments) {
     const object = asObject(current);
     if (object === undefined) {
       return undefined;
@@ -39,7 +47,7 @@ function isHeaderParameter(value: unknown, root: JsonObject, headerName: string)
     return false;
   }
   if (typeof parameter.$ref === 'string') {
-    parameter = asObject(resolveLocalReference(root, parameter.$ref));
+    parameter = asObject(resolveParameterReference(root, parameter.$ref));
   }
   return parameter?.in === 'header'
     && typeof parameter.name === 'string'

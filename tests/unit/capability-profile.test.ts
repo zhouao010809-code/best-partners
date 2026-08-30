@@ -28,19 +28,6 @@ paths:
       responses:
         '200':
           description: replaced
-    put:
-      parameters:
-        - name: Content-Type
-          in: header
-          schema:
-            type: string
-      responses:
-        '200':
-          description: created
-    delete:
-      responses:
-        '204':
-          description: deleted
 `;
 
 function evidenceProfile(
@@ -121,6 +108,38 @@ paths:
 `);
 
     expect(declarations.safeReplace).toBe(true);
+    expect(declarations.safeCreate).toBe(false);
+    expect(declarations.safeDelete).toBe(false);
+    expect(declarations.formalWriteGate).toBe('blocked');
+  });
+
+  it.each([
+    '#/components/schemas/NotAParameter',
+    '#/components/parameters/MissingParameter',
+    'https://example.invalid/parameters/ConditionalWrite'
+  ])('fails closed for unsupported, missing, or nonlocal parameter ref %s', (reference) => {
+    const declarations = classifyOpenApiDeclarations(`
+openapi: 3.0.3
+info:
+  title: Unsupported parameter reference
+  version: 5.1.0
+components:
+  schemas:
+    NotAParameter:
+      name: If-Match
+      in: header
+      type: string
+paths:
+  /vault/{filename}:
+    patch:
+      parameters:
+        - $ref: '${reference}'
+      responses:
+        '200':
+          description: replaced
+`);
+
+    expect(declarations.safeReplace).toBe(false);
     expect(declarations.safeCreate).toBe(false);
     expect(declarations.safeDelete).toBe(false);
     expect(declarations.formalWriteGate).toBe('blocked');

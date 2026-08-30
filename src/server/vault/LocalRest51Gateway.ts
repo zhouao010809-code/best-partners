@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 
 export type FetchImplementation = typeof fetch;
 
-const MAX_RAW_RESPONSE_BYTES = 10 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
 export class VaultGatewayError extends AppError {
   constructor(
@@ -20,6 +20,16 @@ export class VaultGatewayError extends AppError {
   }
 }
 
+export class VaultResponseJsonError extends AppError {
+  constructor(public readonly operationId: string) {
+    super(
+      'VAULT_RESPONSE_INVALID_JSON',
+      `Vault response JSON invalid (operationId ${operationId})`,
+      502
+    );
+  }
+}
+
 export class LocalRest51Gateway implements VaultGateway {
   constructor(
     private readonly baseUrl: string,
@@ -30,10 +40,10 @@ export class LocalRest51Gateway implements VaultGateway {
 
   async fingerprint(): Promise<Pick<VaultCapabilityProfile, 'pluginId' | 'pluginVersion' | 'obsidianVersion'>> {
     const response = await this.request(new URL('/', this.baseUrl), 'application/json');
-    const payload = await response.json() as {
+    const payload = await this.readBoundedJson<{
       manifest: { id: string; version: string };
       versions: { obsidian: string };
-    };
+    }>(response);
     return {
       pluginId: payload.manifest.id,
       pluginVersion: payload.manifest.version,
@@ -43,7 +53,7 @@ export class LocalRest51Gateway implements VaultGateway {
 
   async listDirectory(path: string): Promise<ReadonlyArray<string>> {
     const response = await this.request(this.vaultEndpoint(path, true), 'application/json');
-    const entries = await response.json() as string[];
+    const entries = await this.readBoundedJson<string[]>(response);
     return Object.freeze([...entries]);
   }
 
@@ -51,13 +61,18 @@ export class LocalRest51Gateway implements VaultGateway {
     const endpoint = this.vaultEndpoint(path);
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const first = await this.request(endpoint, 'text/markdown');
-      const firstBytes = await this.readRawBytes(first);
+      const firstBytes = await this.readBoundedBytes(first);
       const firstSha256 = sha256Bytes(firstBytes);
       const documentMap = await this.request(endpoint, 'application/vnd.olrapi.document-map+json');
-      const upstreamVersion = documentMap.headers.get('etag') ?? undefined;
-      await documentMap.body?.cancel();
+      let upstreamVersion: string | undefined;
+      try {
+        this.assertDeclaredBodyWithinLimit(documentMap);
+        upstreamVersion = documentMap.headers.get('etag') ?? undefined;
+      } finally {
+        await this.cancelBody(documentMap);
+      }
       const second = await this.request(endpoint, 'text/markdown');
-      const secondBytes = await this.readRawBytes(second);
+      const secondBytes = await this.readBoundedBytes(second);
       const secondSha256 = sha256Bytes(secondBytes);
 
       if (firstSha256 === secondSha256) {
@@ -75,7 +90,7 @@ export class LocalRest51Gateway implements VaultGateway {
 
   async readOpenApi(): Promise<string> {
     const response = await this.request(new URL('/openapi.yaml', this.baseUrl), 'application/yaml');
-    return response.text();
+    return this.readBoundedText(response);
   }
 
   private async request(endpoint: URL, accept: string): Promise<Response> {
@@ -106,16 +121,44 @@ export class LocalRest51Gateway implements VaultGateway {
     return this.operationIdFactory();
   }
 
-  private async readRawBytes(response: Response): Promise<Uint8Array> {
-    const declaredLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_RAW_RESPONSE_BYTES) {
+  private assertDeclaredBodyWithinLimit(response: Response): void {
+    const contentLength = response.headers.get('content-length');
+    if (contentLength === null || !/^\d+$/.test(contentLength)) {
+      return;
+    }
+    if (Number(contentLength) > MAX_RESPONSE_BYTES) {
       throw new AppError('VAULT_RESPONSE_TOO_LARGE', 'VAULT_RESPONSE_TOO_LARGE', 413);
     }
+  }
+
+  private async readBoundedBytes(response: Response): Promise<Uint8Array> {
+    this.assertDeclaredBodyWithinLimit(response);
     const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_RAW_RESPONSE_BYTES) {
+    if (bytes.byteLength > MAX_RESPONSE_BYTES) {
       throw new AppError('VAULT_RESPONSE_TOO_LARGE', 'VAULT_RESPONSE_TOO_LARGE', 413);
     }
     return bytes;
+  }
+
+  private async readBoundedText(response: Response): Promise<string> {
+    return new TextDecoder().decode(await this.readBoundedBytes(response));
+  }
+
+  private async readBoundedJson<T>(response: Response): Promise<T> {
+    const text = await this.readBoundedText(response);
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new VaultResponseJsonError(this.publicOperationId(response));
+    }
+  }
+
+  private async cancelBody(response: Response): Promise<void> {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Body release is best-effort and must not replace the primary gateway result or error.
+    }
   }
 
   private vaultEndpoint(path: string, directory = false): URL {
