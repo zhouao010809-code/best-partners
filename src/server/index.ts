@@ -4,11 +4,11 @@ import { loadConfig } from './config.js';
 import { openStateKernel } from './db/database.js';
 import { SearchIndexer } from './index/SearchIndexer.js';
 import { createIndexRepository } from './index/index-repository.js';
+import { loadIndexMetadata } from './index/index-metadata.js';
 import { IndexScheduler, type IndexScheduler as IndexSchedulerInstance } from './index/index-scheduler.js';
 import { IndexStateController } from './index/index-state.js';
 import { resolveLoopbackListenOptions } from './security/origin-host.js';
 import { createHealthService } from './services/health-service.js';
-import { loadPersistedIndexVersion } from './services/index-job-service.js';
 import { LocalRest51Gateway } from './vault/LocalRest51Gateway.js';
 
 const listenOptions = resolveLoopbackListenOptions(process.env);
@@ -44,24 +44,17 @@ try {
   const app = stateKernel.mode === 'normal'
     ? (() => {
       const repository = createIndexRepository(stateKernel.db);
+      const metadata = loadIndexMetadata(stateKernel.db);
       const indexer = new SearchIndexer({
         gateway,
         repository,
         maxRawReadsPerPoll: 50
       });
-      indexer.version = loadPersistedIndexVersion(stateKernel.db, 0);
+      indexer.version = metadata?.version ?? 0;
       const now = () => new Date();
       const scheduler = new IndexScheduler({
-        refresh: async (signal) => {
-          const result = await indexer.refresh(signal);
-          if (result.status === 'ready') {
-            stateKernel.db.prepare(`
-              UPDATE index_metadata SET version = ?, updated_at = ? WHERE singleton = 1
-            `).run(result.version, now().toISOString());
-          }
-          return result;
-        },
-        state: new IndexStateController(now),
+        refresh: (signal) => indexer.refresh(signal),
+        state: new IndexStateController(now, metadata),
         intervals: {
           every: (milliseconds, task) => {
             const timer = setInterval(task, milliseconds);
@@ -84,7 +77,14 @@ try {
         gateway,
         profileDirectory: join(config.appDataDir, 'contract-profiles'),
         stateKernel,
-        indexState: { snapshot: () => scheduler.snapshot().state }
+        indexState: { snapshot: () => scheduler.snapshot().state },
+        model: {
+          baseUrl: config.modelBaseUrl,
+          ...(config.modelName === undefined || config.modelApiKey === undefined
+            ? {}
+            : { name: config.modelName })
+        },
+        schemaIssues: { count: () => repository.listIssues().length }
       });
       const server = buildServer({
         healthService,
@@ -109,6 +109,12 @@ try {
         stateKernel,
         indexState: {
           snapshot: () => ({ status: 'unavailable', reason: 'RECOVERY_ONLY' })
+        },
+        model: {
+          baseUrl: config.modelBaseUrl,
+          ...(config.modelName === undefined || config.modelApiKey === undefined
+            ? {}
+            : { name: config.modelName })
         }
       }),
       onClose: shutdown

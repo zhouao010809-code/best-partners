@@ -9,6 +9,8 @@ const startup = vi.hoisted(() => {
     obsidianApiUrl: 'https://127.0.0.1:27124',
     obsidianApiKey: 'test-api-key',
     modelBaseUrl: 'https://model.invalid',
+    modelName: 'deepseek-chat',
+    modelApiKey: 'model-secret-must-not-be-wired-to-health',
     writeEnabled: false
   } as const;
   const normalKernel = {
@@ -21,8 +23,12 @@ const startup = vi.hoisted(() => {
   };
   const gateway = { name: 'gateway' };
   const healthService = { getSnapshot: vi.fn() };
-  const repository = { name: 'repository' };
+  const repository = { name: 'repository', listIssues: vi.fn() };
   const indexer = { version: 0, refresh: vi.fn() };
+  const indexMetadata = {
+    version: 4,
+    updatedAt: '2026-09-01T11:59:59.000Z'
+  };
   const indexState = { name: 'index-state' };
   const indexScheduler = {
     start: vi.fn(),
@@ -43,9 +49,10 @@ const startup = vi.hoisted(() => {
     searchIndexer: vi.fn(),
     indexStateController: vi.fn(),
     indexSchedulerConstructor: vi.fn(),
-    loadPersistedIndexVersion: vi.fn(),
+    loadIndexMetadata: vi.fn(),
     repository,
     indexer,
+    indexMetadata,
     indexState,
     indexScheduler,
     buildServer: vi.fn(),
@@ -78,6 +85,10 @@ vi.mock('../../../src/server/index/index-repository.js', () => ({
   createIndexRepository: startup.createIndexRepository
 }));
 
+vi.mock('../../../src/server/index/index-metadata.js', () => ({
+  loadIndexMetadata: startup.loadIndexMetadata
+}));
+
 vi.mock('../../../src/server/index/SearchIndexer.js', () => ({
   SearchIndexer: class {
     constructor(...args: unknown[]) {
@@ -102,10 +113,6 @@ vi.mock('../../../src/server/index/index-scheduler.js', () => ({
   }
 }));
 
-vi.mock('../../../src/server/services/index-job-service.js', () => ({
-  loadPersistedIndexVersion: startup.loadPersistedIndexVersion
-}));
-
 vi.mock('../../../src/server/app.js', () => ({
   buildServer: startup.buildServer
 }));
@@ -121,10 +128,11 @@ beforeEach(() => {
   startup.localRest51Gateway.mockReturnValue(startup.gateway);
   startup.createHealthService.mockReturnValue(startup.healthService);
   startup.createIndexRepository.mockReturnValue(startup.repository);
+  startup.loadIndexMetadata.mockReturnValue(startup.indexMetadata);
   startup.searchIndexer.mockReturnValue(startup.indexer);
   startup.indexStateController.mockReturnValue(startup.indexState);
   startup.indexSchedulerConstructor.mockReturnValue(startup.indexScheduler);
-  startup.loadPersistedIndexVersion.mockReturnValue(4);
+  startup.repository.listIssues.mockReturnValue([{}, {}]);
   startup.indexer.version = 0;
   startup.indexer.refresh.mockResolvedValue({ status: 'ready', checked: 1, total: 1, version: 5 });
   startup.indexScheduler.requestFocusRefresh.mockResolvedValue(undefined);
@@ -183,16 +191,30 @@ describe('server listen boundary', () => {
       gateway: startup.gateway,
       profileDirectory: '/tmp/xiaozhao-app-data/contract-profiles',
       stateKernel: startup.normalKernel,
-      indexState: { snapshot: expect.any(Function) }
+      indexState: { snapshot: expect.any(Function) },
+      model: {
+        baseUrl: 'https://model.invalid',
+        name: 'deepseek-chat'
+      },
+      schemaIssues: { count: expect.any(Function) }
     });
     expect(startup.createIndexRepository).toHaveBeenCalledWith(startup.normalKernel.db);
-    expect(startup.loadPersistedIndexVersion).toHaveBeenCalledWith(startup.normalKernel.db, 0);
+    expect(startup.loadIndexMetadata).toHaveBeenCalledWith(startup.normalKernel.db);
     expect(startup.searchIndexer).toHaveBeenCalledWith({
       gateway: startup.gateway,
       repository: startup.repository,
       maxRawReadsPerPoll: 50
     });
     expect(startup.indexer.version).toBe(4);
+    expect(startup.indexStateController).toHaveBeenCalledWith(
+      expect.any(Function),
+      startup.indexMetadata
+    );
+    const healthInput = startup.createHealthService.mock.calls[0]?.[0] as {
+      schemaIssues?: { count(): number };
+    } | undefined;
+    expect(healthInput?.schemaIssues?.count()).toBe(2);
+    expect(JSON.stringify(healthInput)).not.toContain(startup.config.modelApiKey);
     expect(startup.buildServer).toHaveBeenCalledWith({
       healthService: startup.healthService,
       onClose: expect.any(Function),
@@ -236,7 +258,25 @@ describe('server listen boundary', () => {
 
     expect(startup.createIndexRepository).not.toHaveBeenCalled();
     expect(startup.searchIndexer).not.toHaveBeenCalled();
+    expect(startup.loadIndexMetadata).not.toHaveBeenCalled();
     expect(startup.indexSchedulerConstructor).not.toHaveBeenCalled();
+    expect(startup.createHealthService).toHaveBeenCalledWith({
+      writeEnabled: false,
+      gateway: startup.gateway,
+      profileDirectory: '/tmp/xiaozhao-app-data/contract-profiles',
+      stateKernel: {
+        mode: 'recovery-only',
+        reason: 'database-corrupt',
+        recovery: { entries: [], count: 0 }
+      },
+      indexState: {
+        snapshot: expect.any(Function)
+      },
+      model: {
+        baseUrl: 'https://model.invalid',
+        name: 'deepseek-chat'
+      }
+    });
     expect(startup.buildServer).toHaveBeenCalledWith({
       healthService: startup.healthService,
       onClose: expect.any(Function)

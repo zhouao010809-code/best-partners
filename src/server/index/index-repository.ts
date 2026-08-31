@@ -54,6 +54,16 @@ export type IndexBatch = {
   readonly issues: ReadonlyArray<SchemaIssue>;
 };
 
+export type IndexPublication = IndexBatch & {
+  readonly expectedVersion: number;
+  readonly manifestChanged: boolean;
+};
+
+export type IndexPublicationResult = {
+  readonly projectionChanged: boolean;
+  readonly version: number;
+};
+
 export interface IndexRepository {
   replaceFile(entry: IndexedFile): void;
   removeFile(path: string): void;
@@ -62,7 +72,7 @@ export interface IndexRepository {
   listMaterials(query: MaterialQuery): Page<MaterialRecord>;
   listKnowledge(query: KnowledgeQuery): Page<KnowledgeRecord>;
   getKnowledge(path: string): KnowledgeRecord | undefined;
-  applyBatch(batch: IndexBatch): boolean;
+  publishBatch(publication: IndexPublication): IndexPublicationResult;
   listIssues(): SchemaIssue[];
   getManifestEntry(path: string): ManifestEntry | undefined;
 }
@@ -290,12 +300,27 @@ export function createIndexRepository(
     writeIssue(issue);
     deleteFile.run(issue.path);
   });
-  const applyBatchTransaction = database.transaction((batch: IndexBatch): boolean => {
-    const filePaths = new Set(batch.files.map((entry) => entry.record.path));
-    const issuePaths = new Set(batch.issues.map((issue) => issue.path));
+  const publishBatchTransaction = database.transaction((publication: IndexPublication): IndexPublicationResult => {
+    if (!Number.isSafeInteger(publication.expectedVersion) || publication.expectedVersion < 0) {
+      throw new Error('INDEX_VERSION_INVALID');
+    }
+    const metadata = database.prepare(`
+      SELECT version FROM index_metadata WHERE singleton = 1
+    `).get() as { version: unknown } | undefined;
     if (
-      filePaths.size !== batch.files.length
-      || issuePaths.size !== batch.issues.length
+      metadata === undefined
+      || !Number.isSafeInteger(metadata.version)
+      || (metadata.version as number) < 0
+      || metadata.version !== publication.expectedVersion
+    ) {
+      throw new Error('INDEX_METADATA_VERSION_CONFLICT');
+    }
+
+    const filePaths = new Set(publication.files.map((entry) => entry.record.path));
+    const issuePaths = new Set(publication.issues.map((issue) => issue.path));
+    if (
+      filePaths.size !== publication.files.length
+      || issuePaths.size !== publication.issues.length
       || [...filePaths].some((path) => issuePaths.has(path))
     ) {
       throw new Error('INDEX_BATCH_PATH_CONFLICT');
@@ -318,7 +343,7 @@ export function createIndexRepository(
       }
     }
 
-    for (const entry of batch.files) {
+    for (const entry of publication.files) {
       const current = selectRow.get(entry.record.path) as SearchRow | undefined;
       const { yamlJson, linksJson } = projection(entry);
       const nextRow: SearchRow = {
@@ -335,7 +360,7 @@ export function createIndexRepository(
       }
       deleteIssue.run(entry.record.path);
     }
-    for (const issue of batch.issues) {
+    for (const issue of publication.issues) {
       const detail = canonicalJson({
         message: issue.message,
         ...(issue.field === undefined ? {} : { field: issue.field })
@@ -347,7 +372,18 @@ export function createIndexRepository(
       }
       deleteFile.run(issue.path);
     }
-    return changed;
+    const advances = publication.expectedVersion === 0
+      || changed
+      || publication.manifestChanged;
+    const version = publication.expectedVersion + (advances ? 1 : 0);
+    if (!Number.isSafeInteger(version)) throw new Error('INDEX_VERSION_INVALID');
+    const metadataUpdate = database.prepare(`
+      UPDATE index_metadata
+      SET version = ?, updated_at = ?
+      WHERE singleton = 1 AND version = ?
+    `).run(version, now(), publication.expectedVersion);
+    if (metadataUpdate.changes !== 1) throw new Error('INDEX_METADATA_VERSION_CONFLICT');
+    return { projectionChanged: changed, version };
   });
 
   return {
@@ -407,7 +443,7 @@ export function createIndexRepository(
       const row = selectRow.get(path) as SearchRow | undefined;
       return row?.kind === 'knowledge' ? knowledgeFromRow(row) : undefined;
     },
-    applyBatch: (batch) => applyBatchTransaction.immediate(batch),
+    publishBatch: (publication) => publishBatchTransaction.immediate(publication),
     listIssues: () => (database.prepare(`
       SELECT path, code, detail
       FROM schema_issues

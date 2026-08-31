@@ -1,3 +1,8 @@
+import {
+  assertIndexMetadata,
+  type IndexMetadata
+} from './index-metadata.js';
+
 export const INDEX_STALE_AFTER_FAILURES = 2;
 export const INDEX_STALE_AFTER_MS = 60_000;
 
@@ -16,9 +21,35 @@ export class IndexStateController {
   private state: IndexState;
   private lastSuccess: LastSuccess | undefined;
   private consecutiveFailures = 0;
+  private awaitingStartupRefresh = false;
 
-  constructor(private readonly now: () => Date) {
-    this.state = { status: 'building', startedAt: this.now().toISOString() };
+  constructor(
+    private readonly now: () => Date,
+    metadata?: IndexMetadata
+  ) {
+    const startedAt = this.now();
+    this.state = { status: 'building', startedAt: startedAt.toISOString() };
+    if (metadata === undefined) return;
+    assertIndexMetadata(metadata);
+    if (metadata.version === 0) return;
+
+    const lastSuccessAt = new Date(metadata.updatedAt);
+    this.lastSuccess = { version: metadata.version, at: lastSuccessAt };
+    this.awaitingStartupRefresh = true;
+    if (startedAt.getTime() - lastSuccessAt.getTime() >= INDEX_STALE_AFTER_MS) {
+      this.state = {
+        status: 'stale',
+        version: metadata.version,
+        lastSuccessAt: metadata.updatedAt,
+        reason: 'INDEX_REFRESH_TIMEOUT'
+      };
+      return;
+    }
+    this.state = {
+      status: 'ready',
+      version: metadata.version,
+      refreshedAt: metadata.updatedAt
+    };
   }
 
   snapshot(): IndexState {
@@ -28,6 +59,7 @@ export class IndexStateController {
   recordSuccess(version: number, at: Date = this.now()): void {
     this.lastSuccess = { version, at };
     this.consecutiveFailures = 0;
+    this.awaitingStartupRefresh = false;
     this.state = { status: 'ready', version, refreshedAt: at.toISOString() };
   }
 
@@ -35,6 +67,17 @@ export class IndexStateController {
     this.consecutiveFailures += 1;
     if (this.lastSuccess === undefined) {
       this.state = { status: 'failed', reason };
+      return;
+    }
+
+    if (this.awaitingStartupRefresh) {
+      this.awaitingStartupRefresh = false;
+      this.state = {
+        status: 'stale',
+        version: this.lastSuccess.version,
+        lastSuccessAt: this.lastSuccess.at.toISOString(),
+        reason
+      };
       return;
     }
 

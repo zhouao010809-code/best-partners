@@ -15,7 +15,7 @@ Hard prerequisite: Gate G2 in docs/architecture/write-gate-decision.md is PASSED
 ### Task 1: Persist immutable plans, batches, and steps
 
 **Files:**
-- Create: src/server/db/migrations/003_write_workflow.sql
+- Create: src/server/db/migrations/004_write_workflow.sql
 - Create: src/server/db/repositories/write-repository.ts
 - Create: src/shared/domain/write.ts
 - Test: tests/integration/write-repository.test.ts
@@ -91,7 +91,7 @@ export type WriteBatchState =
 
 Store bytes as base64 in plan/manifest serialization and convert to Uint8Array only at boundaries. Never round-trip source body through JavaScript strings.
 
-- [ ] **Step 4: Add migration 003**
+- [ ] **Step 4: Add migration 004**
 
 Create tables write_plans, write_batches, write_step_results, and path_claims. Include plan_hash, request_hash, version, state, current_step, error_code, timestamps, and foreign keys to extraction_runs. Add partial unique indexes for a current plan per run and a nonterminal batch per source path.
 

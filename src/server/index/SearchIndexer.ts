@@ -163,14 +163,13 @@ export class SearchIndexer {
         .update(canonicalJson(scan.manifestEntries), 'utf8')
         .digest('hex');
       assertNotAborted(signal);
-      const projectionChanged = this.repository.applyBatch({ files: scan.files, issues: scan.issues });
-      if (
-        this.version === 0
-        || projectionChanged
-        || manifestSha256 !== this.committedManifestSha256
-      ) {
-        this.version += 1;
-      }
+      const publication = this.repository.publishBatch({
+        files: scan.files,
+        issues: scan.issues,
+        expectedVersion: this.version,
+        manifestChanged: manifestSha256 !== this.committedManifestSha256
+      });
+      this.version = publication.version;
       this.committedManifestSha256 = manifestSha256;
       const result: IndexRefreshResult = {
         status: 'ready',

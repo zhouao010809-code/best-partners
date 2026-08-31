@@ -23,6 +23,19 @@ const FINGERPRINT = {
   pluginVersion: '5.1.0',
   obsidianVersion: '1.13.7'
 } as const;
+const CONNECTED_PLUGIN = {
+  status: 'connected' as const,
+  ...FINGERPRINT
+};
+const UNAVAILABLE_MODEL = {
+  status: 'unavailable' as const,
+  reason: 'CONFIG_UNAVAILABLE' as const
+};
+const UNAVAILABLE_SCHEMA_ISSUES = {
+  status: 'unavailable' as const,
+  count: 0 as const,
+  reason: 'INDEX_UNAVAILABLE' as const
+};
 const READY_INDEX = {
   status: 'ready' as const,
   version: 7,
@@ -172,12 +185,15 @@ describe('GET /api/v1/health write gate', () => {
     })).resolves.toEqual({
       data: {
         status: 'ready',
+        plugin: CONNECTED_PLUGIN,
         index: READY_INDEX,
+        model: UNAVAILABLE_MODEL,
         writeGate: {
           status: 'blocked',
           missing: ['safeCreate', 'safeDelete', 'restartPersistence'],
           fingerprintMatches: true
-        }
+        },
+        schemaIssues: UNAVAILABLE_SCHEMA_ISSUES
       },
       version: 1
     });
@@ -247,8 +263,11 @@ describe('GET /api/v1/health write gate', () => {
     document = `${OPEN_API}paths: {}\n`;
     await expect(service.getSnapshot()).resolves.toEqual({
       status: 'ready',
+      plugin: CONNECTED_PLUGIN,
       index: READY_INDEX,
-      writeGate: { status: 'blocked', missing: ['profile'], fingerprintMatches: false }
+      model: UNAVAILABLE_MODEL,
+      writeGate: { status: 'blocked', missing: ['profile'], fingerprintMatches: false },
+      schemaIssues: UNAVAILABLE_SCHEMA_ISSUES
     });
   });
 
@@ -267,8 +286,11 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'ready',
+      plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
       index: READY_INDEX,
-      writeGate: { status: 'blocked', missing: ['profile'], fingerprintMatches: false }
+      model: UNAVAILABLE_MODEL,
+      writeGate: { status: 'blocked', missing: ['profile'], fingerprintMatches: false },
+      schemaIssues: UNAVAILABLE_SCHEMA_ISSUES
     });
     expect(JSON.stringify(snapshot)).not.toContain(secret);
     expect(JSON.stringify(snapshot)).not.toContain('/Users/ao');
@@ -291,8 +313,11 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'recovery-only',
+      plugin: CONNECTED_PLUGIN,
       index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
-      writeGate: { status: 'blocked', missing: ['database'], fingerprintMatches: true }
+      model: UNAVAILABLE_MODEL,
+      writeGate: { status: 'blocked', missing: ['database'], fingerprintMatches: true },
+      schemaIssues: UNAVAILABLE_SCHEMA_ISSUES
     });
     expect(JSON.stringify(snapshot)).not.toContain(secretEntry);
   });
@@ -312,8 +337,11 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'recovery-only',
+      plugin: CONNECTED_PLUGIN,
       index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
-      writeGate: { status: 'blocked', missing: ['recovery'], fingerprintMatches: true }
+      model: UNAVAILABLE_MODEL,
+      writeGate: { status: 'blocked', missing: ['recovery'], fingerprintMatches: true },
+      schemaIssues: UNAVAILABLE_SCHEMA_ISSUES
     });
     expect(JSON.stringify(snapshot)).not.toContain(secretEntry);
     expect(JSON.stringify(snapshot)).not.toContain('top-secret');
@@ -330,8 +358,11 @@ describe('GET /api/v1/health write gate', () => {
       stateKernel: normalKernel(missingRecoveryDir)
     }).getSnapshot()).resolves.toEqual({
       status: 'recovery-only',
+      plugin: CONNECTED_PLUGIN,
       index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
-      writeGate: { status: 'blocked', missing: ['recovery'], fingerprintMatches: true }
+      model: UNAVAILABLE_MODEL,
+      writeGate: { status: 'blocked', missing: ['recovery'], fingerprintMatches: true },
+      schemaIssues: UNAVAILABLE_SCHEMA_ISSUES
     });
   });
 
@@ -347,12 +378,15 @@ describe('GET /api/v1/health write gate', () => {
     expect(response.json()).toEqual({
       data: {
         status: 'recovery-only',
+        plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
         index: { status: 'unavailable', reason: 'READ_API_UNAVAILABLE' },
+        model: UNAVAILABLE_MODEL,
         writeGate: {
           status: 'blocked',
           missing: ['profile', 'database'],
           fingerprintMatches: false
-        }
+        },
+        schemaIssues: UNAVAILABLE_SCHEMA_ISSUES
       },
       version: 1
     });

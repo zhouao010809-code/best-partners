@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import type Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createCsrfProtector } from './security/csrf.js';
 import { registerHtmlCsp } from './security/csp.js';
 import { isAllowedHost, isAllowedOrigin } from './security/origin-host.js';
@@ -71,14 +71,27 @@ function errorStatusCode(error: unknown): number {
 
 const DEFAULT_HEALTH_SNAPSHOT: HealthSnapshot = {
   status: 'recovery-only',
+  plugin: {
+    status: 'unavailable',
+    reason: 'PLUGIN_UNAVAILABLE'
+  },
   index: {
     status: 'unavailable',
     reason: 'READ_API_UNAVAILABLE'
+  },
+  model: {
+    status: 'unavailable',
+    reason: 'CONFIG_UNAVAILABLE'
   },
   writeGate: {
     status: 'blocked',
     missing: ['profile', 'database'],
     fingerprintMatches: false
+  },
+  schemaIssues: {
+    status: 'unavailable',
+    count: 0,
+    reason: 'INDEX_UNAVAILABLE'
   }
 };
 
@@ -92,6 +105,7 @@ export interface ReadApiDependencies {
   readonly database: Database.Database;
   readonly indexScheduler: IndexSchedulerPort;
   readonly currentIndexVersion: () => number;
+  readonly cursorSecret?: Uint8Array;
   readonly now?: () => string;
   readonly operationIdFactory?: () => string;
   readonly jobIdFactory?: () => string;
@@ -137,7 +151,9 @@ export function buildServer(options: BuildServerOptions = {}) {
     ? undefined
     : createReadService({
       repository: options.readApi.repository,
-      gateway: options.readApi.gateway
+      gateway: options.readApi.gateway,
+      currentIndexVersion: options.readApi.currentIndexVersion,
+      cursorSecret: options.readApi.cursorSecret ?? randomBytes(32)
     });
   const indexJobs = options.readApi === undefined
     ? undefined

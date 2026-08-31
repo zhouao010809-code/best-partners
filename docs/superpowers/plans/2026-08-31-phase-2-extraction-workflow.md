@@ -15,7 +15,7 @@ Prerequisites: Phase 1 passes. Formal writes remain disabled even if G2 passes; 
 ### Task 1: Add extraction workflow persistence
 
 **Files:**
-- Create: src/server/db/migrations/002_extraction_workflow.sql
+- Create: src/server/db/migrations/003_extraction_workflow.sql
 - Create: src/server/db/repositories/extraction-repository.ts
 - Create: src/server/db/repositories/event-repository.ts
 - Create: src/shared/domain/workflow.ts
@@ -96,7 +96,7 @@ export type CandidateDraft = {
 
 - [ ] **Step 4: Add the migration**
 
-002_extraction_workflow.sql creates:
+003_extraction_workflow.sql creates:
 
 ~~~sql
 CREATE TABLE material_briefings (

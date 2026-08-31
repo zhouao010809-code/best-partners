@@ -16,6 +16,10 @@ function createRepository() {
   const database = new Database(':memory:');
   databases.push(database);
   applyMigrations(database);
+  database.prepare(`
+    INSERT INTO index_metadata (singleton, version, updated_at)
+    VALUES (1, 0, '2026-08-30T00:00:00.000Z')
+  `).run();
   return { database, repository: createIndexRepository(database, () => '2026-08-31T00:00:00.000Z') };
 }
 
@@ -216,19 +220,28 @@ describe('SearchIndexer', () => {
       '01图书馆/二.md': materialNote({ title: '二' }),
       '01图书馆/三.md': materialNote({ title: '三' })
     });
-    const { repository } = createRepository();
+    const { database, repository } = createRepository();
     const indexer = new SearchIndexer({ gateway, repository, maxRawReadsPerPoll: 2 });
+    const metadataBeforePartial = database.prepare(`
+      SELECT version, updated_at AS updatedAt FROM index_metadata WHERE singleton = 1
+    `).get();
 
     await expect(indexer.refresh()).resolves.toEqual({
       status: 'refreshing', checked: 2, total: 3, version: 0
     });
     expect(gateway.rawReadPaths).toHaveLength(2);
     expect(repository.listMaterials({}).total).toBe(0);
+    expect(database.prepare(`
+      SELECT version, updated_at AS updatedAt FROM index_metadata WHERE singleton = 1
+    `).get()).toEqual(metadataBeforePartial);
 
     await expect(indexer.refresh()).resolves.toEqual({
       status: 'ready', checked: 3, total: 3, version: 1
     });
     expect(gateway.rawReadPaths).toHaveLength(3);
+    expect(database.prepare(`
+      SELECT version, updated_at AS updatedAt FROM index_metadata WHERE singleton = 1
+    `).get()).toEqual({ version: 1, updatedAt: '2026-08-31T00:00:00.000Z' });
 
     await expect(indexer.refresh()).resolves.toEqual({
       status: 'refreshing', checked: 2, total: 3, version: 1
@@ -313,6 +326,55 @@ describe('SearchIndexer', () => {
       ['01图书馆/保留.md', '新标题'],
       ['01图书馆/新增.md', '新增']
     ]);
+  });
+
+  it('advances the projection, schema issues, and index metadata in one successful transaction', async () => {
+    const gateway = new FakeVaultGateway({
+      '01图书馆/资料.md': materialNote({ title: '资料' }),
+      '01图书馆/历史.md': materialNote({ title: '历史', type: '个人画像' })
+    });
+    const { database, repository } = createRepository();
+    const indexer = new SearchIndexer({ gateway, repository, maxRawReadsPerPoll: 20 });
+
+    await expect(indexer.refresh()).resolves.toMatchObject({ status: 'ready', version: 1 });
+
+    expect(repository.listMaterials({}).items.map((record) => record.title)).toEqual(['资料']);
+    expect(repository.listIssues().map((issue) => issue.path)).toEqual(['01图书馆/历史.md']);
+    expect(database.prepare(`
+      SELECT version, updated_at AS updatedAt FROM index_metadata WHERE singleton = 1
+    `).get()).toEqual({ version: 1, updatedAt: '2026-08-31T00:00:00.000Z' });
+  });
+
+  it('rolls back projection, schema issues, and version when metadata publication fails', async () => {
+    const gateway = new FakeVaultGateway({
+      '01图书馆/资料.md': materialNote({ title: '旧标题' }),
+      '01图书馆/历史.md': materialNote({ title: '历史', type: '个人画像' })
+    });
+    const { database, repository } = createRepository();
+    const indexer = new SearchIndexer({ gateway, repository, maxRawReadsPerPoll: 20 });
+    await indexer.refresh();
+    const beforeMetadata = database.prepare(`
+      SELECT version, updated_at AS updatedAt FROM index_metadata WHERE singleton = 1
+    `).get();
+
+    gateway.mutateFixture('01图书馆/资料.md', materialNote({ title: '新标题' }), 'version-2');
+    gateway.mutateFixture('01图书馆/历史.md', materialNote({ title: '已修复' }), 'version-2');
+    database.exec(`
+      CREATE TRIGGER reject_index_metadata_update
+      BEFORE UPDATE ON index_metadata
+      BEGIN
+        SELECT RAISE(ABORT, 'metadata publication failed');
+      END;
+    `);
+
+    await expect(indexer.refresh()).rejects.toThrow('metadata publication failed');
+
+    expect(indexer.version).toBe(1);
+    expect(repository.listMaterials({}).items.map((record) => record.title)).toEqual(['旧标题']);
+    expect(repository.listIssues().map((issue) => issue.path)).toEqual(['01图书馆/历史.md']);
+    expect(database.prepare(`
+      SELECT version, updated_at AS updatedAt FROM index_metadata WHERE singleton = 1
+    `).get()).toEqual(beforeMetadata);
   });
 
   it('aborts a deferred raw read without publishing late bytes or allowing a concurrent refresh', async () => {

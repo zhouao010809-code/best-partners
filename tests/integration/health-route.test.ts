@@ -20,14 +20,27 @@ describe('GET /api/v1/health', () => {
     expect(response.json()).toEqual({
       data: {
         status: 'recovery-only',
+        plugin: {
+          status: 'unavailable',
+          reason: 'PLUGIN_UNAVAILABLE'
+        },
         index: {
           status: 'unavailable',
           reason: 'READ_API_UNAVAILABLE'
+        },
+        model: {
+          status: 'unavailable',
+          reason: 'CONFIG_UNAVAILABLE'
         },
         writeGate: {
           status: 'blocked',
           missing: ['profile', 'database'],
           fingerprintMatches: false
+        },
+        schemaIssues: {
+          status: 'unavailable',
+          count: 0,
+          reason: 'INDEX_UNAVAILABLE'
         }
       },
       version: 1
@@ -50,12 +63,19 @@ describe('GET /api/v1/health', () => {
       healthService: {
         getSnapshot: async () => ({
           status,
+          plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
           writeGate: {
             status: 'blocked',
             missing: ['database'],
             fingerprintMatches: false
           },
-          index
+          index,
+          model: { status: 'unavailable', reason: 'CONFIG_UNAVAILABLE' },
+          schemaIssues: {
+            status: 'unavailable',
+            count: 0,
+            reason: 'INDEX_UNAVAILABLE'
+          }
         })
       }
     });

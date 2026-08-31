@@ -14,7 +14,7 @@ import type {
   materialQuerySchema
 } from '../../shared/api/schemas.js';
 import type { z } from 'zod';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 type MaterialApiQuery = z.output<typeof materialQuerySchema>;
 type KnowledgeApiQuery = z.output<typeof knowledgeQuerySchema>;
@@ -33,6 +33,25 @@ export interface ReadService {
 
 const REPOSITORY_PAGE_SIZE = 200;
 const DEFAULT_API_PAGE_SIZE = 50;
+const CURSOR_FORMAT_VERSION = 1;
+const CURSOR_PATTERN = /^[A-Za-z0-9_-]+\.([a-f0-9]{64})$/u;
+
+type CursorKind = 'material' | 'knowledge';
+
+type CursorPayload = {
+  readonly version: typeof CURSOR_FORMAT_VERSION;
+  readonly kind: CursorKind;
+  readonly filterSha256: string;
+  readonly indexVersion: number;
+  readonly afterPath: string;
+};
+
+type PaginationContext = {
+  readonly kind: CursorKind;
+  readonly filterSha256: string;
+  readonly indexVersion: number;
+  readonly afterPath?: string;
+};
 
 function publicPathError(): PublicApiError {
   return new PublicApiError('PATH_NOT_ALLOWED', 'Path is not allowed', 400);
@@ -51,36 +70,138 @@ function normalizeKnowledgePath(input: string): string {
   return path;
 }
 
-function opaqueCursor(path: string): string {
-  return createHash('sha256').update(path, 'utf8').digest('hex');
+function cursorValidationError(message = 'Invalid cursor'): PublicApiError {
+  return new PublicApiError('VALIDATION_ERROR', 'Request validation failed', 400, {
+    cursor: message
+  });
 }
 
-function cursorOffset<T extends { path: string }>(records: readonly T[], cursor?: string): number {
-  if (cursor === undefined) return 0;
-  const matches = records
-    .map((record, index) => ({ index, cursor: opaqueCursor(record.path) }))
-    .filter((entry) => entry.cursor === cursor);
-  if (matches.length !== 1) {
-    throw new PublicApiError('VALIDATION_ERROR', 'Request validation failed', 400, {
-      cursor: 'Unknown cursor'
-    });
+function cursorVersionConflict(): PublicApiError {
+  return new PublicApiError(
+    'VERSION_CONFLICT',
+    'Cursor index version is no longer current',
+    409
+  );
+}
+
+function readIndexVersion(currentIndexVersion: () => number): number {
+  const indexVersion = currentIndexVersion();
+  if (!Number.isSafeInteger(indexVersion) || indexVersion < 0) {
+    throw new Error('INDEX_VERSION_INVALID');
   }
-  return matches[0]!.index + 1;
+  return indexVersion;
+}
+
+function canonicalFilterSha256(filters: Readonly<Record<string, unknown>>): string {
+  const canonical = Object.fromEntries(
+    Object.entries(filters)
+      .filter(([, value]) => value !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
+  return createHash('sha256').update(JSON.stringify(canonical), 'utf8').digest('hex');
+}
+
+function isCursorPayload(value: unknown): value is CursorPayload {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const payload = value as Record<string, unknown>;
+  if (Object.keys(payload).sort().join(',') !== 'afterPath,filterSha256,indexVersion,kind,version') {
+    return false;
+  }
+  return payload.version === CURSOR_FORMAT_VERSION
+    && (payload.kind === 'material' || payload.kind === 'knowledge')
+    && typeof payload.filterSha256 === 'string'
+    && /^[a-f0-9]{64}$/u.test(payload.filterSha256)
+    && typeof payload.indexVersion === 'number'
+    && Number.isSafeInteger(payload.indexVersion)
+    && payload.indexVersion >= 0
+    && typeof payload.afterPath === 'string'
+    && payload.afterPath.length > 0
+    && payload.afterPath.length <= 1024;
+}
+
+function signCursorBody(body: string, secret: Uint8Array): string {
+  return createHmac('sha256', secret).update(body, 'ascii').digest('hex');
+}
+
+function encodeCursor(payload: CursorPayload, secret: Uint8Array): string {
+  const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  return `${body}.${signCursorBody(body, secret)}`;
+}
+
+function decodeCursor(cursor: string, secret: Uint8Array): CursorPayload {
+  const match = CURSOR_PATTERN.exec(cursor);
+  if (match === null) throw cursorValidationError();
+  const separator = cursor.lastIndexOf('.');
+  const body = cursor.slice(0, separator);
+  const suppliedSignature = Buffer.from(match[1]!, 'hex');
+  const expectedSignature = Buffer.from(signCursorBody(body, secret), 'hex');
+  if (!timingSafeEqual(suppliedSignature, expectedSignature)) {
+    throw cursorValidationError();
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as unknown;
+  } catch {
+    throw cursorValidationError();
+  }
+  if (!isCursorPayload(decoded)) throw cursorValidationError();
+  return decoded;
+}
+
+function resolvePaginationContext(input: {
+  kind: CursorKind;
+  filters: Readonly<Record<string, unknown>>;
+  cursor?: string;
+  currentIndexVersion: () => number;
+  cursorSecret: Uint8Array;
+}): PaginationContext {
+  const indexVersion = readIndexVersion(input.currentIndexVersion);
+  const filterSha256 = canonicalFilterSha256(input.filters);
+  if (input.cursor === undefined) {
+    return { kind: input.kind, filterSha256, indexVersion };
+  }
+  const cursor = decodeCursor(input.cursor, input.cursorSecret);
+  if (cursor.kind !== input.kind || cursor.filterSha256 !== filterSha256) {
+    throw cursorValidationError('Cursor does not match request filters');
+  }
+  if (cursor.indexVersion !== indexVersion) {
+    throw cursorVersionConflict();
+  }
+  return { kind: input.kind, filterSha256, indexVersion, afterPath: cursor.afterPath };
+}
+
+function assertIndexVersionUnchanged(
+  expectedVersion: number,
+  currentIndexVersion: () => number
+): void {
+  if (readIndexVersion(currentIndexVersion) !== expectedVersion) {
+    throw cursorVersionConflict();
+  }
 }
 
 function paginateByPath<T extends { path: string }>(
   records: readonly T[],
-  cursor: string | undefined,
-  requestedLimit: number | undefined
+  requestedLimit: number | undefined,
+  context: PaginationContext,
+  cursorSecret: Uint8Array
 ): Page<T> {
   const limit = requestedLimit ?? DEFAULT_API_PAGE_SIZE;
-  const eligible = records.slice(cursorOffset(records, cursor));
+  const eligible = context.afterPath === undefined
+    ? records
+    : records.filter((record) => record.path > context.afterPath!);
   const items = eligible.slice(0, limit);
   const finalItem = items.at(-1);
   return {
     items: [...items],
     ...(eligible.length > items.length && finalItem !== undefined
-      ? { nextCursor: opaqueCursor(finalItem.path) }
+      ? { nextCursor: encodeCursor({
+          version: CURSOR_FORMAT_VERSION,
+          kind: context.kind,
+          filterSha256: context.filterSha256,
+          indexVersion: context.indexVersion,
+          afterPath: finalItem.path
+        }, cursorSecret) }
       : {})
   };
 }
@@ -116,30 +237,52 @@ function sameProjectionVersion(left: KnowledgeRecord, right: KnowledgeRecord): b
 export function createReadService(input: {
   repository: IndexRepository;
   gateway: OpenableVaultGateway;
+  currentIndexVersion: () => number;
+  cursorSecret: Uint8Array;
 }): ReadService {
+  const cursorSecret = Buffer.from(input.cursorSecret);
+  if (cursorSecret.length < 16) throw new Error('CURSOR_SECRET_TOO_SHORT');
   return {
     listMaterials: (query) => {
-      const records = collectMaterials(input.repository, {
+      const filters = {
         ...(query.status === undefined ? {} : { knowledgeStatus: query.status }),
         ...(query.sourcePlatform === undefined ? {} : { sourcePlatform: query.sourcePlatform }),
         ...(query.collectedFrom === undefined ? {} : { collectedFrom: query.collectedFrom }),
         ...(query.collectedTo === undefined ? {} : { collectedTo: query.collectedTo }),
         ...(query.title === undefined ? {} : { title: query.title })
-      }).filter((record) => query.status !== undefined
+      };
+      const context = resolvePaginationContext({
+        kind: 'material',
+        filters,
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+        currentIndexVersion: input.currentIndexVersion,
+        cursorSecret
+      });
+      const records = collectMaterials(input.repository, filters).filter((record) => query.status !== undefined
         || record.knowledgeStatus === '未提炼'
         || record.knowledgeStatus === '部分入库');
-      return paginateByPath(records, query.cursor, query.limit);
+      assertIndexVersionUnchanged(context.indexVersion, input.currentIndexVersion);
+      return paginateByPath(records, query.limit, context, cursorSecret);
     },
 
     listKnowledge: (query) => {
-      const records = collectKnowledge(input.repository, {
+      const filters = {
         ...(query.includeObsolete === undefined ? {} : { includeObsolete: query.includeObsolete }),
         ...(query.usageStatus === undefined ? {} : { usageStatus: query.usageStatus }),
         ...(query.knowledgeType === undefined ? {} : { knowledgeType: query.knowledgeType }),
         ...(query.topic === undefined ? {} : { topic: query.topic }),
         ...(query.search === undefined ? {} : { search: query.search })
+      };
+      const context = resolvePaginationContext({
+        kind: 'knowledge',
+        filters,
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+        currentIndexVersion: input.currentIndexVersion,
+        cursorSecret
       });
-      return paginateByPath(records, query.cursor, query.limit);
+      const records = collectKnowledge(input.repository, filters);
+      assertIndexVersionUnchanged(context.indexVersion, input.currentIndexVersion);
+      return paginateByPath(records, query.limit, context, cursorSecret);
     },
 
     getKnowledgeDetail: async (requestedPath) => {

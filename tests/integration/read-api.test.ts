@@ -97,6 +97,7 @@ function createReadServer(input: {
   requestFocusRefresh?: () => Promise<void>;
   rebuildSnapshot?: () => RebuildSnapshot;
   indexScheduler?: IndexSchedulerPort;
+  cursorSecret?: Uint8Array;
 }) {
   const database = input.database ?? openDatabase();
   let operationSequence = 0;
@@ -122,12 +123,23 @@ function createReadServer(input: {
     healthService: {
       getSnapshot: async () => ({
         status: 'ready',
+        plugin: {
+          status: 'connected',
+          pluginId: 'obsidian-local-rest-api',
+          pluginVersion: '5.1.0',
+          obsidianVersion: '1.13.7'
+        },
         writeGate: {
           status: 'blocked',
           missing: ['writeEnabled'],
           fingerprintMatches: true
         },
-        index: indexScheduler.snapshot().state
+        index: indexScheduler.snapshot().state,
+        model: {
+          status: 'unconfigured',
+          providerHost: 'models.example'
+        },
+        schemaIssues: { status: 'available', count: 0 }
       })
     },
     readApi: {
@@ -136,6 +148,7 @@ function createReadServer(input: {
       database,
       indexScheduler,
       currentIndexVersion: input.currentIndexVersion ?? (() => 7),
+      cursorSecret: input.cursorSecret ?? Buffer.from('read-api-test-cursor-secret-32b'),
       now: () => '2026-08-31T00:00:00.000Z',
       operationIdFactory: () => `operation-${++operationSequence}`,
       jobIdFactory: () => `job-${++jobSequence}`
@@ -241,7 +254,7 @@ describe('versioned read APIs', () => {
     expectFailure(invalid, 400, 'VALIDATION_ERROR');
   });
 
-  it('round-trips a fixed-length opaque material cursor for long Unicode vault paths', async () => {
+  it('continues after a deleted material anchor with a stateless Unicode cursor', async () => {
     const database = openDatabase();
     const repository = createIndexRepository(database);
     for (const [suffix, title] of [['甲', '一'], ['乙', '二']] as const) {
@@ -251,23 +264,181 @@ describe('versioned read APIs', () => {
       }) });
     }
     const { gateway } = createGateway({});
-    const server = createReadServer({ repository, gateway, database });
+    const cursorSecret = Buffer.from('restart-stable-cursor-secret-value');
+    const server = createReadServer({ repository, gateway, database, cursorSecret });
 
     const first = await server.inject({
       method: 'GET', url: '/api/v1/materials?limit=1', headers: requestHeaders()
     });
     expect(first.statusCode).toBe(200);
-    const firstPage = first.json<{ data: { items: unknown[]; nextCursor: string } }>().data;
+    const firstPage = first.json<{
+      data: { items: Array<{ path: string }>; nextCursor: string };
+    }>().data;
     expect(firstPage.items).toHaveLength(1);
-    expect(firstPage.nextCursor).toMatch(/^[a-f0-9]{64}$/);
+    expect(firstPage.nextCursor).toMatch(/^[A-Za-z0-9_-]+\.[a-f0-9]{64}$/);
+    expect(firstPage.nextCursor.length).toBeGreaterThan(64);
+    expect(firstPage.nextCursor.length).toBeLessThanOrEqual(12_288);
 
-    const second = await server.inject({
+    repository.removeFile(firstPage.items[0]!.path);
+    const restartedServer = createReadServer({ repository, gateway, database, cursorSecret });
+
+    const second = await restartedServer.inject({
       method: 'GET',
       url: `/api/v1/materials?limit=1&cursor=${firstPage.nextCursor}`,
       headers: requestHeaders()
     });
     expect(second.statusCode).toBe(200);
-    expect(second.json<{ data: { items: unknown[] } }>().data.items).toHaveLength(1);
+    const remainingPaths = second
+      .json<{ data: { items: Array<{ path: string }> } }>()
+      .data.items.map((item) => item.path);
+    expect(remainingPaths).toHaveLength(1);
+    expect(remainingPaths[0]).not.toBe(firstPage.items[0]!.path);
+  });
+
+  it('binds material cursors to canonical filters and the current index version', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    for (const [suffix, date] of [['甲', '2026-08-20'], ['乙', '2026-08-21']] as const) {
+      repository.replaceFile({ kind: 'material', record: material({
+        path: `01图书馆/Alpha-${suffix}.md`,
+        title: `Alpha ${suffix}`,
+        sourcePlatform: 'B站',
+        collectedAt: date
+      }) });
+    }
+    const { gateway } = createGateway({});
+    let indexVersion = 7;
+    const server = createReadServer({
+      repository,
+      gateway,
+      database,
+      currentIndexVersion: () => indexVersion
+    });
+
+    const first = await server.inject({
+      method: 'GET',
+      url: '/api/v1/materials?title=Alpha&sourcePlatform=B%E7%AB%99&limit=1',
+      headers: requestHeaders()
+    });
+    const cursor = first.json<{ data: { nextCursor: string } }>().data.nextCursor;
+
+    const reordered = await server.inject({
+      method: 'GET',
+      url: `/api/v1/materials?limit=1&sourcePlatform=B%E7%AB%99&title=Alpha&cursor=${cursor}`,
+      headers: requestHeaders()
+    });
+    expect(reordered.statusCode).toBe(200);
+
+    const changedFilter = await server.inject({
+      method: 'GET',
+      url: `/api/v1/materials?sourcePlatform=B%E7%AB%99&title=Al&limit=1&cursor=${cursor}`,
+      headers: requestHeaders()
+    });
+    expectFailure(changedFilter, 400, 'VALIDATION_ERROR');
+
+    indexVersion = 8;
+    const changedVersion = await server.inject({
+      method: 'GET',
+      url: `/api/v1/materials?title=Alpha&sourcePlatform=B%E7%AB%99&limit=1&cursor=${cursor}`,
+      headers: requestHeaders()
+    });
+    expectFailure(changedVersion, 409, 'VERSION_CONFLICT');
+  });
+
+  it('rejects a page when the index version changes while records are collected', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    repository.replaceFile({ kind: 'material', record: material({
+      path: '01图书馆/索引一.md', title: '索引一'
+    }) });
+    repository.replaceFile({ kind: 'material', record: material({
+      path: '01图书馆/索引二.md', title: '索引二'
+    }) });
+    let indexVersion = 7;
+    let changeDuringCollection = false;
+    const racingRepository = {
+      ...repository,
+      listMaterials: (query: Parameters<IndexRepository['listMaterials']>[0]) => {
+        const page = repository.listMaterials(query);
+        if (changeDuringCollection) indexVersion = 8;
+        return page;
+      }
+    } as IndexRepository;
+    const { gateway } = createGateway({});
+    const server = createReadServer({
+      repository: racingRepository,
+      gateway,
+      database,
+      currentIndexVersion: () => indexVersion
+    });
+    const first = await server.inject({
+      method: 'GET', url: '/api/v1/materials?limit=1', headers: requestHeaders()
+    });
+    const cursor = first.json<{ data: { nextCursor: string } }>().data.nextCursor;
+
+    changeDuringCollection = true;
+    const mixedGeneration = await server.inject({
+      method: 'GET',
+      url: `/api/v1/materials?limit=1&cursor=${cursor}`,
+      headers: requestHeaders()
+    });
+    expectFailure(mixedGeneration, 409, 'VERSION_CONFLICT');
+  });
+
+  it('rejects malformed or cross-kind cursors without reflecting cursor content', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    repository.replaceFile({ kind: 'knowledge', record: knowledge({
+      path: '02知识库/游标来源.md', title: 'MODEL_API_KEY=vault-secret-body', rawSha256: 'f'.repeat(64)
+    }) });
+    repository.replaceFile({ kind: 'knowledge', record: knowledge({
+      path: '02知识库/游标后续.md', title: '游标后续', rawSha256: 'e'.repeat(64)
+    }) });
+    const { gateway } = createGateway({});
+    const cursorSecret = Buffer.from('cursor-secret-that-must-never-leak');
+    const server = createReadServer({ repository, gateway, database, cursorSecret });
+    const first = await server.inject({
+      method: 'GET', url: '/api/v1/knowledge?limit=1', headers: requestHeaders()
+    });
+    const cursor = first.json<{ data: { nextCursor: string } }>().data.nextCursor;
+    const [encodedPayload] = cursor.split('.');
+    const decodedPayload = Buffer.from(encodedPayload!, 'base64url').toString('utf8');
+    expect(JSON.parse(decodedPayload)).toEqual({
+      version: 1,
+      kind: 'knowledge',
+      filterSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      indexVersion: 7,
+      afterPath: expect.stringMatching(/^02知识库\//)
+    });
+    expect(decodedPayload).not.toContain('vault-secret-body');
+    expect(cursor).not.toContain(cursorSecret.toString('utf8'));
+
+    const crossKind = await server.inject({
+      method: 'GET',
+      url: `/api/v1/materials?limit=1&cursor=${cursor}`,
+      headers: requestHeaders()
+    });
+    expectFailure(crossKind, 400, 'VALIDATION_ERROR');
+
+    const tamperedCursor = `${cursor.slice(0, -1)}${cursor.endsWith('a') ? 'b' : 'a'}`;
+    const tampered = await server.inject({
+      method: 'GET',
+      url: `/api/v1/knowledge?limit=1&cursor=${tamperedCursor}`,
+      headers: requestHeaders()
+    });
+    expectFailure(tampered, 400, 'VALIDATION_ERROR');
+    expect(tampered.body).not.toContain(cursorSecret.toString('utf8'));
+    expect(tampered.body).not.toContain('vault-secret-body');
+
+    const malformedValue = 'not-a-cursor-vault-secret';
+    const malformed = await server.inject({
+      method: 'GET',
+      url: `/api/v1/knowledge?cursor=${malformedValue}`,
+      headers: requestHeaders()
+    });
+    expectFailure(malformed, 400, 'VALIDATION_ERROR');
+    expect(malformed.body).not.toContain(malformedValue);
+    expect(malformed.body).not.toContain('游标来源');
   });
 
   it('searches knowledge only through title and YAML recall fields and excludes obsolete notes by default', async () => {
@@ -310,7 +481,7 @@ describe('versioned read APIs', () => {
       .toMatchObject([{ path: '02知识库/过时.md' }]);
   });
 
-  it('round-trips a fixed-length opaque knowledge cursor for long Unicode vault paths', async () => {
+  it('round-trips an authenticated knowledge cursor for long Unicode vault paths', async () => {
     const database = openDatabase();
     const repository = createIndexRepository(database);
     for (const [suffix, hash] of [['甲', 'b'], ['乙', 'c']] as const) {
@@ -329,7 +500,9 @@ describe('versioned read APIs', () => {
     expect(first.statusCode).toBe(200);
     const firstPage = first.json<{ data: { items: unknown[]; nextCursor: string } }>().data;
     expect(firstPage.items).toHaveLength(1);
-    expect(firstPage.nextCursor).toMatch(/^[a-f0-9]{64}$/);
+    expect(firstPage.nextCursor).toMatch(/^[A-Za-z0-9_-]+\.[a-f0-9]{64}$/);
+    expect(firstPage.nextCursor.length).toBeGreaterThan(64);
+    expect(firstPage.nextCursor.length).toBeLessThanOrEqual(12_288);
 
     const second = await server.inject({
       method: 'GET',
@@ -360,6 +533,7 @@ describe('versioned read APIs', () => {
       headers: requestHeaders()
     });
     expect(detail.statusCode).toBe(200);
+    expect(detail.headers['cache-control']).toBe('no-store');
     expect(detail.json()).toEqual({
       data: {
         path: live.path,
@@ -391,6 +565,7 @@ describe('versioned read APIs', () => {
       headers: requestHeaders()
     });
     expectFailure(conflicted, 409, 'VERSION_CONFLICT');
+    expect(conflicted.headers['cache-control']).toBe('no-store');
     expect(conflicted.body).not.toContain(`${markdown}\nchanged`);
   });
 

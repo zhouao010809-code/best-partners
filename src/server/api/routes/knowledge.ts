@@ -28,7 +28,8 @@ export function registerKnowledgeRoutes(
     return parseApiOutput(knowledgePageResponseSchema, { data, version: API_VERSION });
   });
 
-  app.get('/api/v1/knowledge/file', async (request) => {
+  app.get('/api/v1/knowledge/file', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
     if (input.service === undefined) {
       throw new PublicApiError('READ_API_UNAVAILABLE', 'Read API is unavailable', 503);
     }

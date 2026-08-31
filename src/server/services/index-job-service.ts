@@ -95,15 +95,6 @@ function isConstraintError(error: unknown): boolean {
     && error.code.startsWith('SQLITE_CONSTRAINT');
 }
 
-export function loadPersistedIndexVersion(
-  database: Database.Database,
-  fallback = 0
-): number {
-  const row = database.prepare('SELECT version FROM index_metadata WHERE singleton = 1')
-    .get() as { version: number } | undefined;
-  return row?.version ?? fallback;
-}
-
 export class IndexJobService {
   private readonly activeTasks = new Set<Promise<void>>();
   private stopping = false;
@@ -256,20 +247,15 @@ export class IndexJobService {
       return existing;
     }
 
-    const task = this.drive(id).finally(() => {
-      this.activeTasks.delete(task);
-    });
+    const task = this.drive(id);
     this.activeTasks.add(task);
+    void task.then(
+      () => this.activeTasks.delete(task),
+      () => this.activeTasks.delete(task)
+    );
     const job = this.get(id);
     if (job === undefined) throw new Error('INDEX_JOB_MISSING');
     return job;
-  }
-
-  recordIndexVersion(version: number): void {
-    if (!Number.isSafeInteger(version) || version < 0) throw new Error('INDEX_VERSION_INVALID');
-    this.input.database.prepare(`
-      UPDATE index_metadata SET version = ?, updated_at = ? WHERE singleton = 1
-    `).run(version, this.input.now());
   }
 
   async close(): Promise<void> {
@@ -317,25 +303,35 @@ export class IndexJobService {
     ) {
       throw new Error('INDEX_PROGRESS_INVALID');
     }
-    this.input.database.transaction(() => {
-      this.input.database.prepare(`
-        UPDATE index_jobs
-        SET progress_completed = ?, progress_total = ?, result_index_version = ?, updated_at = ?
-        WHERE id = ? AND status = 'running'
-      `).run(completed, total, version, this.input.now(), id);
-      this.recordIndexVersion(version);
-    }).immediate();
+    this.input.database.prepare(`
+      UPDATE index_jobs
+      SET progress_completed = ?, progress_total = ?, result_index_version = ?, updated_at = ?
+      WHERE id = ? AND status = 'running'
+    `).run(completed, total, version, this.input.now(), id);
   }
 
   private complete(id: string, completed: number, total: number, version: number): void {
-    this.input.database.transaction(() => {
-      this.updateProgress(id, completed, total, version);
-      this.input.database.prepare(`
-        UPDATE index_jobs
-        SET status = 'completed', error_code = NULL, updated_at = ?
-        WHERE id = ? AND status = 'running'
-      `).run(this.input.now(), id);
-    }).immediate();
+    if (
+      !Number.isSafeInteger(completed)
+      || !Number.isSafeInteger(total)
+      || completed < 0
+      || total < completed
+      || !Number.isSafeInteger(version)
+      || version < 0
+    ) {
+      throw new Error('INDEX_PROGRESS_INVALID');
+    }
+    this.input.database.prepare(`
+      UPDATE index_jobs
+      SET
+        status = 'completed',
+        progress_completed = ?,
+        progress_total = ?,
+        result_index_version = ?,
+        error_code = NULL,
+        updated_at = ?
+      WHERE id = ? AND status = 'running'
+    `).run(completed, total, version, this.input.now(), id);
   }
 
   private fail(id: string, code: string): void {

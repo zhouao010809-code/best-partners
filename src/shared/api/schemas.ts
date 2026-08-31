@@ -1,12 +1,15 @@
 import { z } from 'zod';
 
 export const API_VERSION = 1;
+export const MAX_CURSOR_LENGTH = 12_288;
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 const vaultPathSchema = z.string().min(1).max(1024);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const operationIdSchema = z.string().min(1).max(128).regex(/^[a-z0-9._:-]+$/iu);
-const opaqueCursorSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+const opaqueCursorSchema = z.string()
+  .max(MAX_CURSOR_LENGTH)
+  .regex(/^[A-Za-z0-9_-]+\.[a-f0-9]{64}$/u);
 
 export const knowledgeStatusSchema = z.enum(['未提炼', '部分入库', '已入库']);
 export const usageStatusSchema = z.enum(['AI总结', '已优化', '定论', '过时']);
@@ -138,6 +141,18 @@ export const indexJobSchema = z.object({
 
 export const healthSnapshotSchema = z.object({
   status: z.enum(['ready', 'recovery-only']),
+  plugin: z.discriminatedUnion('status', [
+    z.object({
+      status: z.literal('connected'),
+      pluginId: z.string().min(1).max(128).regex(/^[a-z0-9._-]+$/iu),
+      pluginVersion: z.string().min(1).max(64).regex(/^[a-z0-9.+_-]+$/iu),
+      obsidianVersion: z.string().min(1).max(64).regex(/^[a-z0-9.+_-]+$/iu)
+    }).strict(),
+    z.object({
+      status: z.literal('unavailable'),
+      reason: z.literal('PLUGIN_UNAVAILABLE')
+    }).strict()
+  ]),
   index: z.discriminatedUnion('status', [
     z.object({
       status: z.literal('building'),
@@ -164,11 +179,37 @@ export const healthSnapshotSchema = z.object({
       reason: z.enum(['RECOVERY_ONLY', 'READ_API_UNAVAILABLE'])
     }).strict()
   ]),
+  model: z.discriminatedUnion('status', [
+    z.object({
+      status: z.literal('configured'),
+      providerHost: z.string().min(1).max(253).regex(/^[^\s@/?#]+$/u),
+      name: z.string().min(1).max(256).regex(/^[^\u0000-\u001f\u007f]+$/u)
+    }).strict(),
+    z.object({
+      status: z.literal('unconfigured'),
+      providerHost: z.string().min(1).max(253).regex(/^[^\s@/?#]+$/u)
+    }).strict(),
+    z.object({
+      status: z.literal('unavailable'),
+      reason: z.literal('CONFIG_UNAVAILABLE')
+    }).strict()
+  ]),
   writeGate: z.object({
     status: z.enum(['blocked', 'enabled']),
     missing: z.array(z.string().max(128)),
     fingerprintMatches: z.boolean()
-  }).strict()
+  }).strict(),
+  schemaIssues: z.discriminatedUnion('status', [
+    z.object({
+      status: z.literal('available'),
+      count: z.number().int().nonnegative()
+    }).strict(),
+    z.object({
+      status: z.literal('unavailable'),
+      count: z.literal(0),
+      reason: z.enum(['INDEX_UNAVAILABLE', 'SCHEMA_ISSUES_UNAVAILABLE'])
+    }).strict()
+  ])
 }).strict();
 
 export function successEnvelopeSchema<T extends z.ZodType>(data: T) {

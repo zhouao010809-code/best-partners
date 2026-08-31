@@ -250,6 +250,86 @@ describe('IndexScheduler', () => {
     expect(scheduler.snapshot().state).toMatchObject({ status: 'ready', version: 2 });
   });
 
+  it('returns a caller\'s successful target attempt even when a later unrelated attempt fails', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const releases: Array<() => void> = [];
+    const started: Array<() => void> = [];
+    const waits = [0, 1, 2].map((index) => new Promise<void>((resolve) => {
+      releases[index] = resolve;
+    }));
+    const starts = [0, 1, 2].map((index) => new Promise<void>((resolve) => {
+      started[index] = resolve;
+    }));
+    let refreshes = 0;
+    const scheduler = new IndexScheduler({
+      refresh: async () => {
+        const attempt = refreshes++;
+        started[attempt]?.();
+        await waits[attempt];
+        if (attempt === 2) throw new Error('unrelated later failure');
+        return { status: 'ready' as const, checked: 1, total: 1, version: attempt + 1 };
+      },
+      state: new IndexStateController(clock.now),
+      intervals: new FakeIntervals(),
+      deadlines: new FakeDeadlines(),
+      now: clock.now
+    });
+
+    const first = scheduler.refreshNow();
+    await starts[0];
+    const target = scheduler.requestFocusRefresh();
+    releases[0]?.();
+    await starts[1];
+    const unrelated = scheduler.refreshNow();
+    releases[1]?.();
+
+    await expect(target).resolves.toMatchObject({ generation: 2, outcome: 'succeeded' });
+    await starts[2];
+    releases[2]?.();
+    await expect(unrelated).resolves.toMatchObject({ generation: 3, outcome: 'failed' });
+    await expect(first).resolves.toMatchObject({ generation: 1, outcome: 'succeeded' });
+  });
+
+  it('returns a caller\'s failed target attempt even when a later unrelated attempt succeeds', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const releases: Array<() => void> = [];
+    const started: Array<() => void> = [];
+    const waits = [0, 1, 2].map((index) => new Promise<void>((resolve) => {
+      releases[index] = resolve;
+    }));
+    const starts = [0, 1, 2].map((index) => new Promise<void>((resolve) => {
+      started[index] = resolve;
+    }));
+    let refreshes = 0;
+    const scheduler = new IndexScheduler({
+      refresh: async () => {
+        const attempt = refreshes++;
+        started[attempt]?.();
+        await waits[attempt];
+        if (attempt === 1) throw new Error('target failure');
+        return { status: 'ready' as const, checked: 1, total: 1, version: attempt + 1 };
+      },
+      state: new IndexStateController(clock.now),
+      intervals: new FakeIntervals(),
+      deadlines: new FakeDeadlines(),
+      now: clock.now
+    });
+
+    const first = scheduler.refreshNow();
+    await starts[0];
+    const target = scheduler.requestFocusRefresh();
+    releases[0]?.();
+    await starts[1];
+    const unrelated = scheduler.refreshNow();
+    releases[1]?.();
+
+    await expect(target).resolves.toMatchObject({ generation: 2, outcome: 'failed' });
+    await starts[2];
+    releases[2]?.();
+    await expect(unrelated).resolves.toMatchObject({ generation: 3, outcome: 'succeeded' });
+    await expect(first).resolves.toMatchObject({ generation: 1, outcome: 'succeeded' });
+  });
+
   it('aborts a timed-out poll but waits for its side effects to settle before starting the queued refresh', async () => {
     const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
     const deadlines = new FakeDeadlines();
