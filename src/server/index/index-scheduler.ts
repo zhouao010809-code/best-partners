@@ -48,6 +48,12 @@ export class IndexScheduler {
     this.activeAbortController?.abort(new Error('INDEX_REFRESH_STOPPED'));
   }
 
+  async stopAndWait(): Promise<void> {
+    const active = this.activeRefresh;
+    this.stop();
+    await active;
+  }
+
   requestFocusRefresh(): Promise<void> {
     return this.refreshNow();
   }

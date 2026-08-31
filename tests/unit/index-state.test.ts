@@ -375,12 +375,12 @@ describe('IndexScheduler', () => {
     void active.then(() => {
       activeSettled = true;
     });
-    scheduler.stop();
+    const stopping = scheduler.stopAndWait();
     await Promise.resolve();
     expect(activeSignal?.aborted).toBe(true);
     expect(activeSettled).toBe(false);
     rejectFirst(new Error('late rejection after stop'));
-    await active;
+    await Promise.all([active, stopping]);
     expect(activeSettled).toBe(true);
     intervals.scheduled[0]?.task();
     await Promise.resolve();

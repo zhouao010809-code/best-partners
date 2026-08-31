@@ -25,3 +25,7 @@ export interface VaultGateway {
   readRaw(path: string, signal?: AbortSignal): Promise<VersionedBytes>;
   readOpenApi(): Promise<string>;
 }
+
+export interface OpenableVaultGateway extends VaultGateway {
+  openInObsidian(path: string, signal?: AbortSignal): Promise<void>;
+}

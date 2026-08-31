@@ -1,4 +1,4 @@
-import type { VaultGateway, VaultCapabilityProfile, VersionedBytes } from './VaultGateway.js';
+import type { OpenableVaultGateway, VaultCapabilityProfile, VersionedBytes } from './VaultGateway.js';
 import { sha256Bytes } from './raw-bytes.js';
 
 export type FakeVaultFixture = string | Uint8Array | {
@@ -31,8 +31,9 @@ function normalizeFixture(fixture: FakeVaultFixture): StoredFixture {
   };
 }
 
-export class FakeVaultGateway implements VaultGateway {
+export class FakeVaultGateway implements OpenableVaultGateway {
   readonly rawReadPaths: string[] = [];
+  readonly openedPaths: string[] = [];
   private readonly fixtures = new Map<string, StoredFixture>();
   private readonly readFailures = new Map<string, Error>();
   private readonly malformedDirectoryEntries = new Map<string, string[]>();
@@ -85,6 +86,12 @@ export class FakeVaultGateway implements VaultGateway {
 
   async readOpenApi(): Promise<string> {
     return 'openapi: 3.0.0\n';
+  }
+
+  async openInObsidian(path: string, signal?: AbortSignal): Promise<void> {
+    assertNotAborted(signal);
+    if (!this.fixtures.has(path)) throw new Error(`FIXTURE_NOT_FOUND: ${path}`);
+    this.openedPaths.push(path);
   }
 
   mutateFixture(

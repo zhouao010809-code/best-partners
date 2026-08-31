@@ -330,7 +330,8 @@ describe('HTTP payload, CSP, and error containment', () => {
     expect(response.json()).toEqual({
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Request failed'
+        message: 'Request failed',
+        operationId: expect.stringMatching(/^[a-z0-9._:-]+$/i)
       }
     });
   });
@@ -347,7 +348,8 @@ describe('HTTP payload, CSP, and error containment', () => {
     expect(response.json()).toEqual({
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Request failed'
+        message: 'Request failed',
+        operationId: expect.stringMatching(/^[a-z0-9._:-]+$/i)
       }
     });
     for (const forbidden of [

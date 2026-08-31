@@ -1,4 +1,4 @@
-import type { VaultGateway, VersionedBytes, VaultCapabilityProfile } from './VaultGateway.js';
+import type { OpenableVaultGateway, VersionedBytes, VaultCapabilityProfile } from './VaultGateway.js';
 import { sha256Bytes } from './raw-bytes.js';
 import { AppError, ErrorCode } from '../../shared/api/errors.js';
 import { randomUUID } from 'node:crypto';
@@ -116,7 +116,7 @@ export class VaultGatewayConfigError extends AppError {
   }
 }
 
-export class LocalRest51Gateway implements VaultGateway {
+export class LocalRest51Gateway implements OpenableVaultGateway {
   private readonly baseUrl: string;
   private readonly apiKey: string;
 
@@ -206,6 +206,15 @@ export class LocalRest51Gateway implements VaultGateway {
   async readOpenApi(): Promise<string> {
     const response = await this.request(new URL('/openapi.yaml', this.baseUrl), 'application/yaml');
     return this.readBoundedText(response);
+  }
+
+  async openInObsidian(path: string, signal?: AbortSignal): Promise<void> {
+    const response = await this.request(
+      this.fileEndpoint('/open/', path),
+      'application/json',
+      signal
+    );
+    this.cancelBody(response);
   }
 
   private async request(
@@ -376,5 +385,24 @@ export class LocalRest51Gateway implements VaultGateway {
     }
     const encodedPath = segments.map((segment) => encodeURIComponent(segment)).join('/');
     return new URL(`/vault/${encodedPath}${directory ? '/' : ''}`, this.baseUrl);
+  }
+
+  private fileEndpoint(prefix: string, path: string): URL {
+    const segments = path.split('/');
+    if (
+      path.length === 0
+      || segments.some((segment) => (
+        segment.length === 0
+        || segment.startsWith('.')
+        || segment.includes('\\')
+        || segment.includes('\0')
+      ))
+    ) {
+      throw new AppError(ErrorCode.PathNotAllowed, 'PATH_NOT_ALLOWED');
+    }
+    return new URL(
+      `${prefix}${segments.map((segment) => encodeURIComponent(segment)).join('/')}`,
+      this.baseUrl
+    );
   }
 }

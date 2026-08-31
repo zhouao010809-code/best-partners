@@ -135,12 +135,12 @@ describe('SQLite state kernel', () => {
     }
   });
 
-  it('applies the exact initial schema once across repeated startup', () => {
+  it('applies the published initial schema and additive job migration once across repeated startup', () => {
     const input = makeRoots();
     const first = requireNormal(input);
 
     expect(first.db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
-      .toEqual({ count: 1 });
+      .toEqual({ count: 2 });
     const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
     expect(extractionColumns.map((column) => column.name)).toEqual([
       'id',
@@ -153,11 +153,24 @@ describe('SQLite state kernel', () => {
       'created_at',
       'updated_at'
     ]);
+    const indexJobColumns = first.db.pragma('table_info(index_jobs)') as Array<{ name: string }>;
+    expect(indexJobColumns.map((column) => column.name)).toEqual([
+      'id',
+      'operation_id',
+      'requested_index_version',
+      'result_index_version',
+      'status',
+      'progress_completed',
+      'progress_total',
+      'error_code',
+      'created_at',
+      'updated_at'
+    ]);
     first.close();
 
     const second = requireNormal(input);
     expect(second.db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
-      .toEqual({ count: 1 });
+      .toEqual({ count: 2 });
   });
 
   it('rejects a second active run for one material version but permits terminal history', () => {

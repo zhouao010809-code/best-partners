@@ -6,14 +6,17 @@ export interface Migration {
   readonly sql: string;
 }
 
-function initialMigrationPath(): URL {
-  const sourcePath = new URL('./migrations/001_initial.sql', import.meta.url);
+function bundledMigrationPath(filename: string): URL {
+  const sourcePath = new URL(`./migrations/${filename}`, import.meta.url);
   if (existsSync(sourcePath)) return sourcePath;
-  return new URL('./db/migrations/001_initial.sql', import.meta.url);
+  return new URL(`./db/migrations/${filename}`, import.meta.url);
 }
 
 function initialMigrations(): readonly Migration[] {
-  return [{ version: 1, sql: readFileSync(initialMigrationPath(), 'utf8') }];
+  return [
+    { version: 1, sql: readFileSync(bundledMigrationPath('001_initial.sql'), 'utf8') },
+    { version: 2, sql: readFileSync(bundledMigrationPath('002_read_api_jobs.sql'), 'utf8') }
+  ];
 }
 
 function migrationTableExists(db: Database.Database): boolean {

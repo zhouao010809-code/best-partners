@@ -21,6 +21,15 @@ const startup = vi.hoisted(() => {
   };
   const gateway = { name: 'gateway' };
   const healthService = { getSnapshot: vi.fn() };
+  const repository = { name: 'repository' };
+  const indexer = { version: 0, refresh: vi.fn() };
+  const indexState = { name: 'index-state' };
+  const indexScheduler = {
+    start: vi.fn(),
+    requestFocusRefresh: vi.fn(),
+    stopAndWait: vi.fn(),
+    snapshot: vi.fn()
+  };
   return {
     config,
     normalKernel,
@@ -30,6 +39,15 @@ const startup = vi.hoisted(() => {
     openStateKernel: vi.fn(),
     localRest51Gateway: vi.fn(),
     createHealthService: vi.fn(),
+    createIndexRepository: vi.fn(),
+    searchIndexer: vi.fn(),
+    indexStateController: vi.fn(),
+    indexSchedulerConstructor: vi.fn(),
+    loadPersistedIndexVersion: vi.fn(),
+    repository,
+    indexer,
+    indexState,
+    indexScheduler,
     buildServer: vi.fn(),
     addHook: vi.fn(),
     listen: vi.fn()
@@ -56,6 +74,38 @@ vi.mock('../../../src/server/services/health-service.js', () => ({
   createHealthService: startup.createHealthService
 }));
 
+vi.mock('../../../src/server/index/index-repository.js', () => ({
+  createIndexRepository: startup.createIndexRepository
+}));
+
+vi.mock('../../../src/server/index/SearchIndexer.js', () => ({
+  SearchIndexer: class {
+    constructor(...args: unknown[]) {
+      return startup.searchIndexer(...args);
+    }
+  }
+}));
+
+vi.mock('../../../src/server/index/index-state.js', () => ({
+  IndexStateController: class {
+    constructor(...args: unknown[]) {
+      return startup.indexStateController(...args);
+    }
+  }
+}));
+
+vi.mock('../../../src/server/index/index-scheduler.js', () => ({
+  IndexScheduler: class {
+    constructor(...args: unknown[]) {
+      return startup.indexSchedulerConstructor(...args);
+    }
+  }
+}));
+
+vi.mock('../../../src/server/services/index-job-service.js', () => ({
+  loadPersistedIndexVersion: startup.loadPersistedIndexVersion
+}));
+
 vi.mock('../../../src/server/app.js', () => ({
   buildServer: startup.buildServer
 }));
@@ -70,6 +120,15 @@ beforeEach(() => {
   startup.openStateKernel.mockReturnValue(startup.normalKernel);
   startup.localRest51Gateway.mockReturnValue(startup.gateway);
   startup.createHealthService.mockReturnValue(startup.healthService);
+  startup.createIndexRepository.mockReturnValue(startup.repository);
+  startup.searchIndexer.mockReturnValue(startup.indexer);
+  startup.indexStateController.mockReturnValue(startup.indexState);
+  startup.indexSchedulerConstructor.mockReturnValue(startup.indexScheduler);
+  startup.loadPersistedIndexVersion.mockReturnValue(4);
+  startup.indexer.version = 0;
+  startup.indexer.refresh.mockResolvedValue({ status: 'ready', checked: 1, total: 1, version: 5 });
+  startup.indexScheduler.requestFocusRefresh.mockResolvedValue(undefined);
+  startup.indexScheduler.stopAndWait.mockResolvedValue(undefined);
   startup.buildServer.mockReturnValue({
     addHook: startup.addHook,
     listen: startup.listen
@@ -125,19 +184,63 @@ describe('server listen boundary', () => {
       profileDirectory: '/tmp/xiaozhao-app-data/contract-profiles',
       stateKernel: startup.normalKernel
     });
-    expect(startup.buildServer).toHaveBeenCalledWith({ healthService: startup.healthService });
-    expect(startup.addHook).toHaveBeenCalledWith('onClose', expect.any(Function));
+    expect(startup.createIndexRepository).toHaveBeenCalledWith(startup.normalKernel.db);
+    expect(startup.loadPersistedIndexVersion).toHaveBeenCalledWith(startup.normalKernel.db, 0);
+    expect(startup.searchIndexer).toHaveBeenCalledWith({
+      gateway: startup.gateway,
+      repository: startup.repository,
+      maxRawReadsPerPoll: 50
+    });
+    expect(startup.indexer.version).toBe(4);
+    expect(startup.buildServer).toHaveBeenCalledWith({
+      healthService: startup.healthService,
+      onClose: expect.any(Function),
+      readApi: expect.objectContaining({
+        repository: startup.repository,
+        gateway: startup.gateway,
+        database: startup.normalKernel.db,
+        indexScheduler: startup.indexScheduler,
+        currentIndexVersion: expect.any(Function)
+      })
+    });
+    expect(startup.indexScheduler.start).toHaveBeenCalledOnce();
+    expect(startup.indexScheduler.requestFocusRefresh).toHaveBeenCalledOnce();
     expect(startup.listen).toHaveBeenCalledWith({ host: '127.0.0.1', port: 4317 });
   });
 
   it('closes a normal state kernel from the Fastify onClose lifecycle', async () => {
     await importServerEntrypoint();
-    const onClose = startup.addHook.mock.calls[0]?.[1] as (() => Promise<void>) | undefined;
+    const options = startup.buildServer.mock.calls[0]?.[0] as {
+      onClose?: () => Promise<void>;
+    } | undefined;
+    const onClose = options?.onClose;
 
     expect(onClose).toBeTypeOf('function');
     await onClose?.();
 
+    expect(startup.indexScheduler.stopAndWait).toHaveBeenCalledOnce();
     expect(startup.normalKernel.close).toHaveBeenCalledOnce();
+    expect(startup.indexScheduler.stopAndWait.mock.invocationCallOrder[0])
+      .toBeLessThan(startup.normalKernel.close.mock.invocationCallOrder[0]!);
+  });
+
+  it('keeps recovery-only startup read-safe without constructing index database dependencies', async () => {
+    startup.openStateKernel.mockReturnValueOnce({
+      mode: 'recovery-only',
+      reason: 'database-corrupt',
+      recovery: { entries: [], count: 0 }
+    });
+
+    await importServerEntrypoint();
+
+    expect(startup.createIndexRepository).not.toHaveBeenCalled();
+    expect(startup.searchIndexer).not.toHaveBeenCalled();
+    expect(startup.indexSchedulerConstructor).not.toHaveBeenCalled();
+    expect(startup.buildServer).toHaveBeenCalledWith({
+      healthService: startup.healthService,
+      onClose: expect.any(Function)
+    });
+    expect(startup.listen).toHaveBeenCalledWith({ host: '127.0.0.1', port: 4317 });
   });
 
   it('closes a normal state kernel when gateway construction fails', async () => {
@@ -155,7 +258,10 @@ describe('server listen boundary', () => {
     startup.listen.mockRejectedValueOnce(new Error('listen failed'));
 
     await expect(importServerEntrypoint()).rejects.toThrow('listen failed');
-    const onClose = startup.addHook.mock.calls[0]?.[1] as (() => Promise<void>) | undefined;
+    const options = startup.buildServer.mock.calls[0]?.[0] as {
+      onClose?: () => Promise<void>;
+    } | undefined;
+    const onClose = options?.onClose;
     await onClose?.();
 
     expect(startup.normalKernel.close).toHaveBeenCalledOnce();

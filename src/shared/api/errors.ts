@@ -18,3 +18,14 @@ export class AppError extends Error {
     super(message);
   }
 }
+
+export class PublicApiError extends AppError {
+  constructor(
+    code: string,
+    publicMessage: string,
+    statusCode = 400,
+    public readonly fields?: Readonly<Record<string, string>>
+  ) {
+    super(code, publicMessage, statusCode);
+  }
+}

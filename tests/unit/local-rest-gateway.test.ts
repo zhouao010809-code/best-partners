@@ -180,6 +180,25 @@ function expectGetRequests(calls: ReadonlyArray<PublicCall>, count: number): voi
 }
 
 describe('LocalRest51Gateway', () => {
+  it('opens an encoded note through the dedicated GET /open endpoint without a body write', async () => {
+    const fakeFetch = createFakeFetch([
+      () => new Response(null, { status: 200 })
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+
+    await gateway.openInObsidian('02知识库/中文 空格.md');
+
+    expect(fakeFetch.calls).toEqual([{
+      url: 'https://127.0.0.1:27124/open/02%E7%9F%A5%E8%AF%86%E5%BA%93/%E4%B8%AD%E6%96%87%20%E7%A9%BA%E6%A0%BC.md',
+      method: 'GET',
+      accept: 'application/json'
+    }]);
+  });
+
   it('preserves raw bytes and returns a coherent hash and version without exposing authorization', async () => {
     const note = new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x0d, 0x0a]);
     const documentMap = trackedStreamResponse(
