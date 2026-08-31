@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chmodSync,
   existsSync,
@@ -75,6 +75,39 @@ function insertRun(
 }
 
 describe('SQLite state kernel', () => {
+  it('reserves a new database as 0600 before SQLite opens it', async () => {
+    const input = makeRoots();
+    const databasePath = join(input.appDataDir, 'state.sqlite3');
+    let modeSeenBySqlite: number | undefined;
+    const previousUmask = process.umask(0);
+    try {
+      vi.resetModules();
+      vi.doMock('better-sqlite3', async (importOriginal) => {
+        const actual = await importOriginal<{ default: typeof Database }>();
+        const ActualDatabase = actual.default;
+        function ObservedDatabase(...args: ConstructorParameters<typeof Database>) {
+          if (args[0] === databasePath && existsSync(databasePath)) {
+            modeSeenBySqlite = mode(databasePath);
+          }
+          return Reflect.construct(ActualDatabase, args) as Database.Database;
+        }
+        Object.setPrototypeOf(ObservedDatabase, ActualDatabase);
+        ObservedDatabase.prototype = ActualDatabase.prototype;
+        return { default: ObservedDatabase };
+      });
+      const { openStateKernel: openIsolatedKernel } = await import('../../src/server/db/database.js');
+
+      const kernel = openIsolatedKernel(input);
+      if (kernel.mode === 'normal') normalKernels.push(kernel);
+
+      expect(modeSeenBySqlite).toBe(0o600);
+    } finally {
+      process.umask(previousUmask);
+      vi.doUnmock('better-sqlite3');
+      vi.resetModules();
+    }
+  });
+
   it('opens fixed external roots with restrictive modes and required pragmas', () => {
     const input = makeRoots();
     const databasePath = join(input.appDataDir, 'state.sqlite3');
@@ -267,6 +300,47 @@ describe('SQLite state kernel', () => {
     expect('path' in kernel).toBe(false);
     expect(readFileSync(databasePath)).toEqual(corruptBytes);
     expect(readdirSync(backupsDir)).toEqual(['preserve-me.txt']);
+  });
+
+  it('prioritizes corrupt main-database recovery over validating a corrupt old backup', () => {
+    const input = makeRoots();
+    const databasePath = join(input.appDataDir, 'state.sqlite3');
+    const backupsDir = join(input.appDataDir, 'backups');
+    const recoveryDir = join(input.appDataDir, 'recovery');
+    mkdirSync(backupsDir, { mode: 0o700 });
+    mkdirSync(recoveryDir, { mode: 0o700 });
+    mkdirSync(join(recoveryDir, 'pending-batch'), { mode: 0o700 });
+    const corruptDatabase = Buffer.from('corrupt main database\n'.repeat(16));
+    const corruptBackup = Buffer.from('corrupt old backup\n'.repeat(16));
+    const backupPath = join(backupsDir, 'state-existing.sqlite3');
+    writeFileSync(databasePath, corruptDatabase, { mode: 0o600 });
+    writeFileSync(backupPath, corruptBackup, { mode: 0o600 });
+
+    const kernel = openStateKernel(input);
+
+    expect(kernel).toEqual({
+      mode: 'recovery-only',
+      reason: 'database-corrupt',
+      recovery: { entries: ['pending-batch'], count: 1 }
+    });
+    expect('db' in kernel).toBe(false);
+    expect(readFileSync(databasePath)).toEqual(corruptDatabase);
+    expect(readFileSync(backupPath)).toEqual(corruptBackup);
+  });
+
+  it('still rejects a corrupt named backup when the main database is healthy', () => {
+    const input = makeRoots();
+    const databasePath = join(input.appDataDir, 'state.sqlite3');
+    const seed = new Database(databasePath);
+    seed.close();
+    const backupsDir = join(input.appDataDir, 'backups');
+    mkdirSync(backupsDir, { mode: 0o700 });
+    const backupPath = join(backupsDir, 'state-existing.sqlite3');
+    const corruptBackup = Buffer.from('corrupt old backup\n'.repeat(16));
+    writeFileSync(backupPath, corruptBackup, { mode: 0o600 });
+
+    expect(() => openStateKernel(input)).toThrow();
+    expect(readFileSync(backupPath)).toEqual(corruptBackup);
   });
 
   it.each(['state.sqlite3', 'backups', 'recovery'])(

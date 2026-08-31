@@ -5,6 +5,7 @@ import { assertBackupStoreSafe } from './backup.js';
 import { applyMigrations } from './migrate.js';
 import {
   assertStateRootOutsideVault,
+  createPrivateFileExclusive,
   ensurePrivateDirectory,
   secureExistingPrivateFile,
   secureSqliteFiles
@@ -73,12 +74,13 @@ export function openStateKernel(input: {
   const recoveryDir = join(input.appDataDir, 'recovery');
   ensurePrivateDirectory(backupsDir);
   ensurePrivateDirectory(recoveryDir);
-  assertBackupStoreSafe(backupsDir);
   const existed = secureExistingPrivateFile(path);
+  if (!existed) createPrivateFileExclusive(path);
   secureExistingPrivateFile(`${path}-wal`);
   secureExistingPrivateFile(`${path}-shm`);
 
   let db: Database.Database | undefined;
+  let validatingBackups = false;
   try {
     db = new Database(path);
     secureExistingPrivateFile(path);
@@ -86,6 +88,9 @@ export function openStateKernel(input: {
       db.close();
       return recoveryOnly(recoveryDir);
     }
+    validatingBackups = true;
+    assertBackupStoreSafe(backupsDir);
+    validatingBackups = false;
 
     if (db.pragma('journal_mode = WAL', { simple: true }) !== 'wal') {
       throw new Error('SQLite WAL mode unavailable');
@@ -116,7 +121,7 @@ export function openStateKernel(input: {
     };
   } catch (error) {
     if (db?.open) db.close();
-    if (isCorruptDatabaseError(error)) return recoveryOnly(recoveryDir);
+    if (!validatingBackups && isCorruptDatabaseError(error)) return recoveryOnly(recoveryDir);
     throw error;
   }
 }

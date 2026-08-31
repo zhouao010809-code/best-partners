@@ -142,6 +142,48 @@ export function secureExistingPrivateFile(path: string): boolean {
   return true;
 }
 
+export function createPrivateFileExclusive(path: string): void {
+  if (typeof constants.O_NOFOLLOW !== 'number' || constants.O_NOFOLLOW === 0) {
+    throw new Error('unsafe file: nofollow unavailable');
+  }
+  const descriptor = openSync(
+    path,
+    constants.O_CREAT
+      | constants.O_EXCL
+      | constants.O_RDWR
+      | constants.O_NOFOLLOW,
+    0o600
+  );
+  try {
+    const created = fstatSync(descriptor);
+    if (!created.isFile() || created.nlink !== 1) throw new Error('unsafe file');
+    fchmodSync(descriptor, 0o600);
+    const secured = fstatSync(descriptor);
+    if (
+      !secured.isFile()
+      || secured.nlink !== 1
+      || secured.dev !== created.dev
+      || secured.ino !== created.ino
+      || (secured.mode & 0o777) !== 0o600
+    ) {
+      throw new Error('unsafe file');
+    }
+    const atPath = lstatSync(path);
+    if (
+      atPath.isSymbolicLink()
+      || !atPath.isFile()
+      || atPath.nlink !== 1
+      || atPath.dev !== secured.dev
+      || atPath.ino !== secured.ino
+      || (atPath.mode & 0o777) !== 0o600
+    ) {
+      throw new Error('unsafe file');
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 export function secureSqliteFiles(databasePath: string): void {
   secureExistingPrivateFile(databasePath);
   secureExistingPrivateFile(`${databasePath}-wal`);
