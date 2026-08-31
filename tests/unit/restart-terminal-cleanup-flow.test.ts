@@ -15,6 +15,7 @@ import {
   buildRestartFailedProfile,
   buildRestartVerifiedProfile,
   cleanupFailureEvidenceReasonCode,
+  decideRestartVerifyPath,
   persistCleanupFailure,
   planRestartProfileActivation,
   recordRestartFailure,
@@ -260,5 +261,42 @@ describe('terminal restart failure and cleanup failure flow', () => {
       ]
     });
     expect(restartPendingCanResumeCleanup(pending, restartFailed, locator)).toBe(false);
+  });
+
+  it('fails before activation when a verified run has a locator that cannot resume', () => {
+    const { pending } = verifiedFixture();
+    const locator = {
+      ...pending,
+      cleanupStatus: 'failed' as const,
+      cleanupReasonCode: 'CLEANUP_TARGET_ALREADY_MISSING',
+      cleanupCheckedAt
+    };
+    const plan = vi.fn();
+    const mark = vi.fn();
+    const activate = vi.fn();
+
+    expect(() => {
+      if (decideRestartVerifyPath(pending, blockedProfile(), locator) === 'activate') {
+        plan();
+        mark();
+        activate();
+      }
+    }).toThrowError('RESTART_PROFILE_CONFLICT');
+    expect(plan).not.toHaveBeenCalled();
+    expect(mark).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it('allows rebase without a locator and completes locator-first cleanup profile persistence', () => {
+    const { pending, profile } = verifiedFixture();
+    const locator = {
+      ...pending,
+      cleanupStatus: 'failed' as const,
+      cleanupReasonCode: 'CLEANUP_TARGET_ALREADY_MISSING',
+      cleanupCheckedAt
+    };
+
+    expect(decideRestartVerifyPath(pending, blockedProfile(), undefined)).toBe('activate');
+    expect(decideRestartVerifyPath(pending, profile, locator)).toBe('cleanup');
   });
 });

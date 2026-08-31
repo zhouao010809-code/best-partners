@@ -28,11 +28,11 @@ import {
   activateVerifiedRestart,
   buildCleanupFailedProfile,
   buildRestartFailedProfile,
+  decideRestartVerifyPath,
   persistCleanupFailure,
   planRestartProfileActivation,
   recordRestartFailure,
-  restartFailedProfileMatches,
-  restartPendingCanResumeCleanup
+  restartFailedProfileMatches
 } from '../../helpers/restart-verify-flow.js';
 import {
   buildContractProfile,
@@ -136,9 +136,12 @@ describe('Local REST restart persistence verify', () => {
     ) {
       throw new Error('RESTART_PENDING_NOT_CURRENT');
     }
+    const verifyPath = pending.phase === 'restart-verified'
+      ? decideRestartVerifyPath(pending, initialProfileState.profile, priorCleanup)
+      : 'activate';
     if (
       pending.phase === 'restart-verified'
-      && restartPendingCanResumeCleanup(pending, initialProfileState.profile, priorCleanup)
+      && verifyPath === 'cleanup'
     ) {
       verifiedState = initialProfileState;
       verifiedPending = pending;

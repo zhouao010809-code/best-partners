@@ -214,6 +214,18 @@ export function restartPendingCanResumeCleanup(
   return computeContractProfileRevision(normalized) === pending.intendedProfileRevision;
 }
 
+export function decideRestartVerifyPath(
+  pending: RestartVerifiedPending,
+  profile: StoredContractProfile,
+  cleanupLocator: CleanupPending | undefined
+): 'cleanup' | 'activate' {
+  const canResume = restartPendingCanResumeCleanup(pending, profile, cleanupLocator);
+  if (cleanupLocator !== undefined && !canResume) {
+    throw new Error('RESTART_PROFILE_CONFLICT');
+  }
+  return canResume ? 'cleanup' : 'activate';
+}
+
 export function buildCleanupFailedProfile(
   profile: StoredContractProfile,
   pending: RestartVerifiedPending,
