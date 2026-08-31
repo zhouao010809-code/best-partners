@@ -13,6 +13,10 @@ type StoredFixture = {
 
 const encoder = new TextEncoder();
 
+function assertNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('VAULT_REQUEST_ABORTED');
+}
+
 function fixtureBytes(fixture: string | Uint8Array): Uint8Array {
   return typeof fixture === 'string' ? encoder.encode(fixture) : new Uint8Array(fixture);
 }
@@ -43,7 +47,8 @@ export class FakeVaultGateway implements VaultGateway {
     return { pluginId: 'fake-local-rest-api', pluginVersion: '5.1.0', obsidianVersion: '1.8.10' };
   }
 
-  async listDirectory(path: string): Promise<ReadonlyArray<string>> {
+  async listDirectory(path: string, signal?: AbortSignal): Promise<ReadonlyArray<string>> {
+    assertNotAborted(signal);
     const prefix = `${path.replace(/\/+$/, '')}/`;
     const entries = new Set<string>();
     for (const fixturePath of this.fixtures.keys()) {
@@ -59,7 +64,8 @@ export class FakeVaultGateway implements VaultGateway {
     ].sort();
   }
 
-  async readRaw(path: string): Promise<VersionedBytes> {
+  async readRaw(path: string, signal?: AbortSignal): Promise<VersionedBytes> {
+    assertNotAborted(signal);
     this.rawReadPaths.push(path);
     const failure = this.readFailures.get(path);
     if (failure !== undefined) {

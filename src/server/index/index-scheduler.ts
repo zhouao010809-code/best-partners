@@ -20,13 +20,13 @@ export type IndexSchedulerSnapshot = {
 export class IndexScheduler {
   private cancelInterval: (() => void) | undefined;
   private activeRefresh: Promise<void> | undefined;
-  private cancelActiveAttempt: (() => void) | undefined;
+  private activeAbortController: AbortController | undefined;
   private followUpRequested = false;
   private lastRefresh: IndexRefreshResult | undefined;
   private stopped = false;
 
   constructor(private readonly input: {
-    refresh: () => Promise<IndexRefreshResult>;
+    refresh: (signal: AbortSignal) => Promise<IndexRefreshResult>;
     state: IndexStateController;
     intervals: IntervalScheduler;
     deadlines: DeadlineScheduler;
@@ -45,7 +45,7 @@ export class IndexScheduler {
     this.followUpRequested = false;
     this.cancelInterval?.();
     this.cancelInterval = undefined;
-    this.cancelActiveAttempt?.();
+    this.activeAbortController?.abort(new Error('INDEX_REFRESH_STOPPED'));
   }
 
   requestFocusRefresh(): Promise<void> {
@@ -82,48 +82,40 @@ export class IndexScheduler {
   }
 
   private async runOneRefresh(): Promise<void> {
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      let cancelDeadline = (): void => {};
-      let cancelAttempt = (): void => {};
-      const finish = (update?: () => void): void => {
-        if (settled) return;
-        settled = true;
-        cancelDeadline();
-        if (this.cancelActiveAttempt === cancelAttempt) this.cancelActiveAttempt = undefined;
-        if (!this.stopped) update?.();
-        resolve();
-      };
-      cancelAttempt = () => finish();
-      this.cancelActiveAttempt = cancelAttempt;
-      cancelDeadline = this.input.deadlines.after(INDEX_REFRESH_DEADLINE_MS, () => {
-        finish(() => {
-          this.input.state.recordFailure('INDEX_REFRESH_TIMEOUT', this.input.now());
-        });
-      });
+    const controller = new AbortController();
+    this.activeAbortController = controller;
+    let timedOut = false;
+    let cancelDeadline = (): void => {};
 
-      let refresh: Promise<IndexRefreshResult>;
+    try {
+      cancelDeadline = this.input.deadlines.after(INDEX_REFRESH_DEADLINE_MS, () => {
+        if (this.stopped || controller.signal.aborted) return;
+        timedOut = true;
+        this.input.state.recordFailure('INDEX_REFRESH_TIMEOUT', this.input.now());
+        controller.abort(new Error('INDEX_REFRESH_TIMEOUT'));
+      });
+      let result: IndexRefreshResult;
       try {
-        refresh = this.input.refresh();
+        result = await this.input.refresh(controller.signal);
       } catch (error) {
-        finish(() => {
+        if (!this.stopped && !timedOut && !controller.signal.aborted) {
           const reason = error instanceof Error ? error.message : 'INDEX_REFRESH_FAILED';
           this.input.state.recordFailure(reason, this.input.now());
-        });
+        }
         return;
       }
-      refresh.then(
-        (result) => finish(() => {
-          this.lastRefresh = { ...result };
-          if (result.status === 'ready') {
-            this.input.state.recordSuccess(result.version, this.input.now());
-          }
-        }),
-        (error: unknown) => finish(() => {
-          const reason = error instanceof Error ? error.message : 'INDEX_REFRESH_FAILED';
-          this.input.state.recordFailure(reason, this.input.now());
-        })
-      );
-    });
+
+      if (this.stopped || timedOut || controller.signal.aborted) return;
+      this.lastRefresh = { ...result };
+      if (result.status === 'ready') {
+        this.input.state.recordSuccess(result.version, this.input.now());
+      }
+    } finally {
+      try {
+        cancelDeadline();
+      } finally {
+        if (this.activeAbortController === controller) this.activeAbortController = undefined;
+      }
+    }
   }
 }

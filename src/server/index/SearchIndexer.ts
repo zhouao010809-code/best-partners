@@ -75,10 +75,16 @@ function samePaths(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((path, index) => path === right[index]);
 }
 
+function assertNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('INDEX_REFRESH_ABORTED');
+}
+
 export class SearchIndexer {
   version = 0;
   private stagedScan: StagedScan | undefined;
   private committedManifestSha256: string | undefined;
+  private activeRefreshGeneration: number | undefined;
+  private nextRefreshGeneration = 0;
   private readonly gateway: VaultGateway;
   private readonly repository: IndexRepository;
   private readonly maxRawReadsPerPoll: number;
@@ -96,16 +102,24 @@ export class SearchIndexer {
     this.maxRawReadsPerPoll = input.maxRawReadsPerPoll;
   }
 
-  async refresh(): Promise<IndexRefreshResult> {
+  async refresh(signal?: AbortSignal): Promise<IndexRefreshResult> {
+    if (this.activeRefreshGeneration !== undefined) {
+      throw new Error('INDEX_REFRESH_ALREADY_RUNNING');
+    }
+    const generation = this.nextRefreshGeneration + 1;
+    this.nextRefreshGeneration = generation;
+    this.activeRefreshGeneration = generation;
     try {
+      assertNotAborted(signal);
       if (this.stagedScan === undefined) {
         this.stagedScan = {
-          paths: await this.listAllowedMarkdown(),
+          paths: await this.listAllowedMarkdown(signal),
           files: [],
           issues: [],
           manifestEntries: [],
           cursor: 0
         };
+        assertNotAborted(signal);
       }
 
       const scan = this.stagedScan;
@@ -113,7 +127,8 @@ export class SearchIndexer {
       while (scan.cursor < end) {
         const path = scan.paths[scan.cursor];
         if (path === undefined) throw new Error('INDEX_SCAN_CURSOR_INVALID');
-        await this.stageFile(scan, path);
+        await this.stageFile(scan, path, signal);
+        assertNotAborted(signal);
         scan.cursor += 1;
       }
 
@@ -126,7 +141,8 @@ export class SearchIndexer {
         };
       }
 
-      const currentPaths = await this.listAllowedMarkdown();
+      const currentPaths = await this.listAllowedMarkdown(signal);
+      assertNotAborted(signal);
       if (!samePaths(scan.paths, currentPaths)) {
         this.stagedScan = {
           paths: currentPaths,
@@ -146,6 +162,7 @@ export class SearchIndexer {
       const manifestSha256 = createHash('sha256')
         .update(canonicalJson(scan.manifestEntries), 'utf8')
         .digest('hex');
+      assertNotAborted(signal);
       const projectionChanged = this.repository.applyBatch({ files: scan.files, issues: scan.issues });
       if (
         this.version === 0
@@ -164,19 +181,32 @@ export class SearchIndexer {
       this.stagedScan = undefined;
       return result;
     } catch (error) {
-      this.stagedScan = undefined;
+      if (this.activeRefreshGeneration === generation) this.stagedScan = undefined;
+      if (signal?.aborted) throw new Error('INDEX_REFRESH_ABORTED');
       throw error;
+    } finally {
+      if (this.activeRefreshGeneration === generation) {
+        this.activeRefreshGeneration = undefined;
+      }
     }
   }
 
-  private async listAllowedMarkdown(): Promise<string[]> {
+  private async listAllowedMarkdown(signal?: AbortSignal): Promise<string[]> {
     const paths: string[] = [];
-    for (const root of INDEX_ROOTS) await this.walkDirectory(root, paths);
+    for (const root of INDEX_ROOTS) {
+      await this.walkDirectory(root, paths, signal);
+      assertNotAborted(signal);
+    }
     return [...new Set(paths)].sort();
   }
 
-  private async walkDirectory(directory: string, paths: string[]): Promise<void> {
-    const entries = await this.gateway.listDirectory(directory);
+  private async walkDirectory(
+    directory: string,
+    paths: string[],
+    signal?: AbortSignal
+  ): Promise<void> {
+    const entries = await this.gateway.listDirectory(directory, signal);
+    assertNotAborted(signal);
     const seenEntries = new Set<string>();
     for (const entry of entries) {
       if (seenEntries.has(entry)) throw new Error('MALFORMED_DIRECTORY_ENTRY');
@@ -185,23 +215,32 @@ export class SearchIndexer {
       if (isHiddenSegment(direct.name)) continue;
       const path = `${directory}/${direct.name}`;
       if (direct.directory) {
-        await this.walkDirectory(path, paths);
+        await this.walkDirectory(path, paths, signal);
+        assertNotAborted(signal);
       } else if (direct.name.endsWith('.md')) {
         paths.push(path);
       }
     }
   }
 
-  private async stageFile(scan: StagedScan, path: string): Promise<void> {
-    const raw = await this.gateway.readRaw(path);
+  private async stageFile(
+    scan: StagedScan,
+    path: string,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const raw = await this.gateway.readRaw(path, signal);
+    assertNotAborted(signal);
     assertRawResponse(path, raw);
     const root = rootForPath(path);
     if (root === '01图书馆') {
       const parsed = parseLibraryNote(raw.bytes, path, raw.upstreamVersion);
       if (parsed.record !== undefined) {
+        assertNotAborted(signal);
         scan.files.push({ kind: 'material', record: parsed.record });
       }
+      assertNotAborted(signal);
       scan.issues.push(...parsed.issues);
+      assertNotAborted(signal);
       scan.manifestEntries.push({
         path,
         rawSha256: raw.rawSha256,
@@ -215,9 +254,12 @@ export class SearchIndexer {
 
     const parsed = parseKnowledgeNote(raw.bytes, path, raw.upstreamVersion);
     if (parsed.record !== undefined) {
+      assertNotAborted(signal);
       scan.files.push({ kind: 'knowledge', record: parsed.record });
     }
+    assertNotAborted(signal);
     scan.issues.push(...parsed.issues);
+    assertNotAborted(signal);
     scan.manifestEntries.push({
       path,
       rawSha256: raw.rawSha256,

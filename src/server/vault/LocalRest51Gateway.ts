@@ -158,8 +158,12 @@ export class LocalRest51Gateway implements VaultGateway {
     };
   }
 
-  async listDirectory(path: string): Promise<ReadonlyArray<string>> {
-    const response = await this.request(this.vaultEndpoint(path, true), 'application/json');
+  async listDirectory(path: string, signal?: AbortSignal): Promise<ReadonlyArray<string>> {
+    const response = await this.request(
+      this.vaultEndpoint(path, true),
+      'application/json',
+      signal
+    );
     const payload = await this.readBoundedJson(response);
     if (!isDirectoryPayload(payload)) {
       throw new VaultResponseShapeError(this.publicOperationId(response));
@@ -167,18 +171,22 @@ export class LocalRest51Gateway implements VaultGateway {
     return Object.freeze([...payload.files]);
   }
 
-  async readRaw(path: string): Promise<VersionedBytes> {
+  async readRaw(path: string, signal?: AbortSignal): Promise<VersionedBytes> {
     const endpoint = this.vaultEndpoint(path);
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const first = await this.request(endpoint, 'text/markdown');
+      const first = await this.request(endpoint, 'text/markdown', signal);
       const firstBytes = await this.readBoundedBytes(first);
       const firstSha256 = sha256Bytes(firstBytes);
-      const documentMapResponse = await this.request(endpoint, 'application/vnd.olrapi.document-map+json');
+      const documentMapResponse = await this.request(
+        endpoint,
+        'application/vnd.olrapi.document-map+json',
+        signal
+      );
       const documentMap = await this.readBoundedJson(documentMapResponse);
       if (!isDocumentMapPayload(documentMap)) {
         throw new VaultResponseShapeError(this.publicOperationId(documentMapResponse));
       }
-      const second = await this.request(endpoint, 'text/markdown');
+      const second = await this.request(endpoint, 'text/markdown', signal);
       const secondBytes = await this.readBoundedBytes(second);
       const secondSha256 = sha256Bytes(secondBytes);
 
@@ -200,7 +208,12 @@ export class LocalRest51Gateway implements VaultGateway {
     return this.readBoundedText(response);
   }
 
-  private async request(endpoint: URL, accept: string): Promise<Response> {
+  private async request(
+    endpoint: URL,
+    accept: string,
+    signal?: AbortSignal
+  ): Promise<Response> {
+    if (signal?.aborted) throw new Error('VAULT_REQUEST_ABORTED');
     let response: Response;
     try {
       response = await this.fetchImplementation(endpoint, {
@@ -208,9 +221,11 @@ export class LocalRest51Gateway implements VaultGateway {
         headers: {
           Accept: accept,
           Authorization: `Bearer ${this.apiKey}`
-        }
+        },
+        ...(signal === undefined ? {} : { signal })
       });
     } catch {
+      if (signal?.aborted) throw new Error('VAULT_REQUEST_ABORTED');
       throw new VaultGatewayTransportError(this.generatedOperationId());
     }
     if (!response.ok) {

@@ -21,7 +21,7 @@ export type VaultCapabilityProfile = {
 
 export interface VaultGateway {
   fingerprint(): Promise<Pick<VaultCapabilityProfile, 'pluginId' | 'pluginVersion' | 'obsidianVersion'>>;
-  listDirectory(path: string): Promise<ReadonlyArray<string>>;
-  readRaw(path: string): Promise<VersionedBytes>;
+  listDirectory(path: string, signal?: AbortSignal): Promise<ReadonlyArray<string>>;
+  readRaw(path: string, signal?: AbortSignal): Promise<VersionedBytes>;
   readOpenApi(): Promise<string>;
 }

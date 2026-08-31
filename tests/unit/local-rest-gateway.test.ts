@@ -26,9 +26,11 @@ const fingerprintPayload = {
 
 function createFakeFetch(responseFactories: ReadonlyArray<ResponseFactory>) {
   const calls: PublicCall[] = [];
+  const signals: Array<AbortSignal | null> = [];
   let sawAuthorization = false;
 
   const fetchImplementation: FetchImplementation = async (input, init) => {
+    signals.push(init?.signal ?? null);
     const request = new Request(input, init);
     if (request.headers.get('authorization') !== 'Bearer test-api-key') {
       throw new Error('missing expected test authorization');
@@ -52,6 +54,7 @@ function createFakeFetch(responseFactories: ReadonlyArray<ResponseFactory>) {
   return {
     fetchImplementation,
     calls,
+    signals,
     lastAuthorization: () => sawAuthorization ? '[redacted]' : undefined
   };
 }
@@ -369,6 +372,32 @@ describe('LocalRest51Gateway', () => {
       accept: 'application/json'
     };
     expect(fakeFetch.calls).toEqual([expectedCall, expectedCall]);
+  });
+
+  it('forwards caller cancellation to directory and every raw-read fetch', async () => {
+    const note = new TextEncoder().encode('stable note');
+    const fakeFetch = createFakeFetch([
+      () => Response.json({ files: ['a.md'] }),
+      () => rawResponse(note),
+      () => documentMapResponse('abortable-version'),
+      () => rawResponse(note)
+    ]);
+    const gateway = new LocalRest51Gateway(
+      'https://127.0.0.1:27124',
+      'test-api-key',
+      fakeFetch.fetchImplementation
+    );
+    const controller = new AbortController();
+
+    await gateway.listDirectory('01图书馆', controller.signal);
+    await gateway.readRaw('01图书馆/a.md', controller.signal);
+
+    expect(fakeFetch.signals).toEqual([
+      controller.signal,
+      controller.signal,
+      controller.signal,
+      controller.signal
+    ]);
   });
 
   it.each([

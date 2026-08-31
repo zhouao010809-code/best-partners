@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { IndexRefreshResult } from '../../src/server/index/SearchIndexer.js';
 import {
   INDEX_STALE_AFTER_FAILURES,
   INDEX_STALE_AFTER_MS,
@@ -249,15 +250,29 @@ describe('IndexScheduler', () => {
     expect(scheduler.snapshot().state).toMatchObject({ status: 'ready', version: 2 });
   });
 
-  it('times out an initial hung poll as failed and releases single-flight for the next refresh', async () => {
+  it('aborts a timed-out poll but waits for its side effects to settle before starting the queued refresh', async () => {
     const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
     const deadlines = new FakeDeadlines();
-    const never = new Promise<never>(() => {});
+    let settleFirst!: () => void;
+    let firstSignal: AbortSignal | undefined;
     let refreshes = 0;
+    let concurrent = 0;
+    let maxConcurrent = 0;
     const scheduler = new IndexScheduler({
-      refresh: async () => {
+      refresh: async (signal?: AbortSignal) => {
         refreshes += 1;
-        if (refreshes === 1) return never;
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        if (refreshes === 1) {
+          firstSignal = signal;
+          return new Promise<IndexRefreshResult>((resolve) => {
+            settleFirst = () => {
+              concurrent -= 1;
+              resolve({ status: 'ready', checked: 99, total: 99, version: 99 });
+            };
+          });
+        }
+        concurrent -= 1;
         return { status: 'ready' as const, checked: 1, total: 1, version: 1 };
       },
       state: new IndexStateController(clock.now),
@@ -272,14 +287,20 @@ describe('IndexScheduler', () => {
     expect(deadlines.scheduled[0]?.milliseconds).toBe(60_000);
     clock.advance(60_000);
     deadlines.fireNext();
-    await hung;
+    const queued = scheduler.refreshNow();
+    await Promise.resolve();
+    expect(firstSignal?.aborted).toBe(true);
     expect(scheduler.snapshot().state).toEqual({
       status: 'failed',
       reason: 'INDEX_REFRESH_TIMEOUT'
     });
+    expect(refreshes).toBe(1);
+    expect(maxConcurrent).toBe(1);
 
-    await scheduler.refreshNow();
+    settleFirst();
+    await Promise.all([hung, queued]);
     expect(refreshes).toBe(2);
+    expect(maxConcurrent).toBe(1);
     expect(scheduler.snapshot().state).toMatchObject({ status: 'ready', version: 1 });
   });
 
@@ -287,11 +308,15 @@ describe('IndexScheduler', () => {
     const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
     const deadlines = new FakeDeadlines();
     let hang = false;
-    const never = new Promise<never>(() => {});
+    let hungSignal: AbortSignal | undefined;
     const scheduler = new IndexScheduler({
-      refresh: async () => hang
-        ? never
-        : { status: 'ready' as const, checked: 1, total: 1, version: 8 },
+      refresh: async (signal?: AbortSignal) => {
+        if (!hang) return { status: 'ready' as const, checked: 1, total: 1, version: 8 };
+        hungSignal = signal;
+        return new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted hung poll')), { once: true });
+        });
+      },
       state: new IndexStateController(clock.now),
       intervals: new FakeIntervals(),
       deadlines,
@@ -307,6 +332,7 @@ describe('IndexScheduler', () => {
     clock.advance(1);
     deadlines.fireNext();
     await hung;
+    expect(hungSignal?.aborted).toBe(true);
     expect(scheduler.snapshot().state).toEqual({
       status: 'stale',
       version: 8,
@@ -320,14 +346,18 @@ describe('IndexScheduler', () => {
     const intervals = new FakeIntervals();
     const deadlines = new FakeDeadlines();
     let rejectFirst!: (error: Error) => void;
+    let activeSignal: AbortSignal | undefined;
     const deferred = new Promise<never>((_resolve, reject) => {
       rejectFirst = reject;
     });
     let refreshes = 0;
     const scheduler = new IndexScheduler({
-      refresh: async () => {
+      refresh: async (signal?: AbortSignal) => {
         refreshes += 1;
-        if (refreshes === 1) return deferred;
+        if (refreshes === 1) {
+          activeSignal = signal;
+          return deferred;
+        }
         return { status: 'ready' as const, checked: 1, total: 1, version: refreshes };
       },
       state: new IndexStateController(clock.now),
@@ -346,10 +376,12 @@ describe('IndexScheduler', () => {
       activeSettled = true;
     });
     scheduler.stop();
+    await Promise.resolve();
+    expect(activeSignal?.aborted).toBe(true);
+    expect(activeSettled).toBe(false);
+    rejectFirst(new Error('late rejection after stop'));
     await active;
     expect(activeSettled).toBe(true);
-    rejectFirst(new Error('late rejection after stop'));
-    await Promise.resolve();
     intervals.scheduled[0]?.task();
     await Promise.resolve();
 

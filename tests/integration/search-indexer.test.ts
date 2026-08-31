@@ -315,6 +315,48 @@ describe('SearchIndexer', () => {
     ]);
   });
 
+  it('aborts a deferred raw read without publishing late bytes or allowing a concurrent refresh', async () => {
+    const gateway = new FakeVaultGateway({
+      '01图书馆/资料.md': materialNote({ title: '资料' })
+    });
+    const originalReadRaw = gateway.readRaw.bind(gateway);
+    let announceStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      announceStarted = resolve;
+    });
+    let releaseRead!: () => void;
+    const deferred = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    gateway.readRaw = async (path: string, _signal?: AbortSignal) => {
+      const raw = await originalReadRaw(path);
+      announceStarted();
+      await deferred;
+      return raw;
+    };
+    const { repository } = createRepository();
+    const indexer = new SearchIndexer({ gateway, repository, maxRawReadsPerPoll: 20 });
+    const controller = new AbortController();
+
+    const refresh = indexer.refresh(controller.signal);
+    await started;
+    controller.abort(new Error('test abort'));
+    const concurrent = indexer.refresh();
+    expect(repository.listMaterials({}).total).toBe(0);
+    expect(indexer.version).toBe(0);
+
+    const concurrentAssertion = expect(concurrent).rejects.toThrow('INDEX_REFRESH_ALREADY_RUNNING');
+    const abortedAssertion = expect(refresh).rejects.toThrow('INDEX_REFRESH_ABORTED');
+    releaseRead();
+    await Promise.all([concurrentAssertion, abortedAssertion]);
+    expect(repository.listMaterials({}).total).toBe(0);
+    expect(indexer.version).toBe(0);
+
+    await expect(indexer.refresh()).resolves.toMatchObject({ status: 'ready', version: 1 });
+    expect(repository.listMaterials({}).items.map((record) => record.path))
+      .toEqual(['01图书馆/资料.md']);
+  });
+
   it('fails the whole scan on malformed direct directory entries without publishing staged rows', async () => {
     const gateway = new FakeVaultGateway({
       '01图书馆/资料.md': materialNote({ title: '资料' })
