@@ -63,6 +63,8 @@ describe('API client boundary', () => {
   });
 
   it.each([
+    ['READ_API_UNAVAILABLE', 'recovery-required'],
+    ['VALIDATION_ERROR', 'validation-error'],
     ['VERSION_CONFLICT', 'conflict'],
     ['IDEMPOTENCY_CONFLICT', 'conflict'],
     ['INDEX_BUSY', 'busy'],

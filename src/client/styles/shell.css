@@ -147,6 +147,11 @@
   background: rgba(255, 255, 255, 0.025);
 }
 
+.nav-item:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
 .nav-item--active {
   border-color: var(--border-muted);
   color: var(--text-primary);
@@ -833,7 +838,7 @@
 
 .page-state__icon svg { width: 16px; height: 16px; }
 
-.page-state[aria-busy="true"] .page-state__icon svg {
+.page-state[data-busy="true"] .page-state__icon svg {
   animation: state-spin 1.6s linear infinite;
 }
 
@@ -1034,6 +1039,15 @@
 
 .safe-markdown__rejected-link {
   color: inherit;
+}
+
+.safe-markdown__image-alt {
+  color: var(--text-muted);
+}
+
+.safe-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .safe-markdown table {

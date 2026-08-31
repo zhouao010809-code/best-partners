@@ -36,7 +36,10 @@ function validationFailure(message: string): ApiClientResult<never> {
 function failureStatus(code: string): ClientFailureStatus {
   switch (code) {
     case 'RECOVERY_REQUIRED':
+    case 'READ_API_UNAVAILABLE':
       return 'recovery-required';
+    case 'VALIDATION_ERROR':
+      return 'validation-error';
     case 'INDEX_BUSY':
       return 'busy';
     case 'VERSION_CONFLICT':

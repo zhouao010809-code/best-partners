@@ -140,7 +140,8 @@ export function PageState({ state }: PageStateProps) {
       className={`page-state page-state--${configuration.tone}`}
       role={configuration.role}
       aria-live={configuration.role === 'alert' ? 'assertive' : 'polite'}
-      aria-busy={configuration.busy ? 'true' : undefined}
+      aria-atomic="true"
+      data-busy={configuration.busy ? 'true' : undefined}
     >
       <span className="page-state__icon">
         <Icon role="img" aria-label={`${configuration.label}图标`} />

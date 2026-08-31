@@ -162,7 +162,7 @@ export function AppShell() {
           </div>
         </header>
 
-        <main id="main-content" className="main-content">
+        <main id="main-content" className="main-content" tabIndex={-1}>
           <header className="page-heading">
             <div>
               <p className="page-heading__eyebrow">{identity.eyebrow}</p>

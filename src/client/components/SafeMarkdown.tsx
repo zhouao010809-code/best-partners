@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -41,8 +41,23 @@ function SafeLink({
   );
 }
 
+function SafeImage({ alt }: ComponentPropsWithoutRef<'img'>) {
+  return <span className="safe-markdown__image-alt">{alt || '图片'}</span>;
+}
+
+function SafeTableHeader({ children }: ComponentPropsWithoutRef<'th'>) {
+  return <th>{children}</th>;
+}
+
+function SafeTableCell({ children }: ComponentPropsWithoutRef<'td'>) {
+  return <td>{children}</td>;
+}
+
 const SAFE_COMPONENTS: Components = {
-  a: SafeLink
+  a: SafeLink,
+  img: SafeImage,
+  th: SafeTableHeader,
+  td: SafeTableCell
 };
 
 const SAFE_REMARK_PLUGINS = [remarkGfm];

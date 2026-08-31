@@ -32,6 +32,7 @@ describe('black-glass application shell', () => {
     expect(screen.getByRole('complementary', { name: '小兆大脑侧边栏' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '主导航' })).toBeInTheDocument();
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+    expect(screen.getByRole('main')).toHaveAttribute('tabindex', '-1');
   });
 
   it('contains five and only five main navigation destinations', () => {
@@ -131,8 +132,19 @@ describe('complete page state system', () => {
 
     const status = screen.getByRole('status');
     expect(status).toHaveAttribute('aria-live', 'polite');
-    expect(status).toHaveAttribute('aria-busy', 'true');
+    expect(status).toHaveAttribute('aria-atomic', 'true');
+    expect(status).not.toHaveAttribute('aria-busy');
+    expect(status).toHaveAttribute('data-busy', 'true');
     expect(status).toHaveTextContent('索引任务正在执行');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('announces loading without marking the live region permanently busy', () => {
+    render(<PageState state={{ status: 'loading' }} />);
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).not.toHaveAttribute('aria-busy');
+    expect(status).toHaveAttribute('data-busy', 'true');
   });
 });

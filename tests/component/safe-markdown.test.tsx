@@ -73,4 +73,36 @@ describe('SafeMarkdown', () => {
     expect(screen.getByRole('table')).toBeInTheDocument();
     expect(screen.getByRole('checkbox')).toBeChecked();
   });
+
+  it('renders every Markdown image as visible alt text without a resource element', () => {
+    const markdown = [
+      '![同源图](/assets/local.png)',
+      '![外域图](https://tracker.invalid/pixel.png)',
+      '![数据图](data:image/png;base64,iVBORw0KGgo=)',
+      '![SVG 图](https://tracker.invalid/vector.svg)'
+    ].join('\n\n');
+
+    const { container } = render(<SafeMarkdown>{markdown}</SafeMarkdown>);
+
+    for (const alt of ['同源图', '外域图', '数据图', 'SVG 图']) {
+      expect(screen.getByText(alt)).toBeVisible();
+    }
+    expect(container.querySelector('img, picture, source, link[rel="preload"]')).toBeNull();
+    expect(container.innerHTML).not.toContain('tracker.invalid');
+    expect(container.innerHTML).not.toContain('data:image');
+  });
+
+  it('drops GFM alignment styles and attributes from table cells', () => {
+    const markdown = [
+      '| 左 | 中 | 右 |',
+      '| :--- | :---: | ---: |',
+      '| A | B | C |'
+    ].join('\n');
+
+    const { container } = render(<SafeMarkdown>{markdown}</SafeMarkdown>);
+
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(container.querySelectorAll('[style]')).toHaveLength(0);
+    expect(container.querySelectorAll('th[align], td[align]')).toHaveLength(0);
+  });
 });
