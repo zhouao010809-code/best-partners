@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const fixturePath = '/tests/e2e/fixtures/material-deck.html';
+const fixturePath = 'http://127.0.0.1:41793/tests/e2e/fixtures/material-deck.html';
 const viewports = [
   { name: '1440x820', width: 1440, height: 820 },
   { name: '1280x800', width: 1280, height: 800 },
