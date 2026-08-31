@@ -11,7 +11,11 @@ describe('GET /api/v1/health', () => {
   it('returns a versioned boot snapshot', async () => {
     const server = buildServer();
     servers.push(server);
-    const response = await server.inject({ method: 'GET', url: '/api/v1/health' });
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/v1/health',
+      headers: { host: '127.0.0.1:4317' }
+    });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       data: {
