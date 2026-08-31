@@ -1,0 +1,52 @@
+:root {
+  color-scheme: dark;
+
+  --surface-void: #030404;
+  --surface-base: #070909;
+  --surface-raised: #0c0f0f;
+  --surface-panel: #101313;
+  --surface-control: #141818;
+  --surface-glass: rgba(19, 23, 23, 0.76);
+
+  --border-hairline: rgba(225, 235, 232, 0.11);
+  --border-muted: rgba(225, 235, 232, 0.17);
+  --border-strong: rgba(235, 244, 241, 0.28);
+  --border-highlight: rgba(255, 255, 255, 0.44);
+
+  --text-primary: #f2f6f4;
+  --text-secondary: #aeb8b4;
+  --text-muted: #717b77;
+  --text-faint: #505955;
+
+  --accent-primary: #4cf28b;
+  --status-amber: #f0ad4e;
+  --status-red: #ff6269;
+  --status-blue: #60a8ff;
+
+  --shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.42);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --focus-ring: 0 0 0 2px var(--surface-void), 0 0 0 4px var(--accent-primary);
+
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  --font-display: "Avenir Next Condensed", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-body: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 22px;
+}

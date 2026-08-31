@@ -5,9 +5,10 @@ import { describe, expect, it } from 'vitest';
 import App from '../../src/client/App.js';
 
 describe('App', () => {
-  it('names the product and reports safe initialization', () => {
+  it('opens the local read-only workspace', () => {
     render(<App />);
-    expect(screen.getByRole('heading', { name: '小兆大脑' })).toBeInTheDocument();
-    expect(screen.getByText('安全初始化中')).toBeInTheDocument();
+    expect(screen.getByLabelText('小兆大脑')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '大脑总览' })).toBeInTheDocument();
+    expect(screen.getByLabelText('当前模式：只读')).toBeInTheDocument();
   });
 });

@@ -1,8 +1,10 @@
+import { BrowserRouter } from 'react-router-dom';
+import { AppRouter } from './app/router.js';
+
 export default function App() {
   return (
-    <main>
-      <h1>小兆大脑</h1>
-      <p>安全初始化中</p>
-    </main>
+    <BrowserRouter>
+      <AppRouter />
+    </BrowserRouter>
   );
 }
