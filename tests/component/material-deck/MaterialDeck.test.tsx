@@ -49,6 +49,7 @@ describe('MaterialDeck interactions', () => {
     vi.useRealTimers();
     cleanup();
     nonceMeta.remove();
+    vi.restoreAllMocks();
   });
 
   it('renders ordered silver-card summaries with persistent textual status badges', () => {
@@ -67,6 +68,36 @@ describe('MaterialDeck interactions', () => {
     expect(screen.getAllByText('部分入库')).toHaveLength(1);
     expect(container.querySelectorAll('[data-card-mode="collapsed"]')).toHaveLength(3);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('fails closed before duplicate keys can create two tab stops or dialogs', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const cards = [
+      makeCard(1),
+      makeCard(2, { key: 'material-1' })
+    ];
+    let thrown: unknown;
+    let rendered: ReturnType<typeof render> | undefined;
+
+    try {
+      rendered = render(<MaterialDeck cards={cards} onPrimaryAction={vi.fn()} />);
+    } catch (error) {
+      thrown = error;
+    }
+
+    const host = rendered?.container ?? document.body;
+    const initialTabStops = host.querySelectorAll(
+      '[data-material-card-trigger][tabindex="0"]'
+    ).length;
+    const firstTrigger = host.querySelector<HTMLButtonElement>('[data-material-card-trigger]');
+    if (firstTrigger) fireEvent.click(firstTrigger);
+
+    expect.soft(thrown).toBeInstanceOf(Error);
+    expect.soft((thrown as Error | undefined)?.message).toBe(
+      'DUPLICATE_MATERIAL_DECK_KEY'
+    );
+    expect.soft(initialTabStops).toBe(0);
+    expect.soft(host.querySelectorAll('[role="dialog"]')).toHaveLength(0);
   });
 
   it('uses one local roving tab stop and clamps arrow navigation at both edges', async () => {
@@ -135,6 +166,15 @@ describe('MaterialDeck interactions', () => {
     expect(onPrimaryAction).toHaveBeenCalledWith(card);
   });
 
+  it('uses a neutral div as the dialog role host', async () => {
+    const user = userEvent.setup();
+    render(<MaterialDeck cards={[makeCard(1)]} onPrimaryAction={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: /材料 1/u }));
+
+    expect(screen.getByRole('dialog', { name: '材料 1 详情' }).tagName).toBe('DIV');
+  });
+
   it('keeps the primary action visibly unavailable when the host supplies a reason', async () => {
     const user = userEvent.setup();
     const onPrimaryAction = vi.fn();
@@ -189,6 +229,43 @@ describe('MaterialDeck interactions', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(first).toHaveFocus();
     expect(viewport.scrollLeft).toBe(71);
+  });
+
+  it('focuses the first surviving card when the selected card is removed', async () => {
+    const user = userEvent.setup();
+    const first = makeCard(1);
+    const selected = makeCard(2);
+    const third = makeCard(3);
+    const { container, rerender } = render(
+      <MaterialDeck cards={[first, selected, third]} onPrimaryAction={vi.fn()} />
+    );
+    await user.click(cardTriggers(container)[1]!);
+    expect(screen.getByRole('dialog', { name: '材料 2 详情' })).toBeInTheDocument();
+
+    rerender(<MaterialDeck cards={[first, third]} onPrimaryAction={vi.fn()} />);
+
+    const survivors = cardTriggers(container);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(survivors.filter((trigger) => trigger.tabIndex === 0)).toEqual([survivors[0]]);
+    expect(survivors[0]).toHaveFocus();
+  });
+
+  it('focuses the programmable deck region when the selected card removal empties it', async () => {
+    const user = userEvent.setup();
+    const { container, rerender } = render(
+      <MaterialDeck cards={[makeCard(1)]} onPrimaryAction={vi.fn()} />
+    );
+    await user.click(cardTriggers(container)[0]!);
+    expect(screen.getByRole('dialog', { name: '材料 1 详情' })).toBeInTheDocument();
+
+    rerender(<MaterialDeck cards={[]} onPrimaryAction={vi.fn()} />);
+
+    const region = screen.getByRole('region', { name: '待提炼材料牌堆' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(cardTriggers(container)).toHaveLength(0);
+    expect(region).toHaveAttribute('tabindex', '-1');
+    expect(region).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it('previews at 220ms without controls, focus movement, or business action', () => {
@@ -251,7 +328,7 @@ describe('MaterialDeck interactions', () => {
     }
   );
 
-  it('cancels before preview after moving more than 12px', () => {
+  it('cancels before preview and suppresses its immediate synthetic click after moving more than 12px', () => {
     vi.useFakeTimers();
     const { container } = render(
       <MaterialDeck cards={[makeCard(1)]} onPrimaryAction={vi.fn()} />
@@ -267,6 +344,30 @@ describe('MaterialDeck interactions', () => {
     fireEvent.pointerMove(first, { pointerId: 3, clientX: 23, clientY: 10 });
     act(() => vi.advanceTimersByTime(220));
     expect(container.querySelector('[data-material-detail-mode="preview"]')).toBeNull();
+    fireEvent.pointerUp(first, { pointerId: 3 });
+    fireEvent.click(first);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('expires cancelled-gesture click suppression before the next intentional click', () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <MaterialDeck cards={[makeCard(1)]} onPrimaryAction={vi.fn()} />
+    );
+    const first = cardTriggers(container)[0]!;
+    fireEvent.pointerDown(first, {
+      pointerId: 9,
+      isPrimary: true,
+      button: 0,
+      clientX: 10,
+      clientY: 10
+    });
+    fireEvent.pointerMove(first, { pointerId: 9, clientX: 23, clientY: 10 });
+    fireEvent.pointerUp(first, { pointerId: 9 });
+
+    act(() => vi.advanceTimersByTime(0));
+    fireEvent.click(first);
+    expect(screen.getByRole('dialog', { name: '材料 1 详情' })).toBeInTheDocument();
   });
 
   it('still enters preview at 220ms after moving exactly 12px', () => {

@@ -72,6 +72,64 @@ test('opens by keyboard and restores the exact trigger on Escape', async ({ page
   await expect(page.locator('[data-card-mode="collapsed"]')).toHaveCount(9);
 });
 
+test('keeps mobile titles distinct and scrolls the last card into view by keyboard', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFixture(page);
+  const triggers = page.locator('[data-material-card-trigger]');
+
+  await expect.poll(() => page.locator('[data-deck-instance]').evaluate((root) => {
+    const rects = Array.from(
+      root.querySelectorAll<HTMLElement>('.material-deck-card__trigger strong'),
+      (title) => title.getBoundingClientRect()
+    );
+    const minimumAdjacentGap = Math.min(...rects.slice(0, -1).map(
+      (rect, index) => rects[index + 1]!.left - rect.right
+    ));
+    return {
+      nonOverlapping: minimumAdjacentGap >= 0,
+      overlapCount: rects.slice(0, -1).filter(
+        (rect, index) => rect.right > rects[index + 1]!.left
+      ).length,
+      readableCount: rects.filter((rect) => rect.width >= 24 && rect.height >= 18).length
+    };
+  })).toEqual({ nonOverlapping: true, overlapCount: 0, readableCount: 9 });
+
+  await triggers.first().focus();
+  for (let index = 1; index < 9; index += 1) {
+    await page.keyboard.press('ArrowRight');
+  }
+  await expect(triggers.last()).toBeFocused();
+  await expect.poll(() => page.locator('[data-deck-instance]').evaluate((root) => {
+    const viewport = root.querySelector<HTMLElement>('[data-material-deck-viewport]')!;
+    const last = root.querySelectorAll<HTMLElement>('[data-material-card-trigger]')[8]!;
+    const viewportRect = viewport.getBoundingClientRect();
+    const lastRect = last.getBoundingClientRect();
+    return {
+      scrolled: viewport.scrollLeft > 0,
+      visible: lastRect.left >= viewportRect.left && lastRect.right <= viewportRect.right
+    };
+  })).toEqual({ scrolled: true, visible: true });
+});
+
+test('cancels a native 13px pointer drag without swallowing the next click', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openFixture(page);
+  const trigger = page.locator('[data-material-card-trigger]').first();
+  const bounds = await trigger.boundingBox();
+  if (!bounds) throw new Error('MISSING_MATERIAL_CARD_BOUNDS');
+  const x = bounds.x + bounds.width / 2;
+  const y = bounds.y + bounds.height / 2;
+
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 13, y);
+  await page.mouse.up();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  await trigger.click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+});
+
 test('reduced motion reaches the same left detail and ordered right rail immediately', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 390, height: 844 });

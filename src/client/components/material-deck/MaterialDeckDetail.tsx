@@ -40,7 +40,7 @@ export function MaterialDeckDetail({
   }, [selected]);
 
   return (
-    <article
+    <div
       className={`material-deck-detail material-deck-detail--${mode}`}
       data-material-detail-mode={mode}
       {...(selected
@@ -106,6 +106,6 @@ export function MaterialDeckDetail({
           </button>
         </div>
       )}
-    </article>
+    </div>
   );
 }

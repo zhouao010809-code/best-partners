@@ -1,16 +1,17 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const projectRoot = process.cwd();
 const sourceRoot = resolve(projectRoot, 'src/client/components/material-deck');
-const runtimeFiles = [
-  'materialDeckLayout.ts',
-  'MaterialDeck.tsx',
-  'MaterialDeckDetail.tsx',
-  'useDeckStyleSheet.ts',
-  'material-deck.css'
-] as const;
+const runtimeFiles = readdirSync(sourceRoot, { withFileTypes: true })
+  .filter((entry) => (
+    entry.isFile()
+    && entry.name !== 'SOURCE.md'
+    && /\.(?:ts|tsx|css)$/u.test(entry.name)
+  ))
+  .map((entry) => entry.name)
+  .sort();
 const forbiddenRuntimePatterns = [
   /@ant-design\/icons/u,
   /\bLark\w*/u,
@@ -27,12 +28,19 @@ function read(relativePath: string): string {
 }
 
 function readSource(filename: string): string {
-  const path = resolve(sourceRoot, filename);
-  return existsSync(path) ? readFileSync(path, 'utf8') : '';
+  return readFileSync(resolve(sourceRoot, filename), 'utf8');
 }
 
 describe('MaterialDeck source boundary', () => {
   it('contains the complete domain-free runtime source set', () => {
+    expect(runtimeFiles).toEqual(expect.arrayContaining([
+      'materialDeckLayout.ts',
+      'MaterialDeck.tsx',
+      'MaterialDeckDetail.tsx',
+      'useDeckStyleSheet.ts',
+      'material-deck.css'
+    ]));
+    expect(runtimeFiles).not.toContain('SOURCE.md');
     for (const filename of runtimeFiles) {
       expect(
         () => readFileSync(resolve(sourceRoot, filename), 'utf8'),
@@ -60,13 +68,13 @@ describe('MaterialDeck source boundary', () => {
   });
 
   it('contains no React style prop, imperative inline style, or fixed DOM id', () => {
-    const runtimeTsx = ['MaterialDeck.tsx', 'MaterialDeckDetail.tsx']
+    const runtimeSource = runtimeFiles
       .map(readSource)
       .join('\n');
 
-    expect(runtimeTsx).not.toMatch(/\bstyle\s*=/u);
-    expect(runtimeTsx).not.toMatch(/\.style\.setProperty\s*\(/u);
-    expect(runtimeTsx).not.toMatch(/\bid\s*=/u);
+    expect(runtimeSource).not.toMatch(/\bstyle\s*=/u);
+    expect(runtimeSource).not.toMatch(/\.style\.setProperty\s*\(/u);
+    expect(runtimeSource).not.toMatch(/\bid\s*=/u);
   });
 
   it('does not add the old icon package as a dependency', () => {

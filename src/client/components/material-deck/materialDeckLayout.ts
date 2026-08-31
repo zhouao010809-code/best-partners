@@ -61,7 +61,9 @@ export function getMaterialDeckLayout(input: {
   const visualWidth = cardWidth * 0.69;
   const step = count <= 1
     ? 0
-    : clamp((viewportWidth - visualWidth - 38) / Math.max(1, count - 1), 38, 68);
+    : viewportWidth <= 480
+      ? clamp(cardWidth * 0.94, 94, 100)
+      : clamp((viewportWidth - visualWidth - 38) / Math.max(1, count - 1), 38, 68);
   const safe = clamp(Math.min(viewportWidth, viewportHeight) * 0.035, 18, 30);
   const gap = clamp(viewportWidth * 0.028, 18, 34);
   const detailWidth = clamp(viewportWidth * 0.39, 280, 420);

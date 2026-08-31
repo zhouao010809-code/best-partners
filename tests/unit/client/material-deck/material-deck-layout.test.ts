@@ -142,6 +142,23 @@ describe('MaterialDeck layout', () => {
     expect(lifted.cards[4]!.left).toBeGreaterThan(base.cards[4]!.left);
   });
 
+  it('expands the collapsed mobile track enough to keep adjacent titles readable', () => {
+    const layout = getMaterialDeckLayout({
+      count: 9,
+      viewportWidth: 390,
+      viewportHeight: 590
+    });
+    const adjacentSteps = layout.cards.slice(1).map(
+      (card, index) => card.left - layout.cards[index]!.left
+    );
+    const last = layout.cards.at(-1)!;
+
+    expect(Math.min(...adjacentSteps)).toBeGreaterThanOrEqual(94);
+    expect(layout.trackWidth).toBeGreaterThanOrEqual(850);
+    expect(layout.cards[0]!.left).toBeGreaterThanOrEqual(0);
+    expect(last.left + last.width).toBeLessThanOrEqual(layout.trackWidth + 1);
+  });
+
   it('rounds safe CSS numbers and rejects non-finite values', () => {
     expect(numericCss(1 / 3)).toBe('0.333');
     expect(numericCss(-0)).toBe('0');

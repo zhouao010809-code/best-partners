@@ -32,9 +32,16 @@ export interface MaterialDeckProps {
 type PendingPointer = {
   key: string;
   pointerId: number;
+  sequence: number;
   clientX: number;
   clientY: number;
   previewStarted: boolean;
+  cancelled: boolean;
+};
+
+type ClickSuppression = {
+  key: string;
+  sequence: number;
 };
 
 export function MaterialDeck({
@@ -42,6 +49,7 @@ export function MaterialDeck({
   primaryActionDisabledReason,
   onPrimaryAction
 }: MaterialDeckProps) {
+  assertUniqueCardKeys(cards);
   const [selectedKey, setSelectedKey] = useState<string>();
   const [previewKey, setPreviewKey] = useState<string>();
   const [hoveredKey, setHoveredKey] = useState<string>();
@@ -49,13 +57,18 @@ export function MaterialDeck({
   const [focusedKey, setFocusedKey] = useState<string | undefined>(() => cards[0]?.key);
   const [viewportSize, setViewportSize] = useState({ width: 960, height: 560 });
   const cardRefs = useRef(new Map<string, HTMLButtonElement>());
+  const deckRef = useRef<HTMLElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const priorActiveKeyRef = useRef<string | undefined>(undefined);
   const priorScrollLeftRef = useRef<number | undefined>(undefined);
   const restoreFocusKeyRef = useRef<string | undefined>(undefined);
   const pointerTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pointerRef = useRef<PendingPointer | undefined>(undefined);
-  const suppressNextClickRef = useRef<string | undefined>(undefined);
+  const pointerSequenceRef = useRef(0);
+  const clickSuppressionRef = useRef<ClickSuppression | undefined>(undefined);
+  const clickSuppressionTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  );
 
   const indexByKey = useMemo(
     () => new Map(cards.map((card, index) => [card.key, index])),
@@ -96,10 +109,42 @@ export function MaterialDeck({
     setPreviewKey((current) => (key === undefined || current === key ? undefined : current));
   }, []);
 
-  useEffect(() => () => {
+  const clearClickSuppression = useCallback(() => {
+    if (clickSuppressionTimerRef.current !== undefined) {
+      clearTimeout(clickSuppressionTimerRef.current);
+    }
+    clickSuppressionTimerRef.current = undefined;
+    clickSuppressionRef.current = undefined;
+  }, []);
+
+  const armClickSuppression = useCallback((pending: PendingPointer) => {
+    clearClickSuppression();
+    const suppression = { key: pending.key, sequence: pending.sequence };
+    clickSuppressionRef.current = suppression;
+    clickSuppressionTimerRef.current = setTimeout(() => {
+      if (clickSuppressionRef.current?.sequence === suppression.sequence) {
+        clickSuppressionRef.current = undefined;
+      }
+      clickSuppressionTimerRef.current = undefined;
+    }, 0);
+  }, [clearClickSuppression]);
+
+  const cancelPointerGesture = useCallback((pending: PendingPointer) => {
     if (pointerTimerRef.current !== undefined) clearTimeout(pointerTimerRef.current);
     pointerTimerRef.current = undefined;
+    pending.cancelled = true;
+    setPreviewKey((current) => (current === pending.key ? undefined : current));
+  }, []);
+
+  useEffect(() => () => {
+    if (pointerTimerRef.current !== undefined) clearTimeout(pointerTimerRef.current);
+    if (clickSuppressionTimerRef.current !== undefined) {
+      clearTimeout(clickSuppressionTimerRef.current);
+    }
+    pointerTimerRef.current = undefined;
     pointerRef.current = undefined;
+    clickSuppressionTimerRef.current = undefined;
+    clickSuppressionRef.current = undefined;
   }, []);
 
   useEffect(() => {
@@ -112,12 +157,13 @@ export function MaterialDeck({
     if (focusedKey !== undefined && !indexByKey.has(focusedKey)) {
       setFocusedKey(cards[0]?.key);
     }
-    if (suppressNextClickRef.current !== undefined
-      && !indexByKey.has(suppressNextClickRef.current)) {
-      suppressNextClickRef.current = undefined;
+    if (clickSuppressionRef.current !== undefined
+      && !indexByKey.has(clickSuppressionRef.current.key)) {
+      clearClickSuppression();
     }
   }, [
     cards,
+    clearClickSuppression,
     clearPointerPreview,
     focusLiftKey,
     focusedKey,
@@ -157,15 +203,19 @@ export function MaterialDeck({
     } else if (activeKey === undefined && priorActiveKey !== undefined) {
       const scrollLeft = priorScrollLeftRef.current ?? 0;
       const restoreKey = restoreFocusKeyRef.current;
-      if (restoreKey !== undefined) {
-        cardRefs.current.get(restoreKey)?.focus({ preventScroll: true });
-      }
+      const restoreTarget = restoreKey === undefined
+        ? undefined
+        : cardRefs.current.get(restoreKey);
+      const fallbackTarget = effectiveFocusedKey === undefined
+        ? undefined
+        : cardRefs.current.get(effectiveFocusedKey);
+      (restoreTarget ?? fallbackTarget ?? deckRef.current)?.focus({ preventScroll: true });
       viewport.scrollLeft = scrollLeft;
       priorScrollLeftRef.current = undefined;
       restoreFocusKeyRef.current = undefined;
     }
     priorActiveKeyRef.current = activeKey;
-  }, [activeKey]);
+  }, [activeKey, effectiveFocusedKey]);
 
   const openSelection = useCallback((key: string) => {
     clearPointerPreview();
@@ -211,22 +261,32 @@ export function MaterialDeck({
     if (effectiveSelectedKey !== undefined || event.isPrimary === false || event.button !== 0) {
       return;
     }
+    clearClickSuppression();
     clearPointerPreview();
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    pointerSequenceRef.current += 1;
     pointerRef.current = {
       key,
       pointerId: event.pointerId,
+      sequence: pointerSequenceRef.current,
       clientX: event.clientX,
       clientY: event.clientY,
-      previewStarted: false
+      previewStarted: false,
+      cancelled: false
     };
     pointerTimerRef.current = setTimeout(() => {
       const pending = pointerRef.current;
-      if (!pending || pending.pointerId !== event.pointerId || pending.key !== key) return;
+      if (
+        !pending
+        || pending.cancelled
+        || pending.pointerId !== event.pointerId
+        || pending.key !== key
+      ) return;
+      pointerTimerRef.current = undefined;
       pending.previewStarted = true;
       setPreviewKey(key);
     }, PRESS_PREVIEW_MS);
-  }, [clearPointerPreview, effectiveSelectedKey]);
+  }, [clearClickSuppression, clearPointerPreview, effectiveSelectedKey]);
 
   const handlePointerMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     const pending = pointerRef.current;
@@ -235,11 +295,10 @@ export function MaterialDeck({
       event.clientX - pending.clientX,
       event.clientY - pending.clientY
     );
-    if (distance > PRESS_MOVE_TOLERANCE_PX) {
-      if (pending.previewStarted) suppressNextClickRef.current = pending.key;
-      clearPointerPreview(pending.key);
+    if (distance > PRESS_MOVE_TOLERANCE_PX && !pending.cancelled) {
+      cancelPointerGesture(pending);
     }
-  }, [clearPointerPreview]);
+  }, [cancelPointerGesture]);
 
   const finishPointer = useCallback((
     event: PointerEvent<HTMLButtonElement>,
@@ -247,14 +306,16 @@ export function MaterialDeck({
   ) => {
     const pending = pointerRef.current;
     if (!pending || pending.pointerId !== event.pointerId) return;
-    if (suppressClick && pending.previewStarted) suppressNextClickRef.current = pending.key;
+    if (suppressClick && (pending.previewStarted || pending.cancelled)) {
+      armClickSuppression(pending);
+    }
     clearPointerPreview(pending.key);
     try {
       event.currentTarget.releasePointerCapture?.(event.pointerId);
     } catch {
       // Pointer capture may already be released by the browser.
     }
-  }, [clearPointerPreview]);
+  }, [armClickSuppression, clearPointerPreview]);
 
   const handleCardBlur = useCallback((
     event: FocusEvent<HTMLButtonElement>,
@@ -277,9 +338,11 @@ export function MaterialDeck({
 
   return (
     <section
+      ref={deckRef}
       className="material-deck"
       aria-label="待提炼材料牌堆"
       data-deck-instance={instanceId}
+      tabIndex={-1}
       onKeyDown={handleRootKeyDown}
     >
       <header className="material-deck__header">
@@ -325,8 +388,8 @@ export function MaterialDeck({
                     tabIndex={!selected && effectiveFocusedKey === card.key ? 0 : -1}
                     onClick={(event) => {
                       event.stopPropagation();
-                      if (suppressNextClickRef.current === card.key) {
-                        suppressNextClickRef.current = undefined;
+                      if (clickSuppressionRef.current?.key === card.key) {
+                        clearClickSuppression();
                         return;
                       }
                       setFocusedKey(card.key);
@@ -378,4 +441,12 @@ export function MaterialDeck({
       </div>
     </section>
   );
+}
+
+function assertUniqueCardKeys(cards: readonly MaterialDeckCard[]): void {
+  const keys = new Set<string>();
+  for (const card of cards) {
+    if (keys.has(card.key)) throw new Error('DUPLICATE_MATERIAL_DECK_KEY');
+    keys.add(card.key);
+  }
 }
