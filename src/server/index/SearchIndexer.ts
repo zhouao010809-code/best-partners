@@ -71,6 +71,10 @@ function assertRawResponse(path: string, raw: VersionedBytes): void {
   }
 }
 
+function samePaths(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((path, index) => path === right[index]);
+}
+
 export class SearchIndexer {
   version = 0;
   private stagedScan: StagedScan | undefined;
@@ -118,6 +122,23 @@ export class SearchIndexer {
           status: 'refreshing',
           checked: scan.cursor,
           total: scan.paths.length,
+          version: this.version
+        };
+      }
+
+      const currentPaths = await this.listAllowedMarkdown();
+      if (!samePaths(scan.paths, currentPaths)) {
+        this.stagedScan = {
+          paths: currentPaths,
+          files: [],
+          issues: [],
+          manifestEntries: [],
+          cursor: 0
+        };
+        return {
+          status: 'refreshing',
+          checked: 0,
+          total: currentPaths.length,
           version: this.version
         };
       }

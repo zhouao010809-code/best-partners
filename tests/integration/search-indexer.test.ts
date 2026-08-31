@@ -237,6 +237,56 @@ describe('SearchIndexer', () => {
     expect(repository.listMaterials({}).total).toBe(3);
   });
 
+  it.each([
+    {
+      name: 'rename',
+      mutate: (gateway: FakeVaultGateway) => gateway.renameFixture(
+        '01图书馆/A.md',
+        '01图书馆/A2.md',
+        'renamed-version'
+      ),
+      expectedPaths: ['01图书馆/A2.md', '01图书馆/B.md']
+    },
+    {
+      name: 'create',
+      mutate: (gateway: FakeVaultGateway) => gateway.mutateFixture(
+        '01图书馆/C.md',
+        materialNote({ title: 'C' }),
+        'created-version'
+      ),
+      expectedPaths: ['01图书馆/A.md', '01图书馆/B.md', '01图书馆/C.md']
+    },
+    {
+      name: 'delete',
+      mutate: (gateway: FakeVaultGateway) => gateway.deleteFixture('01图书馆/A.md'),
+      expectedPaths: ['01图书馆/B.md']
+    }
+  ])('restarts a bounded cycle when an already-read path is externally $name', async ({ mutate, expectedPaths }) => {
+    const gateway = new FakeVaultGateway({
+      '01图书馆/A.md': materialNote({ title: 'A' }),
+      '01图书馆/B.md': materialNote({ title: 'B' })
+    });
+    const { repository } = createRepository();
+    const indexer = new SearchIndexer({ gateway, repository, maxRawReadsPerPoll: 1 });
+
+    await expect(indexer.refresh()).resolves.toEqual({
+      status: 'refreshing', checked: 1, total: 2, version: 0
+    });
+    mutate(gateway);
+
+    await expect(indexer.refresh()).resolves.toEqual({
+      status: 'refreshing', checked: 0, total: expectedPaths.length, version: 0
+    });
+    expect(repository.listMaterials({}).total).toBe(0);
+
+    let result = await indexer.refresh();
+    for (let remaining = expectedPaths.length; result.status === 'refreshing' && remaining > 0; remaining -= 1) {
+      result = await indexer.refresh();
+    }
+    expect(result).toMatchObject({ status: 'ready', version: 1 });
+    expect(repository.listMaterials({}).items.map((record) => record.path)).toEqual(expectedPaths);
+  });
+
   it('publishes a complete scan in one batch and leaves projection, version, and deletes unchanged on read failure', async () => {
     const gateway = new FakeVaultGateway({
       '01图书馆/保留.md': materialNote({ title: '旧标题' }),

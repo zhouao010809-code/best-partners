@@ -8,6 +8,7 @@ import {
 import {
   INDEX_REFRESH_INTERVAL_MS,
   IndexScheduler,
+  type DeadlineScheduler,
   type IntervalScheduler
 } from '../../src/server/index/index-scheduler.js';
 
@@ -30,6 +31,30 @@ class FakeIntervals implements IntervalScheduler {
     return () => {
       this.cancelCount += 1;
     };
+  }
+}
+
+class FakeDeadlines implements DeadlineScheduler {
+  readonly scheduled: Array<{
+    milliseconds: number;
+    task: () => void;
+    cancelled: boolean;
+    fired: boolean;
+  }> = [];
+
+  after(milliseconds: number, task: () => void): () => void {
+    const deadline = { milliseconds, task, cancelled: false, fired: false };
+    this.scheduled.push(deadline);
+    return () => {
+      deadline.cancelled = true;
+    };
+  }
+
+  fireNext(): void {
+    const deadline = this.scheduled.find((candidate) => !candidate.cancelled && !candidate.fired);
+    if (deadline === undefined) throw new Error('NO_PENDING_DEADLINE');
+    deadline.fired = true;
+    deadline.task();
   }
 }
 
@@ -110,6 +135,7 @@ describe('IndexScheduler', () => {
   it('uses an injected 15-second scheduler and performs a focus refresh immediately', async () => {
     const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
     const intervals = new FakeIntervals();
+    const deadlines = new FakeDeadlines();
     let refreshes = 0;
     const scheduler = new IndexScheduler({
       refresh: async () => {
@@ -118,6 +144,7 @@ describe('IndexScheduler', () => {
       },
       state: new IndexStateController(clock.now),
       intervals,
+      deadlines,
       now: clock.now
     });
 
@@ -146,6 +173,7 @@ describe('IndexScheduler', () => {
       refresh: async () => results.shift()!,
       state: new IndexStateController(clock.now),
       intervals: new FakeIntervals(),
+      deadlines: new FakeDeadlines(),
       now: clock.now
     });
 
@@ -172,6 +200,7 @@ describe('IndexScheduler', () => {
       },
       state: new IndexStateController(clock.now),
       intervals: new FakeIntervals(),
+      deadlines: new FakeDeadlines(),
       now: clock.now
     });
 
@@ -204,6 +233,7 @@ describe('IndexScheduler', () => {
       },
       state: new IndexStateController(clock.now),
       intervals: new FakeIntervals(),
+      deadlines: new FakeDeadlines(),
       now: clock.now
     });
 
@@ -217,5 +247,114 @@ describe('IndexScheduler', () => {
     await Promise.all([scheduled, focusOne, focusTwo]);
     expect(refreshes).toBe(2);
     expect(scheduler.snapshot().state).toMatchObject({ status: 'ready', version: 2 });
+  });
+
+  it('times out an initial hung poll as failed and releases single-flight for the next refresh', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const deadlines = new FakeDeadlines();
+    const never = new Promise<never>(() => {});
+    let refreshes = 0;
+    const scheduler = new IndexScheduler({
+      refresh: async () => {
+        refreshes += 1;
+        if (refreshes === 1) return never;
+        return { status: 'ready' as const, checked: 1, total: 1, version: 1 };
+      },
+      state: new IndexStateController(clock.now),
+      intervals: new FakeIntervals(),
+      deadlines,
+      now: clock.now
+    });
+
+    const hung = scheduler.refreshNow();
+    await Promise.resolve();
+    expect(refreshes).toBe(1);
+    expect(deadlines.scheduled[0]?.milliseconds).toBe(60_000);
+    clock.advance(60_000);
+    deadlines.fireNext();
+    await hung;
+    expect(scheduler.snapshot().state).toEqual({
+      status: 'failed',
+      reason: 'INDEX_REFRESH_TIMEOUT'
+    });
+
+    await scheduler.refreshNow();
+    expect(refreshes).toBe(2);
+    expect(scheduler.snapshot().state).toMatchObject({ status: 'ready', version: 1 });
+  });
+
+  it('marks an existing ready snapshot stale when its next poll hangs for 60 seconds', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const deadlines = new FakeDeadlines();
+    let hang = false;
+    const never = new Promise<never>(() => {});
+    const scheduler = new IndexScheduler({
+      refresh: async () => hang
+        ? never
+        : { status: 'ready' as const, checked: 1, total: 1, version: 8 },
+      state: new IndexStateController(clock.now),
+      intervals: new FakeIntervals(),
+      deadlines,
+      now: clock.now
+    });
+    await scheduler.refreshNow();
+    hang = true;
+    const hung = scheduler.refreshNow();
+    await Promise.resolve();
+
+    clock.advance(59_999);
+    expect(scheduler.snapshot().state).toMatchObject({ status: 'ready', version: 8 });
+    clock.advance(1);
+    deadlines.fireNext();
+    await hung;
+    expect(scheduler.snapshot().state).toEqual({
+      status: 'stale',
+      version: 8,
+      lastSuccessAt: '2026-08-31T00:00:00.000Z',
+      reason: 'INDEX_REFRESH_TIMEOUT'
+    });
+  });
+
+  it('stop cancels the active wait and prevents a queued follow-up, late rejection, and interval trigger', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const intervals = new FakeIntervals();
+    const deadlines = new FakeDeadlines();
+    let rejectFirst!: (error: Error) => void;
+    const deferred = new Promise<never>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    let refreshes = 0;
+    const scheduler = new IndexScheduler({
+      refresh: async () => {
+        refreshes += 1;
+        if (refreshes === 1) return deferred;
+        return { status: 'ready' as const, checked: 1, total: 1, version: refreshes };
+      },
+      state: new IndexStateController(clock.now),
+      intervals,
+      deadlines,
+      now: clock.now
+    });
+    scheduler.start();
+    const active = scheduler.refreshNow();
+    void scheduler.requestFocusRefresh();
+    await Promise.resolve();
+    expect(refreshes).toBe(1);
+
+    let activeSettled = false;
+    void active.then(() => {
+      activeSettled = true;
+    });
+    scheduler.stop();
+    await active;
+    expect(activeSettled).toBe(true);
+    rejectFirst(new Error('late rejection after stop'));
+    await Promise.resolve();
+    intervals.scheduled[0]?.task();
+    await Promise.resolve();
+
+    expect(refreshes).toBe(1);
+    expect(scheduler.snapshot().state).toMatchObject({ status: 'building' });
+    expect(deadlines.scheduled.every((deadline) => deadline.cancelled || deadline.fired)).toBe(true);
   });
 });
