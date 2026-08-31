@@ -81,6 +81,12 @@ describe('restart activation ordering', () => {
         timestamp: checkedAt,
         reasonCode: 'READ_FIDELITY_REVOKED',
         primitive: 'RAW_REREAD'
+      }, {
+        operation: 'restartPersistence',
+        status: 'unverified',
+        timestamp: checkedAt,
+        reasonCode: 'RESTART_PERSISTENCE_PENDING',
+        primitive: 'RAW_REREAD'
       }]
     });
     const oldPending: RestartVerifiedPending = {

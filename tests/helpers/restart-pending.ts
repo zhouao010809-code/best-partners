@@ -42,19 +42,30 @@ const restartVerifiedPendingSchema = z.object({
   verifiedAt: z.string().datetime({ offset: true }),
   intendedProfileRevision: sha256Schema
 }).strict();
+const restartFailedPendingSchema = z.object({
+  ...restartIdentityFields,
+  phase: z.literal('restart-failed'),
+  upstreamVersion: upstreamVersionSchema,
+  failedAt: z.string().datetime({ offset: true }),
+  reasonCode: z.literal('RESTART_STATE_MISMATCH'),
+  intendedProfileRevision: sha256Schema
+}).strict();
 const restartPendingSchema = z.discriminatedUnion('phase', [
   preparingRestartPendingSchema,
   preparedRestartPendingSchema,
-  restartVerifiedPendingSchema
+  restartVerifiedPendingSchema,
+  restartFailedPendingSchema
 ]);
 const cleanupFields = {
   cleanupStatus: z.enum(['unverified', 'failed']),
-  cleanupReasonCode: reasonCodeSchema
+  cleanupReasonCode: reasonCodeSchema,
+  cleanupCheckedAt: z.string().datetime({ offset: true })
 } as const;
 const cleanupPendingSchema = z.discriminatedUnion('phase', [
   preparingRestartPendingSchema.extend(cleanupFields).strict(),
   preparedRestartPendingSchema.extend(cleanupFields).strict(),
-  restartVerifiedPendingSchema.extend(cleanupFields).strict()
+  restartVerifiedPendingSchema.extend(cleanupFields).strict(),
+  restartFailedPendingSchema.extend(cleanupFields).strict()
 ]);
 const activationSchema = z.object({
   verifiedAt: z.string().datetime({ offset: true }),
@@ -65,6 +76,7 @@ export type RestartPending = z.infer<typeof restartPendingSchema>;
 export type PreparingRestartPending = z.infer<typeof preparingRestartPendingSchema>;
 export type PreparedRestartPending = z.infer<typeof preparedRestartPendingSchema>;
 export type RestartVerifiedPending = z.infer<typeof restartVerifiedPendingSchema>;
+export type RestartFailedPending = z.infer<typeof restartFailedPendingSchema>;
 export type ObservedRestartPending = PreparedRestartPending | RestartVerifiedPending;
 export type CleanupPending = z.infer<typeof cleanupPendingSchema>;
 
@@ -410,9 +422,12 @@ export async function markRestartPendingVerified(
     const parsedActivation = activationSchema.parse(activation);
     if (
       parsedExpected.phase === 'restart-verified'
-      && parsedExpected.verifiedAt !== parsedActivation.verifiedAt
+      && (
+        parsedExpected.verifiedAt !== parsedActivation.verifiedAt
+        || parsedExpected.intendedProfileRevision !== parsedActivation.intendedProfileRevision
+      )
     ) {
-      throw new Error('verified timestamp mismatch');
+      throw new Error('verified activation mismatch');
     }
     desired = restartVerifiedPendingSchema.parse({
       ...parsedExpected,
@@ -425,6 +440,47 @@ export async function markRestartPendingVerified(
   try {
     const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
     return restartVerifiedPendingSchema.parse(await withPendingLock(
+      canonicalDirectory,
+      () => replaceExactRecord(
+        canonicalDirectory,
+        parsedExpected,
+        desired,
+        options.testOnlySyncAfterCommit
+      )
+    ));
+  } catch {
+    throw new Error('RESTART_PENDING_NOT_CURRENT');
+  }
+}
+
+export async function markRestartPendingFailed(
+  profileDirectory: string,
+  expected: PreparedRestartPending,
+  failure: {
+    readonly failedAt: string;
+    readonly reasonCode: 'RESTART_STATE_MISMATCH';
+    readonly intendedProfileRevision: string;
+  },
+  options: {
+    /** @internal deterministic durability-failure injection. */
+    readonly testOnlySyncAfterCommit?: (directory: string) => Promise<void>;
+  } = {}
+): Promise<RestartFailedPending> {
+  let parsedExpected: PreparedRestartPending;
+  let desired: RestartFailedPending;
+  try {
+    parsedExpected = preparedRestartPendingSchema.parse(expected);
+    desired = restartFailedPendingSchema.parse({
+      ...parsedExpected,
+      phase: 'restart-failed',
+      ...failure
+    });
+  } catch {
+    throw new Error('RESTART_PENDING_NOT_CURRENT');
+  }
+  try {
+    const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
+    return restartFailedPendingSchema.parse(await withPendingLock(
       canonicalDirectory,
       () => replaceExactRecord(
         canonicalDirectory,
@@ -465,19 +521,28 @@ export async function loadCleanupPending(
 
 function buildCleanupPending(
   pending: RestartPending,
-  cleanup: { readonly status: 'unverified' | 'failed'; readonly reasonCode: string }
+  cleanup: {
+    readonly status: 'unverified' | 'failed';
+    readonly reasonCode: string;
+    readonly checkedAt: string;
+  }
 ): CleanupPending {
   return cleanupPendingSchema.parse({
     ...pending,
     cleanupStatus: cleanup.status,
-    cleanupReasonCode: cleanup.reasonCode
+    cleanupReasonCode: cleanup.reasonCode,
+    cleanupCheckedAt: cleanup.checkedAt
   });
 }
 
 export async function writeCleanupPending(
   profileDirectory: string,
   pending: RestartPending,
-  cleanup: { readonly status: 'unverified' | 'failed'; readonly reasonCode: string }
+  cleanup: {
+    readonly status: 'unverified' | 'failed';
+    readonly reasonCode: string;
+    readonly checkedAt: string;
+  }
 ): Promise<void> {
   let record: CleanupPending;
   try {
@@ -590,7 +655,9 @@ function normalizedRestartIdentity(pending: RestartPending | CleanupPending): ob
     upstreamVersion: 'upstreamVersion' in pending ? pending.upstreamVersion : undefined,
     verifiedAt: 'verifiedAt' in pending ? pending.verifiedAt : undefined,
     intendedProfileRevision: 'intendedProfileRevision' in pending
-      ? pending.intendedProfileRevision : undefined
+      ? pending.intendedProfileRevision : undefined,
+    failedAt: 'failedAt' in pending ? pending.failedAt : undefined,
+    reasonCode: 'reasonCode' in pending ? pending.reasonCode : undefined
   };
 }
 
@@ -767,7 +834,11 @@ export async function consumeRestartPending(
 export async function promoteRestartPendingToCleanup(
   profileDirectory: string,
   expected: RestartPending,
-  cleanup: { readonly status: 'unverified' | 'failed'; readonly reasonCode: string },
+  cleanup: {
+    readonly status: 'unverified' | 'failed';
+    readonly reasonCode: string;
+    readonly checkedAt: string;
+  },
   options: {
     /** @internal deterministic fault injection for post-commit cleanup tests. */
     readonly testOnlyRemoveClaimAfterCleanupCommit?: (target: string) => Promise<void>;

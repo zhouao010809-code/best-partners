@@ -22,6 +22,7 @@ import {
   isVerifiedNonPermanentCleanup,
   loadCleanupPending,
   loadRestartPending,
+  markRestartPendingFailed,
   markRestartPendingPrepared,
   markRestartPendingVerified,
   promoteRestartPendingToCleanup,
@@ -63,6 +64,13 @@ function preparing() {
 const restartActivation = {
   verifiedAt: '2026-08-31T03:00:00.000Z',
   intendedProfileRevision: 'c'.repeat(64)
+};
+const cleanupCheckedAt = '2026-08-31T03:30:00.000Z';
+
+const restartFailure = {
+  failedAt: '2026-08-31T03:00:01.000Z',
+  reasonCode: 'RESTART_STATE_MISMATCH' as const,
+  intendedProfileRevision: 'd'.repeat(64)
 };
 
 describe('restart pending store', () => {
@@ -153,7 +161,11 @@ describe('restart pending store', () => {
     const directory = join(base, 'contract-profiles');
     const first = record();
     const second = { ...record(), runId: '01ARZ3NDEKTSV4RRFFQ69G5FAW' };
-    const cleanup = { status: 'failed' as const, reasonCode: 'MANUAL_CLEANUP_REQUIRED' };
+    const cleanup = {
+      status: 'failed' as const,
+      reasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      checkedAt: cleanupCheckedAt
+    };
     await writeCleanupPending(directory, second, cleanup);
     await rename(
       join(directory, `cleanup-pending.${second.runId}.json`),
@@ -164,13 +176,15 @@ describe('restart pending store', () => {
     expect(cleanupPendingMatchesRestart({
       ...first,
       cleanupStatus: 'failed',
-      cleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED'
+      cleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      cleanupCheckedAt
     }, first)).toBe(true);
     expect(cleanupPendingMatchesRestart({
       ...first,
       root: 'knowledge',
       cleanupStatus: 'failed',
-      cleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED'
+      cleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      cleanupCheckedAt
     }, first)).toBe(false);
   });
 
@@ -187,7 +201,11 @@ describe('restart pending store', () => {
       .rejects.toThrowError('RESTART_PENDING_WRITE_FAILED');
 
     await chmod(pendingPath, 0o600);
-    const cleanup = { status: 'unverified' as const, reasonCode: 'MANUAL_CLEANUP_REQUIRED' };
+    const cleanup = {
+      status: 'unverified' as const,
+      reasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      checkedAt: cleanupCheckedAt
+    };
     await writeCleanupPending(directory, record(), cleanup);
     const cleanupPath = join(directory, `cleanup-pending.${record().runId}.json`);
     await chmod(cleanupPath, 0o644);
@@ -202,7 +220,11 @@ describe('restart pending store', () => {
       const base = await mkdtemp(join(tmpdir(), 'cleanup-pending-link-'));
       roots.push(base);
       const directory = join(base, 'contract-profiles');
-      const cleanup = { status: 'unverified' as const, reasonCode: 'MANUAL_CLEANUP_REQUIRED' };
+      const cleanup = {
+        status: 'unverified' as const,
+        reasonCode: 'MANUAL_CLEANUP_REQUIRED',
+        checkedAt: cleanupCheckedAt
+      };
       await writeCleanupPending(directory, record(), cleanup);
       const target = join(directory, `cleanup-pending.${record().runId}.json`);
       const outside = join(base, `outside-cleanup-${kind}.json`);
@@ -302,7 +324,48 @@ describe('restart pending store', () => {
       verifiedAt: '2026-08-31T03:00:01.000Z',
       intendedProfileRevision: 'd'.repeat(64)
     })).rejects.toThrowError('RESTART_PENDING_NOT_CURRENT');
+    await expect(markRestartPendingVerified(directory, verified, {
+      verifiedAt: restartActivation.verifiedAt,
+      intendedProfileRevision: 'd'.repeat(64)
+    })).rejects.toThrowError('RESTART_PENDING_NOT_CURRENT');
     await expect(loadRestartPending(directory)).resolves.toEqual(verified);
+  });
+
+  it('atomically advances a mismatch to a terminal restart-failed record', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'restart-pending-failed-'));
+    roots.push(base);
+    const directory = join(base, 'contract-profiles');
+    const pending = record();
+    await writeRestartPending(directory, pending);
+
+    const failed = await markRestartPendingFailed(directory, pending, restartFailure);
+    expect(failed).toEqual({
+      ...pending,
+      phase: 'restart-failed',
+      ...restartFailure
+    });
+    await expect(loadRestartPending(directory)).resolves.toEqual(failed);
+    await expect(markRestartPendingFailed(directory, pending, restartFailure))
+      .resolves.toEqual(failed);
+    await expect(markRestartPendingVerified(directory, pending, restartActivation))
+      .rejects.toThrowError('RESTART_PENDING_NOT_CURRENT');
+  });
+
+  it('allows only one terminal outcome to win a concurrent failed-versus-verified race', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'restart-pending-outcome-race-'));
+    roots.push(base);
+    const directory = join(base, 'contract-profiles');
+    const pending = record();
+    await writeRestartPending(directory, pending);
+
+    const settled = await Promise.allSettled([
+      markRestartPendingFailed(directory, pending, restartFailure),
+      markRestartPendingVerified(directory, pending, restartActivation)
+    ]);
+    expect(settled.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(settled.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect((await loadRestartPending(directory))?.phase)
+      .toMatch(/^(restart-failed|restart-verified)$/);
   });
 
   it('restores claimed bytes after corrupt or mismatched records fail consumption', async () => {
@@ -372,7 +435,8 @@ describe('restart pending store', () => {
     await writeRestartPending(directory, pending);
     await promoteRestartPendingToCleanup(directory, pending, {
       status: 'unverified',
-      reasonCode: 'MANUAL_CLEANUP_REQUIRED'
+      reasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      checkedAt: cleanupCheckedAt
     });
     await expect(loadRestartPending(directory)).resolves.toBeUndefined();
     await expect(loadCleanupPending(directory, pending.runId)).resolves.toMatchObject({
@@ -380,7 +444,8 @@ describe('restart pending store', () => {
       noteId: pending.noteId,
       profileKey: pending.profileKey,
       cleanupStatus: 'unverified',
-      cleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED'
+      cleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      cleanupCheckedAt
     });
     expect((await stat(join(directory, `cleanup-pending.${pending.runId}.json`))).mode & 0o777)
       .toBe(0o600);
@@ -396,7 +461,8 @@ describe('restart pending store', () => {
     await writeFile(cleanupPath, 'existing cleanup\n', { mode: 0o600 });
     await expect(promoteRestartPendingToCleanup(directory, pending, {
       status: 'failed',
-      reasonCode: 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED'
+      reasonCode: 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED',
+      checkedAt: cleanupCheckedAt
     })).rejects.toThrowError('RESTART_PENDING_NOT_CURRENT');
     await expect(loadRestartPending(directory)).resolves.toEqual(pending);
     await expect(readFile(cleanupPath, 'utf8'))
@@ -408,7 +474,11 @@ describe('restart pending store', () => {
     roots.push(base);
     const directory = join(base, 'contract-profiles');
     const pending = record();
-    const cleanup = { status: 'unverified' as const, reasonCode: 'MANUAL_CLEANUP_REQUIRED' };
+    const cleanup = {
+      status: 'unverified' as const,
+      reasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      checkedAt: cleanupCheckedAt
+    };
 
     await writeRestartPending(directory, pending);
     await writeCleanupPending(directory, pending, cleanup);
@@ -417,7 +487,8 @@ describe('restart pending store', () => {
       runId: pending.runId,
       noteId: pending.noteId,
       cleanupStatus: 'unverified',
-      cleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED'
+      cleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      cleanupCheckedAt
     });
     const stored = await loadCleanupPending(directory, pending.runId);
     expect(stored).toBeDefined();
@@ -435,7 +506,11 @@ describe('restart pending store', () => {
     roots.push(base);
     const directory = join(base, 'contract-profiles');
     const pending = record();
-    const cleanup = { status: 'failed' as const, reasonCode: 'MANUAL_CLEANUP_REQUIRED' };
+    const cleanup = {
+      status: 'failed' as const,
+      reasonCode: 'MANUAL_CLEANUP_REQUIRED',
+      checkedAt: cleanupCheckedAt
+    };
     await writeCleanupPending(directory, pending, cleanup);
     const stored = await loadCleanupPending(directory, pending.runId);
     expect(stored).toBeDefined();
@@ -486,7 +561,8 @@ describe('restart pending store', () => {
 
     await expect(promoteRestartPendingToCleanup(directory, pending, {
       status: 'failed',
-      reasonCode: 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED'
+      reasonCode: 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED',
+      checkedAt: cleanupCheckedAt
     }, {
       testOnlyRemoveClaimAfterCleanupCommit: async () => {
         removalAttempted = true;

@@ -16,27 +16,48 @@ import {
   consumeRestartPending,
   loadCleanupPending,
   loadRestartPending,
+  markRestartPendingFailed,
   markRestartPendingVerified,
   restartPendingAlreadyCompleted,
   restartCleanupPassedReasonCode,
-  restartPendingHasVerifiedRestart,
   restartPendingMatchesProfile,
   writeCleanupPending,
   type RestartVerifiedPending
 } from '../../helpers/restart-pending.js';
 import {
   activateVerifiedRestart,
-  planRestartProfileActivation
+  buildCleanupFailedProfile,
+  buildRestartFailedProfile,
+  persistCleanupFailure,
+  planRestartProfileActivation,
+  recordRestartFailure,
+  restartFailedProfileMatches,
+  restartPendingCanResumeCleanup
 } from '../../helpers/restart-verify-flow.js';
 import {
   buildContractProfile,
   computeContractProfileKey,
+  computeContractProfileRevision,
   loadContractProfileStateByKey,
   recoverContractProfileActivation,
   writeContractProfile,
   type ContractProfileState
 } from '../../../src/server/vault/contract-profile-store.js';
 import { VaultGatewayError } from '../../../src/server/vault/LocalRest51Gateway.js';
+
+type CleanupFailureReasonCode =
+  | 'CLEANUP_TARGET_ALREADY_MISSING'
+  | 'CLEANUP_IDENTITY_MISMATCH'
+  | 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED';
+
+function cleanupFailureReasonCode(value: string): CleanupFailureReasonCode {
+  if (
+    value === 'CLEANUP_TARGET_ALREADY_MISSING'
+    || value === 'CLEANUP_IDENTITY_MISMATCH'
+    || value === 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED'
+  ) return value;
+  throw new Error('RESTART_PENDING_NOT_CURRENT');
+}
 
 describe('Local REST restart persistence verify', () => {
   it('persists restart verification before activating the profile and consumes only proven cleanup', async () => {
@@ -97,15 +118,47 @@ describe('Local REST restart persistence verify', () => {
     const root = pending.root === 'library' ? roots.library : roots.knowledge;
     const notePath = assertSandboxVaultPath(`${root}/${pending.noteId}`, pending.runId);
 
+    if (pending.phase === 'restart-failed') {
+      if (!restartFailedProfileMatches(pending, initialProfileState.profile)) {
+        throw new Error('RESTART_TERMINAL_FAILURE_RECORDED');
+      }
+      return;
+    }
+
     let verifiedState: ContractProfileState;
     let verifiedPending: RestartVerifiedPending;
+    const priorCleanup = pending.phase === 'restart-verified'
+      ? await loadCleanupPending(profileDirectory, pending.runId)
+      : undefined;
+    if (
+      priorCleanup !== undefined
+      && !cleanupPendingMatchesRestart(priorCleanup, pending)
+    ) {
+      throw new Error('RESTART_PENDING_NOT_CURRENT');
+    }
     if (
       pending.phase === 'restart-verified'
-      && initialProfileState.revision === pending.intendedProfileRevision
-      && restartPendingHasVerifiedRestart(pending, initialProfileState.profile)
+      && restartPendingCanResumeCleanup(pending, initialProfileState.profile, priorCleanup)
     ) {
       verifiedState = initialProfileState;
       verifiedPending = pending;
+      if (priorCleanup?.cleanupStatus === 'failed') {
+        const failureProfile = buildCleanupFailedProfile(
+          initialProfileState.profile,
+          pending,
+          {
+            checkedAt: priorCleanup.cleanupCheckedAt,
+            reasonCode: cleanupFailureReasonCode(priorCleanup.cleanupReasonCode)
+          }
+        );
+        if (computeContractProfileRevision(failureProfile) !== initialProfileState.revision) {
+          verifiedState = await writeContractProfile(
+            profileDirectory,
+            failureProfile,
+            { expectedRevision: initialProfileState.revision }
+          );
+        }
+      }
     } else {
       if (pending.phase === 'prepared') {
         let restartMatches = false;
@@ -118,36 +171,29 @@ describe('Local REST restart persistence verify', () => {
         }
         if (!restartMatches) {
           const failedAt = new Date().toISOString();
-          const {
-            schemaVersion: _schemaVersion,
-            profileKey: _profileKey,
-            formalWriteGate: _formalWriteGate,
-            restartCheckedAt: _restartCheckedAt,
-            ...profileInput
-          } = initialProfileState.profile;
-          await writeContractProfile(profileDirectory, buildContractProfile({
-            ...profileInput,
-            restartPersistence: 'failed',
-            restartCheckedAt: failedAt,
-            evidence: [
-              ...initialProfileState.profile.evidence.filter((record) => (
-                record.operation !== 'restartPersistence' && record.operation !== 'cleanup'
-              )),
+          const failedProfile = buildRestartFailedProfile(
+            initialProfileState.profile,
+            pending,
+            failedAt
+          );
+          const intendedProfileRevision = computeContractProfileRevision(failedProfile);
+          await recordRestartFailure({
+            pending,
+            markFailed: (current) => markRestartPendingFailed(
+              profileDirectory,
+              current,
               {
-                operation: 'restartPersistence',
-                status: 'failed',
-                timestamp: failedAt,
+                failedAt,
                 reasonCode: 'RESTART_STATE_MISMATCH',
-                primitive: 'RAW_REREAD'
-              },
-              {
-                operation: 'cleanup',
-                status: 'unverified',
-                timestamp: failedAt,
-                reasonCode: 'MANUAL_CLEANUP_REQUIRED'
+                intendedProfileRevision
               }
-            ]
-          }), { expectedRevision: initialProfileState.revision });
+            ),
+            persistProfile: () => writeContractProfile(
+              profileDirectory,
+              failedProfile,
+              { expectedRevision: initialProfileState.revision }
+            )
+          });
           return;
         }
       }
@@ -179,6 +225,38 @@ describe('Local REST restart persistence verify', () => {
       pending = verifiedPending;
     }
 
+    const persistCleanupFailureForRun = async (
+      reasonCode: CleanupFailureReasonCode
+    ): Promise<void> => {
+      const existing = await loadCleanupPending(profileDirectory, verifiedPending.runId);
+      if (existing !== undefined && !cleanupPendingMatchesRestart(existing, verifiedPending)) {
+        throw new Error('RESTART_PENDING_NOT_CURRENT');
+      }
+      if (existing !== undefined && existing.cleanupStatus !== 'failed') {
+        throw new Error('RESTART_PENDING_NOT_CURRENT');
+      }
+      const checkedAt = existing?.cleanupCheckedAt ?? new Date().toISOString();
+      const recordedReason = existing === undefined
+        ? reasonCode
+        : cleanupFailureReasonCode(existing.cleanupReasonCode);
+      verifiedState = await persistCleanupFailure({
+        pending: verifiedPending,
+        profile: verifiedState.profile,
+        checkedAt,
+        reasonCode: recordedReason,
+        persistLocator: (cleanup) => writeCleanupPending(
+          profileDirectory,
+          verifiedPending,
+          cleanup
+        ),
+        persistProfile: (profile) => writeContractProfile(
+          profileDirectory,
+          profile,
+          { expectedRevision: verifiedState.revision }
+        )
+      });
+    };
+
     const verifiedProfile = verifiedState.profile;
     const latestSafeDelete = verifiedProfile.evidence
       .filter((record) => record.operation === 'safeDelete')
@@ -198,20 +276,14 @@ describe('Local REST restart persistence verify', () => {
     } catch (error) {
       const preReadStatus = error instanceof VaultGatewayError ? error.upstreamStatus : 599;
       const decision = classifyNonPermanentCleanup({ preReadStatus });
-      await writeCleanupPending(profileDirectory, verifiedPending, {
-        status: 'failed',
-        reasonCode: decision.reasonCode
-      });
+      await persistCleanupFailureForRun(cleanupFailureReasonCode(decision.reasonCode));
       return;
     }
     if (
       current.rawSha256 !== verifiedPending.rawSha256
       || current.upstreamVersion !== verifiedPending.upstreamVersion
     ) {
-      await writeCleanupPending(profileDirectory, verifiedPending, {
-        status: 'failed',
-        reasonCode: 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED'
-      });
+      await persistCleanupFailureForRun('CLEANUP_IDENTITY_MISMATCH');
       return;
     }
 
@@ -235,10 +307,7 @@ describe('Local REST restart persistence verify', () => {
       rereadStatus
     });
     if (cleanup.status !== 'passed') {
-      await writeCleanupPending(profileDirectory, verifiedPending, {
-        status: 'failed',
-        reasonCode: cleanup.reasonCode
-      });
+      await persistCleanupFailureForRun(cleanupFailureReasonCode(cleanup.reasonCode));
       return;
     }
 
