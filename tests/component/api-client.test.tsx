@@ -62,20 +62,25 @@ describe('API client boundary', () => {
     expect(drifted).toMatchObject({ ok: false, state: { status: 'validation-error' } });
   });
 
-  it('maps validated 409 responses to conflict and keeps the operation id', async () => {
+  it.each([
+    ['VERSION_CONFLICT', 'conflict'],
+    ['IDEMPOTENCY_CONFLICT', 'conflict'],
+    ['INDEX_BUSY', 'busy'],
+    ['UNKNOWN_CONFLICT', 'operation-error']
+  ] as const)('maps stable error code %s to %s even on HTTP 409', async (code, status) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
       error: {
-        code: 'VERSION_CONFLICT',
-        message: '索引版本已变化',
-        operationId: 'op-conflict-1'
+        code,
+        message: '请求未完成',
+        operationId: 'op-code-1'
       }
     }, 409)));
     const result = await requestApi({ path: '/api/v1/index-jobs/rebuild', schema: responseSchema });
 
     expect(result).toEqual({
       ok: false,
-      state: { status: 'conflict', message: '索引版本已变化' },
-      operationId: 'op-conflict-1'
+      state: { status, message: '请求未完成' },
+      operationId: 'op-code-1'
     });
   });
 

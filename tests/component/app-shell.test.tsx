@@ -59,8 +59,23 @@ describe('black-glass application shell', () => {
       'page'
     );
     const connection = screen.getByRole('status', { name: '本地连接状态' });
-    expect(connection).toHaveTextContent('本地已连接');
+    expect(connection).toHaveTextContent('连接待检查');
+    expect(connection).not.toHaveTextContent('已连接');
+    expect(connection).toHaveClass('connection-badge--pending');
     expect(connection.closest('a')).toBeNull();
+  });
+
+  it.each([
+    ['/', '大脑总览'],
+    ['/queue/', '提炼队列'],
+    ['/knowledge/', '知识库'],
+    ['/operations/', '操作记录'],
+    ['/connections/', '系统连接']
+  ])('normalizes the canonical page identity for %s', (path, heading) => {
+    setPath(path);
+    render(<App />);
+
+    expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
   });
 
   it.each([

@@ -6,6 +6,7 @@ type ClientFailureStatus =
   | 'disconnected'
   | 'validation-error'
   | 'operation-error'
+  | 'busy'
   | 'conflict'
   | 'recovery-required';
 
@@ -30,6 +31,20 @@ function validationFailure(message: string): ApiClientResult<never> {
     ok: false,
     state: { status: 'validation-error', message }
   };
+}
+
+function failureStatus(code: string): ClientFailureStatus {
+  switch (code) {
+    case 'RECOVERY_REQUIRED':
+      return 'recovery-required';
+    case 'INDEX_BUSY':
+      return 'busy';
+    case 'VERSION_CONFLICT':
+    case 'IDEMPOTENCY_CONFLICT':
+      return 'conflict';
+    default:
+      return 'operation-error';
+  }
 }
 
 export async function requestApi<T>(
@@ -65,15 +80,9 @@ export async function requestApi<T>(
     }
 
     const { code, message, operationId } = failure.data.error;
-    const status: ClientFailureStatus = code === 'RECOVERY_REQUIRED'
-      ? 'recovery-required'
-      : response.status === 409
-        ? 'conflict'
-        : 'operation-error';
-
     return {
       ok: false,
-      state: { status, message },
+      state: { status: failureStatus(code), message },
       operationId
     };
   }

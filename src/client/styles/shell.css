@@ -195,14 +195,14 @@
   height: 7px;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: var(--accent-primary);
-  box-shadow: 0 0 14px rgba(76, 242, 139, 0.64);
+  background: var(--text-muted);
+  box-shadow: 0 0 10px rgba(174, 184, 180, 0.2);
 }
 
 .connection-badge__signal::after {
   position: absolute;
   inset: -4px;
-  border: 1px solid rgba(76, 242, 139, 0.24);
+  border: 1px solid var(--border-muted);
   border-radius: 50%;
   content: "";
 }

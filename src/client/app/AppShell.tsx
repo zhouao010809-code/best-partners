@@ -42,7 +42,9 @@ function pageIdentity(pathname: string): PageIdentity {
     };
   }
 
-  switch (pathname) {
+  const canonicalPath = pathname.length > 1 ? pathname.replace(/\/+$/u, '') : pathname;
+
+  switch (canonicalPath) {
     case '/':
       return {
         eyebrow: 'BRAIN / OVERVIEW',
@@ -127,11 +129,15 @@ export function AppShell() {
         </nav>
 
         <div className="sidebar-footer">
-          <div className="connection-badge" role="status" aria-label="本地连接状态">
+          <div
+            className="connection-badge connection-badge--pending"
+            role="status"
+            aria-label="本地连接状态"
+          >
             <span className="connection-badge__signal" aria-hidden="true" />
             <span>
-              <strong>本地已连接</strong>
-              <small>127.0.0.1 · 只读</small>
+              <strong>连接待检查</strong>
+              <small>127.0.0.1 · 未验证</small>
             </span>
           </div>
           <div className="vault-signature">
