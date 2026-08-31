@@ -385,6 +385,42 @@ describe('Phase 1 read pages', () => {
     expect(screen.getByRole('heading', { name: '材料结果' })).toHaveFocus();
   });
 
+  it('disables queue pagination while pending or failed and restores it after a ready refresh', async () => {
+    const user = userEvent.setup();
+    const pendingPage = deferred<ApiClientResult<MaterialPage>>();
+    const listMaterials = vi.fn()
+      .mockResolvedValueOnce(ok({
+        items: [material({ title: '初始材料' })],
+        nextCursor: 'queue.a'.padEnd(72, 'a')
+      }))
+      .mockImplementationOnce(() => pendingPage.promise)
+      .mockResolvedValueOnce(ok({
+        items: [material({ path: '01图书馆/恢复材料.md', title: '恢复材料' })],
+        nextCursor: 'queue.b'.padEnd(72, 'b')
+      }));
+    const api = createApi({ listMaterials });
+    renderRoute('/queue', api);
+
+    const loadMore = await screen.findByRole('button', { name: '加载更多' });
+    await user.click(loadMore);
+
+    await waitFor(() => expect(loadMore).toBeDisabled());
+    expect(loadMore).toHaveAttribute('aria-busy', 'true');
+    expect(loadMore).toHaveTextContent('加载中');
+
+    pendingPage.resolve(failure<MaterialPage>('operation-error'));
+    expect(await screen.findByText('读取材料未完成，请稍后重试。')).toBeVisible();
+    const failedLoadMore = screen.getByRole('button', { name: '加载更多' });
+    expect(failedLoadMore).toBeDisabled();
+    expect(failedLoadMore).toHaveAttribute('aria-busy', 'false');
+
+    await user.click(screen.getByRole('button', { name: '应用筛选' }));
+    expect(await screen.findByText('恢复材料')).toBeVisible();
+    const recoveredLoadMore = screen.getByRole('button', { name: '加载更多' });
+    expect(recoveredLoadMore).toBeEnabled();
+    expect(recoveredLoadMore).toHaveAttribute('aria-busy', 'false');
+  });
+
   it('rejects an impossible queue date range locally with zero new requests', async () => {
     const user = userEvent.setup();
     const api = createApi();
@@ -451,6 +487,42 @@ describe('Phase 1 read pages', () => {
       search: '核心结论', usageStatus: '过时', includeObsolete: true,
       knowledgeType: '方法', topic: '增长', limit: 200
     }, expect.any(AbortSignal));
+  });
+
+  it('disables knowledge pagination while pending or failed and restores it after a ready refresh', async () => {
+    const user = userEvent.setup();
+    const pendingPage = deferred<ApiClientResult<KnowledgePage>>();
+    const listKnowledge = vi.fn()
+      .mockResolvedValueOnce(ok({
+        items: [knowledge({ title: '初始知识' })],
+        nextCursor: 'knowledge.a'.padEnd(72, 'a')
+      }))
+      .mockImplementationOnce(() => pendingPage.promise)
+      .mockResolvedValueOnce(ok({
+        items: [knowledge({ path: '02知识库/恢复知识.md', title: '恢复知识' })],
+        nextCursor: 'knowledge.b'.padEnd(72, 'b')
+      }));
+    const api = createApi({ listKnowledge });
+    renderRoute('/knowledge', api);
+
+    const loadMore = await screen.findByRole('button', { name: '加载更多' });
+    await user.click(loadMore);
+
+    await waitFor(() => expect(loadMore).toBeDisabled());
+    expect(loadMore).toHaveAttribute('aria-busy', 'true');
+    expect(loadMore).toHaveTextContent('加载中');
+
+    pendingPage.resolve(failure<KnowledgePage>('operation-error'));
+    expect(await screen.findByText('读取知识未完成，请稍后重试。')).toBeVisible();
+    const failedLoadMore = screen.getByRole('button', { name: '加载更多' });
+    expect(failedLoadMore).toBeDisabled();
+    expect(failedLoadMore).toHaveAttribute('aria-busy', 'false');
+
+    await user.click(screen.getByRole('button', { name: '应用筛选' }));
+    expect(await screen.findByText('恢复知识')).toBeVisible();
+    const recoveredLoadMore = screen.getByRole('button', { name: '加载更多' });
+    expect(recoveredLoadMore).toBeEnabled();
+    expect(recoveredLoadMore).toHaveAttribute('aria-busy', 'false');
   });
 
   it('loads one validated knowledge detail per version, restores focus, and opens through the API', async () => {
@@ -688,6 +760,20 @@ describe('Phase 1 read pages', () => {
     expect(screen.getByText('回读验证能力未验证')).toBeVisible();
     expect(screen.getByText('外部变更观测能力未验证')).toBeVisible();
     expect(screen.queryByText(/其他阻断项/u)).not.toBeInTheDocument();
+  });
+
+  it('reports an enabled write gate truthfully while keeping the Phase 1 interface read-only', async () => {
+    const api = createApi({
+      getHealth: vi.fn(async () => ok<HealthSnapshot>({
+        ...readyHealth(),
+        writeGate: { status: 'enabled', missing: [], fingerprintMatches: true }
+      }))
+    });
+    renderRoute('/connections', api);
+
+    expect(await screen.findByText('写入门已通过')).toBeVisible();
+    expect(screen.getByText('Phase 1 始终只读')).toBeVisible();
+    expect(screen.queryByText('能力已验证但未启用')).not.toBeInTheDocument();
   });
 
   it('keeps stale connection cards visible with a stable failed-state message', async () => {

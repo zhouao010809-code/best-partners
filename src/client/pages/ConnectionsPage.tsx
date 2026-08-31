@@ -80,8 +80,8 @@ function writeGateDiagnostic(snapshot: HealthSnapshot): Diagnostic {
   ];
   return {
     title: '形式写入门',
-    state: snapshot.writeGate.status === 'enabled' ? '能力已验证但未启用' : '已阻断',
-    tone: snapshot.writeGate.status === 'enabled' ? 'amber' : 'red',
+    state: snapshot.writeGate.status === 'enabled' ? '写入门已通过' : '已阻断',
+    tone: snapshot.writeGate.status === 'enabled' ? 'green' : 'red',
     icon: LockKeyhole,
     details
   };

@@ -284,6 +284,7 @@ export function KnowledgePage() {
   const data = resource.status === 'ready' || resource.status === 'refreshing' || resource.status === 'failed'
     ? resource.data
     : undefined;
+  const paginationBusy = resource.status === 'refreshing' && data?.nextCursor !== undefined;
   const selectedDetailKey = selected === undefined ? undefined : detailKey(selected);
   const visibleDetailResource: PageResource<LiveKnowledgeDetail> = selectedDetailKey !== undefined
     && detailView?.key === selectedDetailKey
@@ -329,7 +330,18 @@ export function KnowledgePage() {
         ) : resource.status === 'ready' ? (
           <PageState state={{ status: 'empty', message: '当前筛选范围内没有知识记录' }} />
         ) : null}
-        {data?.nextCursor !== undefined && <button ref={loadMoreRef} className="load-more-button" type="button" onClick={loadMore}>加载更多</button>}
+        {data?.nextCursor !== undefined && (
+          <button
+            ref={loadMoreRef}
+            className="load-more-button"
+            type="button"
+            onClick={loadMore}
+            disabled={resource.status !== 'ready'}
+            aria-busy={paginationBusy}
+          >
+            {paginationBusy ? '加载中' : '加载更多'}
+          </button>
+        )}
       </section>
       {selected !== undefined && (
         <KnowledgeDetail key={selected.path} record={selected} resource={visibleDetailResource} openState={openState} onClose={closeDetail} onOpen={() => { void openSelected(); }} />

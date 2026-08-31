@@ -177,6 +177,7 @@ export function QueuePage() {
   const data = resource.status === 'ready' || resource.status === 'refreshing' || resource.status === 'failed'
     ? resource.data
     : undefined;
+  const paginationBusy = resource.status === 'refreshing' && data?.nextCursor !== undefined;
 
   return (
     <section className="instrument-panel workspace-panel live-list-page" aria-labelledby="queue-results-title">
@@ -207,7 +208,16 @@ export function QueuePage() {
       ) : null}
 
       {data?.nextCursor !== undefined && (
-        <button ref={loadMoreRef} className="load-more-button" type="button" onClick={loadMore}>加载更多</button>
+        <button
+          ref={loadMoreRef}
+          className="load-more-button"
+          type="button"
+          onClick={loadMore}
+          disabled={resource.status !== 'ready'}
+          aria-busy={paginationBusy}
+        >
+          {paginationBusy ? '加载中' : '加载更多'}
+        </button>
       )}
     </section>
   );
