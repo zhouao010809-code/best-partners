@@ -1,0 +1,77 @@
+export const INDEX_STALE_AFTER_FAILURES = 2;
+export const INDEX_STALE_AFTER_MS = 60_000;
+
+export type IndexState =
+  | { status: 'building'; startedAt: string }
+  | { status: 'ready'; version: number; refreshedAt: string }
+  | { status: 'stale'; version: number; lastSuccessAt: string; reason: string }
+  | { status: 'failed'; lastSuccessAt?: string; reason: string };
+
+type LastSuccess = {
+  version: number;
+  at: Date;
+};
+
+export class IndexStateController {
+  private state: IndexState;
+  private lastSuccess: LastSuccess | undefined;
+  private consecutiveFailures = 0;
+
+  constructor(private readonly now: () => Date) {
+    this.state = { status: 'building', startedAt: this.now().toISOString() };
+  }
+
+  snapshot(): IndexState {
+    return { ...this.state };
+  }
+
+  recordSuccess(version: number, at: Date = this.now()): void {
+    this.lastSuccess = { version, at };
+    this.consecutiveFailures = 0;
+    this.state = { status: 'ready', version, refreshedAt: at.toISOString() };
+  }
+
+  recordFailure(reason: string, at: Date = this.now()): void {
+    this.consecutiveFailures += 1;
+    if (this.lastSuccess === undefined) {
+      this.state = { status: 'failed', reason };
+      return;
+    }
+
+    const elapsed = at.getTime() - this.lastSuccess.at.getTime();
+    if (
+      this.consecutiveFailures >= INDEX_STALE_AFTER_FAILURES
+      || elapsed >= INDEX_STALE_AFTER_MS
+    ) {
+      this.state = {
+        status: 'stale',
+        version: this.lastSuccess.version,
+        lastSuccessAt: this.lastSuccess.at.toISOString(),
+        reason
+      };
+      return;
+    }
+
+    this.state = {
+      status: 'ready',
+      version: this.lastSuccess.version,
+      refreshedAt: this.lastSuccess.at.toISOString()
+    };
+  }
+
+  evaluateFreshness(at: Date = this.now()): IndexState {
+    if (
+      this.lastSuccess !== undefined
+      && at.getTime() - this.lastSuccess.at.getTime() >= INDEX_STALE_AFTER_MS
+      && this.state.status !== 'stale'
+    ) {
+      this.state = {
+        status: 'stale',
+        version: this.lastSuccess.version,
+        lastSuccessAt: this.lastSuccess.at.toISOString(),
+        reason: 'INDEX_REFRESH_TIMEOUT'
+      };
+    }
+    return this.snapshot();
+  }
+}

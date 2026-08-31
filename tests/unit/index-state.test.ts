@@ -1,0 +1,221 @@
+import { describe, expect, it } from 'vitest';
+import {
+  INDEX_STALE_AFTER_FAILURES,
+  INDEX_STALE_AFTER_MS,
+  IndexStateController,
+  type IndexState
+} from '../../src/server/index/index-state.js';
+import {
+  INDEX_REFRESH_INTERVAL_MS,
+  IndexScheduler,
+  type IntervalScheduler
+} from '../../src/server/index/index-scheduler.js';
+
+class FakeClock {
+  constructor(private current: number) {}
+
+  now = (): Date => new Date(this.current);
+
+  advance(milliseconds: number): void {
+    this.current += milliseconds;
+  }
+}
+
+class FakeIntervals implements IntervalScheduler {
+  readonly scheduled: Array<{ milliseconds: number; task: () => void }> = [];
+  cancelCount = 0;
+
+  every(milliseconds: number, task: () => void): () => void {
+    this.scheduled.push({ milliseconds, task });
+    return () => {
+      this.cancelCount += 1;
+    };
+  }
+}
+
+function status(state: IndexState): IndexState['status'] {
+  return state.status;
+}
+
+describe('IndexStateController', () => {
+  it('starts building and becomes versioned ready after a successful complete refresh', () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const controller = new IndexStateController(clock.now);
+
+    expect(controller.snapshot()).toEqual({
+      status: 'building',
+      startedAt: '2026-08-31T00:00:00.000Z'
+    });
+
+    controller.recordSuccess(4);
+    expect(controller.snapshot()).toEqual({
+      status: 'ready',
+      version: 4,
+      refreshedAt: '2026-08-31T00:00:00.000Z'
+    });
+  });
+
+  it('marks a previously successful index stale on exactly the second failed poll', () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const controller = new IndexStateController(clock.now);
+    controller.recordSuccess(7);
+
+    clock.advance(1_000);
+    controller.recordFailure('first poll failed');
+    expect(status(controller.snapshot())).toBe('ready');
+
+    clock.advance(1_000);
+    controller.recordFailure('second poll failed');
+    expect(controller.snapshot()).toEqual({
+      status: 'stale',
+      version: 7,
+      lastSuccessAt: '2026-08-31T00:00:00.000Z',
+      reason: 'second poll failed'
+    });
+    expect(INDEX_STALE_AFTER_FAILURES).toBe(2);
+  });
+
+  it('marks stale at 60 seconds without success but not one millisecond before', () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const controller = new IndexStateController(clock.now);
+    controller.recordSuccess(3);
+
+    clock.advance(INDEX_STALE_AFTER_MS - 1);
+    expect(status(controller.evaluateFreshness())).toBe('ready');
+
+    clock.advance(1);
+    expect(controller.evaluateFreshness()).toEqual({
+      status: 'stale',
+      version: 3,
+      lastSuccessAt: '2026-08-31T00:00:00.000Z',
+      reason: 'INDEX_REFRESH_TIMEOUT'
+    });
+    expect(INDEX_STALE_AFTER_MS).toBe(60_000);
+  });
+
+  it('reports failed before any successful snapshot and resets failure history on success', () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const controller = new IndexStateController(clock.now);
+    controller.recordFailure('startup failed');
+    expect(controller.snapshot()).toEqual({ status: 'failed', reason: 'startup failed' });
+
+    controller.recordSuccess(1);
+    clock.advance(1_000);
+    controller.recordFailure('transient');
+    expect(status(controller.snapshot())).toBe('ready');
+  });
+});
+
+describe('IndexScheduler', () => {
+  it('uses an injected 15-second scheduler and performs a focus refresh immediately', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const intervals = new FakeIntervals();
+    let refreshes = 0;
+    const scheduler = new IndexScheduler({
+      refresh: async () => {
+        refreshes += 1;
+        return { status: 'ready' as const, checked: 1, total: 1, version: refreshes };
+      },
+      state: new IndexStateController(clock.now),
+      intervals,
+      now: clock.now
+    });
+
+    expect(intervals.scheduled).toHaveLength(0);
+    scheduler.start();
+    expect(intervals.scheduled).toHaveLength(1);
+    expect(intervals.scheduled[0]?.milliseconds).toBe(INDEX_REFRESH_INTERVAL_MS);
+    expect(INDEX_REFRESH_INTERVAL_MS).toBe(15_000);
+    expect(refreshes).toBe(0);
+
+    await scheduler.requestFocusRefresh();
+    expect(refreshes).toBe(1);
+    expect(scheduler.snapshot().state).toMatchObject({ status: 'ready', version: 1 });
+
+    scheduler.stop();
+    expect(intervals.cancelCount).toBe(1);
+  });
+
+  it('keeps refresh progress explicit until the bounded full pass completes', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    const results = [
+      { status: 'refreshing' as const, checked: 2, total: 3, version: 0 },
+      { status: 'ready' as const, checked: 3, total: 3, version: 1 }
+    ];
+    const scheduler = new IndexScheduler({
+      refresh: async () => results.shift()!,
+      state: new IndexStateController(clock.now),
+      intervals: new FakeIntervals(),
+      now: clock.now
+    });
+
+    await scheduler.refreshNow();
+    expect(scheduler.snapshot()).toMatchObject({
+      refresh: { status: 'refreshing', checked: 2, total: 3, version: 0 },
+      state: { status: 'building' }
+    });
+
+    await scheduler.refreshNow();
+    expect(scheduler.snapshot()).toMatchObject({
+      refresh: { status: 'ready', checked: 3, total: 3, version: 1 },
+      state: { status: 'ready', version: 1 }
+    });
+  });
+
+  it('routes poll failures through the stale thresholds without real timers', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    let fail = false;
+    const scheduler = new IndexScheduler({
+      refresh: async () => {
+        if (fail) throw new Error('vault unavailable');
+        return { status: 'ready' as const, checked: 1, total: 1, version: 1 };
+      },
+      state: new IndexStateController(clock.now),
+      intervals: new FakeIntervals(),
+      now: clock.now
+    });
+
+    await scheduler.refreshNow();
+    fail = true;
+    clock.advance(1_000);
+    await expect(scheduler.refreshNow()).resolves.toBeUndefined();
+    expect(status(scheduler.snapshot().state)).toBe('ready');
+
+    clock.advance(1_000);
+    await scheduler.refreshNow();
+    expect(scheduler.snapshot().state).toMatchObject({
+      status: 'stale',
+      reason: 'vault unavailable'
+    });
+  });
+
+  it('runs single-flight and coalesces any number of triggers during a poll into one follow-up', async () => {
+    const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
+    let releaseFirst!: () => void;
+    const firstRefresh = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let refreshes = 0;
+    const scheduler = new IndexScheduler({
+      refresh: async () => {
+        refreshes += 1;
+        if (refreshes === 1) await firstRefresh;
+        return { status: 'ready' as const, checked: 1, total: 1, version: refreshes };
+      },
+      state: new IndexStateController(clock.now),
+      intervals: new FakeIntervals(),
+      now: clock.now
+    });
+
+    const scheduled = scheduler.refreshNow();
+    const focusOne = scheduler.requestFocusRefresh();
+    const focusTwo = scheduler.requestFocusRefresh();
+    await Promise.resolve();
+    expect(refreshes).toBe(1);
+
+    releaseFirst();
+    await Promise.all([scheduled, focusOne, focusTwo]);
+    expect(refreshes).toBe(2);
+    expect(scheduler.snapshot().state).toMatchObject({ status: 'ready', version: 2 });
+  });
+});
