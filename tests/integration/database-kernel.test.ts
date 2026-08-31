@@ -1,0 +1,370 @@
+import Database from 'better-sqlite3';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { createStateBackup } from '../../src/server/db/backup.js';
+import { openStateKernel, type StateKernel } from '../../src/server/db/database.js';
+import { applyMigrations } from '../../src/server/db/migrate.js';
+
+const roots: string[] = [];
+const normalKernels: Array<Extract<StateKernel, { mode: 'normal' }>> = [];
+
+afterEach(() => {
+  for (const kernel of normalKernels.splice(0)) {
+    if (kernel.db.open) kernel.close();
+  }
+  for (const root of roots.splice(0)) {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+function makeRoots(): { root: string; appDataDir: string; vaultRealRoot: string } {
+  const root = mkdtempSync(join(tmpdir(), 'xiaozhao-state-kernel-'));
+  roots.push(root);
+  const appDataDir = join(root, 'app-data');
+  const vaultRealRoot = join(root, 'vault');
+  mkdirSync(appDataDir, { mode: 0o755 });
+  mkdirSync(vaultRealRoot, { mode: 0o700 });
+  chmodSync(appDataDir, 0o755);
+  return { root, appDataDir, vaultRealRoot };
+}
+
+function requireNormal(input: { appDataDir: string; vaultRealRoot: string }) {
+  const kernel = openStateKernel(input);
+  expect(kernel.mode).toBe('normal');
+  if (kernel.mode !== 'normal') throw new Error('expected normal state kernel');
+  normalKernels.push(kernel);
+  return kernel;
+}
+
+function mode(path: string): number {
+  return statSync(path).mode & 0o777;
+}
+
+function insertRun(
+  db: Database.Database,
+  input: { id: string; materialPath?: string; sourceHash?: string; state?: string }
+): void {
+  db.prepare(`
+    INSERT INTO extraction_runs (
+      id, material_path, source_raw_sha256, reading_state, state,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, '未看', ?, ?, ?)
+  `).run(
+    input.id,
+    input.materialPath ?? '01图书馆/测试.md',
+    input.sourceHash ?? 'source-hash',
+    input.state ?? 'draft',
+    '2026-08-31T00:00:00.000Z',
+    '2026-08-31T00:00:00.000Z'
+  );
+}
+
+describe('SQLite state kernel', () => {
+  it('opens fixed external roots with restrictive modes and required pragmas', () => {
+    const input = makeRoots();
+    const databasePath = join(input.appDataDir, 'state.sqlite3');
+    const preexisting = new Database(databasePath);
+    preexisting.close();
+    chmodSync(databasePath, 0o644);
+
+    const kernel = requireNormal(input);
+
+    expect(kernel.path).toBe(databasePath);
+    expect(kernel.backupsDir).toBe(join(input.appDataDir, 'backups'));
+    expect(kernel.recoveryDir).toBe(join(input.appDataDir, 'recovery'));
+    expect(existsSync(kernel.backupsDir)).toBe(true);
+    expect(existsSync(kernel.recoveryDir)).toBe(true);
+    expect(mode(input.appDataDir)).toBe(0o700);
+    expect(mode(kernel.backupsDir)).toBe(0o700);
+    expect(mode(kernel.recoveryDir)).toBe(0o700);
+    expect(mode(kernel.path)).toBe(0o600);
+    expect(kernel.db.pragma('journal_mode', { simple: true })).toBe('wal');
+    expect(kernel.db.pragma('foreign_keys', { simple: true })).toBe(1);
+    expect(kernel.db.pragma('busy_timeout', { simple: true })).toBe(5000);
+    for (const suffix of ['-wal', '-shm']) {
+      const sidecar = `${kernel.path}${suffix}`;
+      if (existsSync(sidecar)) expect(mode(sidecar)).toBe(0o600);
+    }
+  });
+
+  it('applies the exact initial schema once across repeated startup', () => {
+    const input = makeRoots();
+    const first = requireNormal(input);
+
+    expect(first.db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
+      .toEqual({ count: 1 });
+    const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
+    expect(extractionColumns.map((column) => column.name)).toEqual([
+      'id',
+      'material_path',
+      'source_raw_sha256',
+      'reading_state',
+      'state',
+      'candidate_set_hash',
+      'version',
+      'created_at',
+      'updated_at'
+    ]);
+    first.close();
+
+    const second = requireNormal(input);
+    expect(second.db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
+      .toEqual({ count: 1 });
+  });
+
+  it('rejects a second active run for one material version but permits terminal history', () => {
+    const kernel = requireNormal(makeRoots());
+    insertRun(kernel.db, { id: 'run-1' });
+
+    expect(() => insertRun(kernel.db, { id: 'run-2' })).toThrow(/UNIQUE/);
+    insertRun(kernel.db, { id: 'run-3', state: 'completed' });
+    insertRun(kernel.db, { id: 'run-4', state: 'invalidated' });
+  });
+
+  it('rejects duplicate idempotency keys', () => {
+    const kernel = requireNormal(makeRoots());
+    const insert = kernel.db.prepare(`
+      INSERT INTO idempotency_records (
+        key, operation, request_hash, response_json, created_at
+      ) VALUES (?, 'extract', 'request-hash', NULL, '2026-08-31T00:00:00.000Z')
+    `);
+
+    insert.run('stable-key');
+    expect(() => insert.run('stable-key')).toThrow(/UNIQUE/);
+  });
+
+  it('finishes startup with a valid database', () => {
+    const kernel = requireNormal(makeRoots());
+    expect(kernel.db.pragma('integrity_check', { simple: true })).toBe('ok');
+  });
+
+  it('backs up uncheckpointed WAL data and retains three verified snapshots', async () => {
+    const kernel = requireNormal(makeRoots());
+    kernel.db.pragma('wal_autocheckpoint = 0');
+    kernel.db.prepare(`
+      INSERT INTO audit_events (operation_id, event_type, payload_json, created_at)
+      VALUES (?, 'checkpoint-test', '{}', '2026-08-31T00:00:00.000Z')
+    `).run('operation-1');
+    expect(existsSync(`${kernel.path}-wal`)).toBe(true);
+    expect(statSync(`${kernel.path}-wal`).size).toBeGreaterThan(0);
+
+    const firstBackup = await createStateBackup({ db: kernel.db, backupsDir: kernel.backupsDir });
+    const copied = new Database(firstBackup, { readonly: true, fileMustExist: true });
+    try {
+      expect(copied.prepare('SELECT operation_id FROM audit_events').get())
+        .toEqual({ operation_id: 'operation-1' });
+    } finally {
+      copied.close();
+    }
+
+    const promoted = [firstBackup];
+    for (let index = 2; index <= 5; index += 1) {
+      kernel.db.prepare(`
+        INSERT INTO audit_events (operation_id, event_type, payload_json, created_at)
+        VALUES (?, 'rotation-test', '{}', '2026-08-31T00:00:00.000Z')
+      `).run(`operation-${index}`);
+      promoted.push(await createStateBackup({ db: kernel.db, backupsDir: kernel.backupsDir }));
+    }
+
+    const backups = readdirSync(kernel.backupsDir)
+      .filter((name) => name.endsWith('.sqlite3'));
+    expect(backups).toHaveLength(3);
+    expect(backups).toContain(basename(promoted.at(-1)!));
+    expect(readdirSync(kernel.backupsDir).some((name) => name.endsWith('.tmp'))).toBe(false);
+    for (const name of backups) {
+      const path = join(kernel.backupsDir, name);
+      const status = lstatSync(path);
+      expect(status.isFile()).toBe(true);
+      expect(status.isSymbolicLink()).toBe(false);
+      expect(status.nlink).toBe(1);
+      expect(mode(path)).toBe(0o600);
+      const snapshot = new Database(path, { readonly: true, fileMustExist: true });
+      try {
+        expect(snapshot.pragma('integrity_check', { simple: true })).toBe('ok');
+      } finally {
+        snapshot.close();
+      }
+    }
+  });
+
+  it('does not rotate verified backups when a new backup fails', async () => {
+    const kernel = requireNormal(makeRoots());
+    for (let index = 1; index <= 3; index += 1) {
+      kernel.db.prepare(`
+        INSERT INTO audit_events (operation_id, event_type, payload_json, created_at)
+        VALUES (?, 'failure-test', '{}', '2026-08-31T00:00:00.000Z')
+      `).run(`operation-${index}`);
+      await createStateBackup({ db: kernel.db, backupsDir: kernel.backupsDir });
+    }
+    const before = readdirSync(kernel.backupsDir).sort();
+    kernel.close();
+
+    await expect(createStateBackup({ db: kernel.db, backupsDir: kernel.backupsDir }))
+      .rejects.toThrow();
+    expect(readdirSync(kernel.backupsDir).sort()).toEqual(before);
+  });
+
+  it('keeps database and recovery roots as external siblings outside the vault', () => {
+    const input = makeRoots();
+    const kernel = requireNormal(input);
+
+    expect(dirname(kernel.path)).toBe(input.appDataDir);
+    expect(dirname(kernel.recoveryDir)).toBe(input.appDataDir);
+    expect(kernel.recoveryDir).not.toBe(kernel.path);
+    const fromVault = relative(input.vaultRealRoot, kernel.recoveryDir);
+    expect(fromVault === '..' || fromVault.startsWith('../')).toBe(true);
+    expect(isAbsolute(fromVault)).toBe(false);
+  });
+
+  it('rejects application data contained by the vault before creating state', () => {
+    const input = makeRoots();
+    const nestedAppData = join(input.vaultRealRoot, 'app-data');
+
+    expect(() => openStateKernel({
+      appDataDir: nestedAppData,
+      vaultRealRoot: input.vaultRealRoot
+    })).toThrow(/outside/i);
+    expect(existsSync(nestedAppData)).toBe(false);
+  });
+
+  it('preserves corrupt database bytes and enters a database-free recovery-only mode', () => {
+    const input = makeRoots();
+    const databasePath = join(input.appDataDir, 'state.sqlite3');
+    const recoveryDir = join(input.appDataDir, 'recovery');
+    mkdirSync(recoveryDir, { mode: 0o700 });
+    mkdirSync(join(recoveryDir, 'batch-2'), { mode: 0o700 });
+    mkdirSync(join(recoveryDir, 'batch-1'), { mode: 0o700 });
+    const corruptBytes = Buffer.from('this is deliberately not a sqlite database\n'.repeat(8));
+    writeFileSync(databasePath, corruptBytes, { mode: 0o600 });
+    const backupsDir = join(input.appDataDir, 'backups');
+    mkdirSync(backupsDir, { mode: 0o700 });
+    writeFileSync(join(backupsDir, 'preserve-me.txt'), 'unchanged', { mode: 0o600 });
+
+    const kernel = openStateKernel(input);
+
+    expect(kernel).toEqual({
+      mode: 'recovery-only',
+      reason: 'database-corrupt',
+      recovery: { entries: ['batch-1', 'batch-2'], count: 2 }
+    });
+    expect('db' in kernel).toBe(false);
+    expect('close' in kernel).toBe(false);
+    expect('path' in kernel).toBe(false);
+    expect(readFileSync(databasePath)).toEqual(corruptBytes);
+    expect(readdirSync(backupsDir)).toEqual(['preserve-me.txt']);
+  });
+
+  it.each(['state.sqlite3', 'backups', 'recovery'])(
+    'fails closed on a symlinked %s target without touching its sentinel',
+    (targetName) => {
+      const input = makeRoots();
+      const outside = join(input.root, `outside-${targetName.replace('.', '-')}`);
+      const sentinel = targetName === 'state.sqlite3' ? outside : join(outside, 'sentinel.txt');
+      if (targetName === 'state.sqlite3') {
+        writeFileSync(outside, 'external-sentinel', { mode: 0o600 });
+      } else {
+        mkdirSync(outside, { mode: 0o700 });
+        writeFileSync(sentinel, 'external-sentinel', { mode: 0o600 });
+      }
+      symlinkSync(outside, join(input.appDataDir, targetName));
+
+      expect(() => openStateKernel(input)).toThrow(/unsafe/i);
+      expect(readFileSync(sentinel, 'utf8')).toBe('external-sentinel');
+    }
+  );
+
+  it('fails closed on a hard-linked database without changing either link', () => {
+    const input = makeRoots();
+    const outside = join(input.root, 'outside-state.sqlite3');
+    const outsideDb = new Database(outside);
+    outsideDb.exec('CREATE TABLE sentinel (value TEXT NOT NULL); INSERT INTO sentinel VALUES (\'safe\');');
+    outsideDb.close();
+    const before = readFileSync(outside);
+    linkSync(outside, join(input.appDataDir, 'state.sqlite3'));
+
+    expect(() => openStateKernel(input)).toThrow(/unsafe/i);
+    expect(readFileSync(outside)).toEqual(before);
+    expect(readFileSync(join(input.appDataDir, 'state.sqlite3'))).toEqual(before);
+  });
+
+  it.each(['symlink', 'hardlink'] as const)(
+    'rejects a %s backup entry during startup before trusting local state',
+    (linkKind) => {
+      const input = makeRoots();
+      const backupsDir = join(input.appDataDir, 'backups');
+      mkdirSync(backupsDir, { mode: 0o700 });
+      const outside = join(input.root, `outside-${linkKind}.sqlite3`);
+      const outsideDb = new Database(outside);
+      outsideDb.exec('CREATE TABLE sentinel (value TEXT NOT NULL); INSERT INTO sentinel VALUES (\'safe\');');
+      outsideDb.close();
+      const before = readFileSync(outside);
+      const backupPath = join(backupsDir, 'state-existing.sqlite3');
+      if (linkKind === 'symlink') symlinkSync(outside, backupPath);
+      else linkSync(outside, backupPath);
+
+      expect(() => {
+        const kernel = openStateKernel(input);
+        if (kernel.mode === 'normal') normalKernels.push(kernel);
+      }).toThrow(/unsafe/i);
+      expect(readFileSync(outside)).toEqual(before);
+    }
+  );
+
+  it.each(['-wal', '-shm'])(
+    'fails closed on a symlinked SQLite %s sidecar',
+    (suffix) => {
+      const input = makeRoots();
+      const databasePath = join(input.appDataDir, 'state.sqlite3');
+      const seed = new Database(databasePath);
+      seed.close();
+      const sentinel = join(input.root, `outside${suffix}`);
+      writeFileSync(sentinel, 'external-sentinel', { mode: 0o600 });
+      symlinkSync(sentinel, `${databasePath}${suffix}`);
+
+      expect(() => openStateKernel(input)).toThrow(/unsafe/i);
+      expect(readFileSync(sentinel, 'utf8')).toBe('external-sentinel');
+    }
+  );
+
+  it('rolls back all SQL from a failed migration transaction', () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+      `);
+      expect(() => applyMigrations(db, [{
+        version: 99,
+        sql: `
+          CREATE TABLE rollback_probe (id INTEGER PRIMARY KEY);
+          INSERT INTO table_that_does_not_exist VALUES (1);
+        `
+      }])).toThrow();
+      expect(db.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = 'rollback_probe'
+      `).get()).toBeUndefined();
+      expect(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
+        .toEqual({ count: 0 });
+    } finally {
+      db.close();
+    }
+  });
+});
