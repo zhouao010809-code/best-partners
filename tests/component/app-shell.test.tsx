@@ -91,10 +91,13 @@ function createApi(overrides: Partial<ReadConsoleApi> = {}): ReadConsoleApi {
 function RuntimeProbe() {
   const runtime = useConsoleRuntime();
   return (
-    <output aria-label="运行时快照">
-      <span>{runtime.health.status}</span>
-      <span data-testid="revision">{runtime.dataRevision}</span>
-    </output>
+    <>
+      <button type="button" onClick={() => void runtime.refreshHealth()}>刷新运行时健康状态</button>
+      <output aria-label="运行时快照">
+        <span>{runtime.health.status}</span>
+        <span data-testid="revision">{runtime.dataRevision}</span>
+      </output>
+    </>
   );
 }
 
@@ -214,6 +217,29 @@ describe('live console runtime', () => {
     expect(screen.getByText('索引 v7 已就绪')).toBeVisible();
   });
 
+  it.each([
+    ['disconnected', '未连接'],
+    ['recovery-required', '需要恢复']
+  ] as const)('prioritizes a fresh %s failure over a cached connected snapshot', async (status, label) => {
+    const user = userEvent.setup();
+    const getHealth = vi.fn()
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(failure<HealthSnapshot>(
+        status,
+        'http://private.local/?key=must-not-render'
+      ));
+    const api = createApi({ getHealth });
+    renderShell(api);
+    const connection = screen.getByRole('status', { name: '本地连接状态' });
+    expect(await within(connection).findByText('已连接')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: '刷新运行时健康状态' }));
+
+    expect(await within(connection).findByText(label)).toBeVisible();
+    expect(connection).not.toHaveTextContent('已连接');
+    expect(document.body).not.toHaveTextContent('private.local');
+  });
+
   it('recovers the initial health read when StrictMode replays effects', async () => {
     const getHealth = vi.fn((signal?: AbortSignal) => {
       if (getHealth.mock.calls.length === 1) {
@@ -280,9 +306,56 @@ describe('live console runtime', () => {
     expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
   });
 
+  it('forces a fresh post-terminal health read and ignores an older concurrent refresh result', async () => {
+    const user = userEvent.setup();
+    let releaseStaleHealth!: (result: ApiClientResult<HealthSnapshot>) => void;
+    const staleHealth = new Promise<ApiClientResult<HealthSnapshot>>((resolve) => {
+      releaseStaleHealth = resolve;
+    });
+    let releaseTerminalJob!: (result: ApiClientResult<IndexJob>) => void;
+    const terminalJob = new Promise<ApiClientResult<IndexJob>>((resolve) => {
+      releaseTerminalJob = resolve;
+    });
+    const getHealth = vi.fn()
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockReturnValueOnce(staleHealth)
+      .mockResolvedValueOnce(ok(readyHealth(8)));
+    const runningJob: IndexJob = { ...completedJob(7), status: 'running' };
+    const api = createApi({
+      getHealth,
+      rebuildIndex: vi.fn(async () => ok(runningJob)),
+      getIndexJob: vi.fn(() => terminalJob)
+    });
+    renderShell(api);
+    await screen.findByText('索引 v7 已就绪');
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(api.getIndexJob).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: '刷新运行时健康状态' }));
+    await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(3));
+
+    act(() => releaseTerminalJob(ok(completedJob(8))));
+
+    await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(4));
+    expect(await screen.findByText('索引 v8 已就绪')).toBeVisible();
+    expect(screen.getByTestId('revision')).toHaveTextContent('1');
+
+    act(() => releaseStaleHealth(ok(readyHealth(7))));
+    await waitFor(() => expect(screen.getByText('索引 v8 已就绪')).toBeVisible());
+    expect(screen.getByTestId('revision')).toHaveTextContent('1');
+  });
+
   it.each([
+    [{ status: 'ready', version: 10, refreshedAt: '2026-09-01T00:00:00.000Z' }, 10],
     [{ status: 'building', version: 11, startedAt: '2026-09-01T00:00:00.000Z' }, 11],
-    [{ status: 'failed', version: 12, reason: 'INDEX_FAILED' }, 12]
+    [{ status: 'failed', version: 12, reason: 'INDEX_FAILED' }, 12],
+    [{
+      status: 'stale',
+      version: 13,
+      lastSuccessAt: '2026-09-01T00:00:00.000Z',
+      reason: 'INDEX_STALE'
+    }, 13]
   ] as const)('uses the version from an authoritative %s snapshot when rebuilding', async (index, version) => {
     const getHealth = vi.fn()
       .mockResolvedValueOnce(ok(readyHealth(7)))
@@ -295,6 +368,89 @@ describe('live console runtime', () => {
     act(() => window.dispatchEvent(new Event('focus')));
 
     await waitFor(() => expect(api.rebuildIndex).toHaveBeenCalledWith(version, expect.any(String)));
+  });
+
+  it('polls queued and running jobs until completion before the final health read', async () => {
+    const queuedJob: IndexJob = { ...completedJob(7), status: 'queued' };
+    const runningJob: IndexJob = { ...completedJob(7), status: 'running' };
+    const getHealth = vi.fn()
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(ok(readyHealth(8)));
+    const getIndexJob = vi.fn()
+      .mockResolvedValueOnce(ok(queuedJob))
+      .mockResolvedValueOnce(ok(runningJob))
+      .mockResolvedValueOnce(ok(completedJob(8)));
+    const api = createApi({
+      getHealth,
+      rebuildIndex: vi.fn(async () => ok(queuedJob)),
+      getIndexJob
+    });
+    renderShell(api);
+    await screen.findByText('索引 v7 已就绪');
+
+    act(() => window.dispatchEvent(new Event('focus')));
+
+    await waitFor(
+      () => expect(screen.getByTestId('revision')).toHaveTextContent('1'),
+      { timeout: 2_000 }
+    );
+    expect(getIndexJob).toHaveBeenCalledTimes(3);
+    expect(getIndexJob.mock.calls.every(([, signal]) => signal instanceof AbortSignal)).toBe(true);
+    expect(getHealth).toHaveBeenCalledTimes(3);
+    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+  });
+
+  it.each(['failed', 'interrupted'] as const)(
+    'reads final health after a terminal %s job without incrementing revision',
+    async (status) => {
+      const runningJob: IndexJob = { ...completedJob(7), status: 'running' };
+      const terminalJob: IndexJob = {
+        ...completedJob(7),
+        status,
+        errorCode: status === 'failed' ? 'INDEX_FAILED' : 'INDEX_INTERRUPTED'
+      };
+      const getHealth = vi.fn()
+        .mockResolvedValueOnce(ok(readyHealth(7)))
+        .mockResolvedValueOnce(ok(readyHealth(7)))
+        .mockResolvedValueOnce(ok(readyHealth(7)));
+      const api = createApi({
+        getHealth,
+        rebuildIndex: vi.fn(async () => ok(runningJob)),
+        getIndexJob: vi.fn(async () => ok(terminalJob))
+      });
+      renderShell(api);
+      await screen.findByText('索引 v7 已就绪');
+
+      act(() => window.dispatchEvent(new Event('focus')));
+
+      expect(await screen.findByText('索引刷新失败')).toBeVisible();
+      expect(getHealth).toHaveBeenCalledTimes(3);
+      expect(screen.getByLabelText('运行时快照')).toHaveTextContent('failed');
+      expect(screen.getByTestId('revision')).toHaveTextContent('0');
+    }
+  );
+
+  it('keeps revision unchanged when the required final health read fails', async () => {
+    const getHealth = vi.fn()
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(failure<HealthSnapshot>('disconnected', 'private final health error'));
+    const api = createApi({
+      getHealth,
+      rebuildIndex: vi.fn(async () => ok(completedJob(8)))
+    });
+    renderShell(api);
+    await screen.findByText('索引 v7 已就绪');
+
+    act(() => window.dispatchEvent(new Event('focus')));
+
+    expect(await screen.findByText('索引服务未连接')).toBeVisible();
+    expect(screen.getByRole('status', { name: '本地连接状态' })).toHaveTextContent('未连接');
+    expect(getHealth).toHaveBeenCalledTimes(3);
+    expect(api.getIndexJob).not.toHaveBeenCalled();
+    expect(screen.getByTestId('revision')).toHaveTextContent('0');
+    expect(document.body).not.toHaveTextContent('private final health error');
   });
 
   it('retries an ambiguous disconnected rebuild with the same key and rotates it next focus cycle', async () => {
@@ -368,6 +524,37 @@ describe('live console runtime', () => {
 
     expect(capturedSignal?.aborted).toBe(true);
     expect(document.body).not.toHaveTextContent('连接已断开');
+  });
+
+  it('aborts a polling wait on unmount without issuing another job read', async () => {
+    let pollSignal: AbortSignal | undefined;
+    const runningJob: IndexJob = { ...completedJob(7), status: 'running' };
+    const getIndexJob = vi.fn(async (_id: string, signal?: AbortSignal) => {
+      pollSignal = signal;
+      return ok(runningJob);
+    });
+    const api = createApi({
+      getHealth: vi.fn()
+        .mockResolvedValueOnce(ok(readyHealth(7)))
+        .mockResolvedValueOnce(ok(readyHealth(7))),
+      rebuildIndex: vi.fn(async () => ok(runningJob)),
+      getIndexJob
+    });
+    const view = renderShell(api);
+    await screen.findByText('索引 v7 已就绪');
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(getIndexJob).toHaveBeenCalledTimes(1));
+    await act(async () => Promise.resolve());
+
+    view.unmount();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(pollSignal?.aborted).toBe(true);
+    expect(getIndexJob).toHaveBeenCalledTimes(1);
   });
 });
 

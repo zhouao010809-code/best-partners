@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createBrowserReadConsoleApi,
-  type ApiClientResult
+  type ApiClientResult,
+  type ReadConsoleApi
 } from '../../src/client/api/client.js';
 
 const SHA = 'a'.repeat(64);
@@ -29,6 +30,26 @@ function completedJob(id = 'job-1') {
     progress: { completed: 3, total: 3 },
     createdAt: '2026-09-01T00:00:00.000Z',
     updatedAt: '2026-09-01T00:00:01.000Z'
+  };
+}
+
+function readyHealth() {
+  return {
+    status: 'ready' as const,
+    plugin: {
+      status: 'connected' as const,
+      pluginId: 'local-rest-api',
+      pluginVersion: '5.1.0',
+      obsidianVersion: '1.9.12'
+    },
+    index: {
+      status: 'ready' as const,
+      version: 7,
+      refreshedAt: '2026-09-01T00:00:00.000Z'
+    },
+    model: { status: 'configured' as const, providerHost: 'api.example.com', name: 'model-v1' },
+    writeGate: { status: 'blocked' as const, missing: ['WRITE_ENABLED'], fingerprintMatches: true },
+    schemaIssues: { status: 'available' as const, count: 3 }
   };
 }
 
@@ -89,23 +110,7 @@ describe('read console API facade', () => {
 
   it('returns response data instead of envelopes and validates every public response strictly', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(success({
-        status: 'ready',
-        plugin: {
-          status: 'connected',
-          pluginId: 'local-rest-api',
-          pluginVersion: '5.1.0',
-          obsidianVersion: '1.9.12'
-        },
-        index: {
-          status: 'ready',
-          version: 7,
-          refreshedAt: '2026-09-01T00:00:00.000Z'
-        },
-        model: { status: 'configured', providerHost: 'api.example.com', name: 'model-v1' },
-        writeGate: { status: 'blocked', missing: ['WRITE_ENABLED'], fingerprintMatches: true },
-        schemaIssues: { status: 'available', count: 3 }
-      }))
+      .mockResolvedValueOnce(success(readyHealth()))
       .mockResolvedValueOnce(success({ items: [], unexpected: true }));
     const api = createBrowserReadConsoleApi(fetchMock);
 
@@ -122,6 +127,84 @@ describe('read console API facade', () => {
       ok: false,
       state: { status: 'validation-error' }
     });
+  });
+
+  it.each([
+    {
+      name: 'health',
+      payload: { ...readyHealth(), unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.getHealth()
+    },
+    {
+      name: 'materials',
+      payload: { items: [], unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.listMaterials({})
+    },
+    {
+      name: 'knowledge',
+      payload: { items: [], unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.listKnowledge({})
+    },
+    {
+      name: 'knowledge detail',
+      payload: {
+        path: '02知识库/alpha.md',
+        title: 'Alpha',
+        markdown: '# Alpha',
+        internalKnowledgeLinks: [],
+        versionMarker: { rawSha256: SHA },
+        unexpected: true
+      },
+      invoke: (api: ReadConsoleApi) => api.getKnowledgeDetail('02知识库/alpha.md')
+    },
+    {
+      name: 'operations',
+      payload: { items: [], unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.listOperations()
+    },
+    {
+      name: 'open knowledge',
+      payload: { opened: true, path: '02知识库/alpha.md', unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.openKnowledge('02知识库/alpha.md')
+    },
+    {
+      name: 'index rebuild',
+      payload: { ...completedJob(), unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.rebuildIndex(7, 'strict-rebuild-1')
+    },
+    {
+      name: 'index job',
+      payload: { ...completedJob(), unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.getIndexJob('job-1')
+    }
+  ])('rejects extra fields in the $name public response schema', async ({ payload, invoke }) => {
+    const fetchMock = vi.fn((path: RequestInfo | URL) => (
+      path === '/api/v1/bootstrap'
+        ? Promise.resolve(success({ csrfToken: CSRF }))
+        : Promise.resolve(success(payload))
+    ));
+    const api = createBrowserReadConsoleApi(fetchMock);
+
+    const result = await invoke(api);
+
+    expect(result).toEqual({
+      ok: false,
+      state: { status: 'validation-error', message: '响应结构与当前客户端不兼容。' }
+    });
+  });
+
+  it('validates the lazy bootstrap response strictly before sending a command', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(success({ csrfToken: CSRF, unexpected: true }));
+    const api = createBrowserReadConsoleApi(fetchMock);
+
+    const result = await api.openKnowledge('02知识库/alpha.md');
+
+    expect(result).toMatchObject({ ok: false, state: { status: 'validation-error' } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/bootstrap',
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' })
+    );
   });
 
   it('coalesces the first bootstrap across commands and never persists or logs the CSRF token', async () => {
@@ -210,6 +293,43 @@ describe('read console API facade', () => {
     const result = await api.getHealth();
 
     expect(result).toEqual({ ok: false, cancelled: true });
+  });
+
+  it.each([
+    ['health', '/api/v1/health', (api: ReadConsoleApi, signal: AbortSignal) => api.getHealth(signal)],
+    ['materials', '/api/v1/materials', (api: ReadConsoleApi, signal: AbortSignal) => api.listMaterials({}, signal)],
+    ['knowledge', '/api/v1/knowledge', (api: ReadConsoleApi, signal: AbortSignal) => api.listKnowledge({}, signal)],
+    ['knowledge detail', '/api/v1/knowledge/file?path=alpha.md', (api: ReadConsoleApi, signal: AbortSignal) => (
+      api.getKnowledgeDetail('alpha.md', signal)
+    )],
+    ['operations', '/api/v1/operations', (api: ReadConsoleApi, signal: AbortSignal) => api.listOperations(signal)],
+    ['index job', '/api/v1/index-jobs/job-1', (api: ReadConsoleApi, signal: AbortSignal) => (
+      api.getIndexJob('job-1', signal)
+    )]
+  ] as const)('forwards a real AbortSignal to the fixed %s GET', async (_name, path, invoke) => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted === true) {
+          reject(signal.reason);
+          return;
+        }
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      })
+    ));
+    const api = createBrowserReadConsoleApi(fetchMock);
+    const controller = new AbortController();
+
+    const request = invoke(api, controller.signal);
+    expect(fetchMock).toHaveBeenCalledWith(path, {
+      method: 'GET',
+      credentials: 'same-origin',
+      signal: controller.signal
+    });
+
+    controller.abort();
+
+    await expect(request).resolves.toEqual({ ok: false, cancelled: true });
   });
 
   it('maps a non-abort network failure to disconnected', async () => {

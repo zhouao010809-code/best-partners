@@ -97,6 +97,16 @@ function connectionPresentation(resource: Resource<HealthSnapshot>): {
   readonly detail: string;
 } {
   const snapshot = resourceData(resource);
+  if (
+    resource.status === 'failed'
+    && (resource.state.status === 'disconnected' || resource.state.status === 'recovery-required')
+  ) {
+    return {
+      className: 'connection-badge--unavailable',
+      title: resource.state.status === 'recovery-required' ? '需要恢复' : '未连接',
+      detail: '本地服务无可用实时快照'
+    };
+  }
   if (snapshot?.plugin.status === 'connected') {
     return {
       className: 'connection-badge--connected',
@@ -223,6 +233,7 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   const mountedRef = useRef(false);
   const healthRef = useRef<Resource<HealthSnapshot>>({ status: 'loading' });
   const healthRequestRef = useRef<Promise<ApiClientResult<HealthSnapshot>> | undefined>(undefined);
+  const latestHealthRequestRef = useRef<Promise<ApiClientResult<HealthSnapshot>> | undefined>(undefined);
   const focusCycleRef = useRef<Promise<void> | undefined>(undefined);
   const controllersRef = useRef(new Set<AbortController>());
   const [health, setHealth] = useState<Resource<HealthSnapshot>>({ status: 'loading' });
@@ -231,8 +242,8 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
 
   healthRef.current = health;
 
-  const readHealth = useCallback((): Promise<ApiClientResult<HealthSnapshot>> => {
-    if (healthRequestRef.current !== undefined) return healthRequestRef.current;
+  const readHealth = useCallback((forceFresh = false): Promise<ApiClientResult<HealthSnapshot>> => {
+    if (!forceFresh && healthRequestRef.current !== undefined) return healthRequestRef.current;
 
     const controller = new AbortController();
     controllersRef.current.add(controller);
@@ -241,14 +252,20 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
       if (healthRequestRef.current === request) healthRequestRef.current = undefined;
     });
     healthRequestRef.current = request;
+    latestHealthRequestRef.current = request;
     return request;
   }, [api]);
 
   const refreshHealth = useCallback(async (): Promise<void> => {
     const currentData = resourceData(healthRef.current);
     setHealth(refreshingResource(currentData));
-    const result = await readHealth();
-    if (!mountedRef.current || isCancelled(result)) return;
+    const request = readHealth();
+    const result = await request;
+    if (
+      !mountedRef.current
+      || latestHealthRequestRef.current !== request
+      || isCancelled(result)
+    ) return;
     if (result.ok) {
       setHealth({ status: 'ready', data: result.value });
       return;
@@ -297,6 +314,7 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
     let job = rebuild.value;
     try {
       while (ACTIVE_INDEX_JOB_STATUSES.has(job.status)) {
+        if (!mountedRef.current || cycleController.signal.aborted) return;
         const jobResult = await api.getIndexJob(job.id, cycleController.signal);
         if (!mountedRef.current || cycleController.signal.aborted || isCancelled(jobResult)) return;
         if (!jobResult.ok) {
@@ -313,8 +331,13 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
     }
 
     if (!mountedRef.current || cycleController.signal.aborted) return;
-    const finalHealth = await readHealth();
-    if (!mountedRef.current || isCancelled(finalHealth)) return;
+    const finalHealthRequest = readHealth(true);
+    const finalHealth = await finalHealthRequest;
+    if (
+      !mountedRef.current
+      || latestHealthRequestRef.current !== finalHealthRequest
+      || isCancelled(finalHealth)
+    ) return;
     if (!finalHealth.ok) {
       setHealth(failedResource(stableRuntimeFailure(finalHealth.state.status), authoritative));
       return;
@@ -342,8 +365,13 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
 
   useEffect(() => {
     mountedRef.current = true;
-    void readHealth().then((result) => {
-      if (!mountedRef.current || isCancelled(result)) return;
+    const request = readHealth();
+    void request.then((result) => {
+      if (
+        !mountedRef.current
+        || latestHealthRequestRef.current !== request
+        || isCancelled(result)
+      ) return;
       if (result.ok) {
         setHealth({ status: 'ready', data: result.value });
       } else {
@@ -355,6 +383,7 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
       for (const controller of controllersRef.current) controller.abort();
       controllersRef.current.clear();
       healthRequestRef.current = undefined;
+      latestHealthRequestRef.current = undefined;
       focusCycleRef.current = undefined;
     };
   }, [readHealth]);
