@@ -21,6 +21,7 @@
     "test:contract:obsidian:restart:prepare": "vitest run --config vitest.contract.config.ts tests/contract/obsidian-local-rest-5.1.0/restart-prepare.contract.test.ts --no-file-parallelism",
     "test:contract:obsidian:restart:verify": "vitest run --config vitest.contract.config.ts tests/contract/obsidian-local-rest-5.1.0/restart-verify.contract.test.ts --no-file-parallelism",
     "gate:write-capability": "tsx scripts/gate-write-capability.ts",
+    "smoke:real-vault": "tsx scripts/real-vault-read-smoke.ts",
     "test:e2e": "playwright test",
     "verify": "npm run typecheck && npm run test && npm run build"
   },
