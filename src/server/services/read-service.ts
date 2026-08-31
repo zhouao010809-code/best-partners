@@ -236,16 +236,26 @@ function sameProjectionVersion(left: KnowledgeRecord, right: KnowledgeRecord): b
     && left.upstreamVersion === right.upstreamVersion;
 }
 
-function safeWikiTarget(target: string): string | undefined {
+type WikiTarget =
+  | { readonly kind: 'exact'; readonly path: string }
+  | { readonly kind: 'fallback'; readonly key: string };
+
+type IndexedMarkdownIdentity = {
+  readonly id: string;
+  readonly kind: 'material' | 'knowledge';
+  readonly path: string;
+  readonly title: string;
+};
+
+function safeWikiTarget(target: string): WikiTarget | undefined {
   const heading = target.indexOf('#');
   const block = target.indexOf('^');
   const separators = [heading, block].filter((index) => index >= 0);
   const end = separators.length === 0 ? target.length : Math.min(...separators);
-  const base = target.slice(0, end).trim();
+  const base = target.slice(0, end).trim().normalize('NFC');
   if (
     base.length === 0
     || base.length > 1024
-    || base !== base.normalize('NFC')
     || base.startsWith('/')
     || base.includes('\\')
     || base.includes('\0')
@@ -256,68 +266,132 @@ function safeWikiTarget(target: string): string | undefined {
     return undefined;
   }
 
-  const withExtension = base.endsWith('.md') ? base : `${base}.md`;
-  const validationPath = withExtension.startsWith('02知识库/')
-    ? withExtension
-    : `02知识库/${withExtension}`;
+  const filename = base.split('/').at(-1)!;
+  const isMarkdownPath = filename.endsWith('.md');
+  if (!isMarkdownPath && filename.includes('.')) return undefined;
+
+  const validationPath = base.startsWith('02知识库/')
+    ? `${base}${isMarkdownPath ? '' : '.md'}`
+    : `02知识库/${base}${isMarkdownPath ? '' : '.md'}`;
   try {
-    if (normalizeKnowledgePath(validationPath) !== validationPath) return undefined;
+    const path = normalizeKnowledgePath(validationPath);
+    return isMarkdownPath ? { kind: 'exact', path } : { kind: 'fallback', key: base };
   } catch {
     return undefined;
   }
-  return base;
 }
 
-function knowledgeReferenceKeys(record: KnowledgeRecord): string[] | undefined {
+function indexedMarkdownIdentity(
+  kind: IndexedMarkdownIdentity['kind'],
+  record: MaterialRecord | KnowledgeRecord
+): IndexedMarkdownIdentity | undefined {
   let path: string;
   try {
-    path = normalizeKnowledgePath(record.path);
+    path = normalizeVaultPath(record.path, 'read');
   } catch {
     return undefined;
   }
-  if (path !== record.path) return undefined;
-  const relativePath = path.slice('02知识库/'.length);
+  if (
+    !path.endsWith('.md')
+    || (kind === 'material' && !path.startsWith('01图书馆/'))
+    || (kind === 'knowledge' && !path.startsWith('02知识库/'))
+  ) {
+    return undefined;
+  }
+  return {
+    id: `${kind}\0${record.path}`,
+    kind,
+    path,
+    title: record.title
+  };
+}
+
+function fallbackReferenceKeys(identity: IndexedMarkdownIdentity): string[] {
+  const root = identity.kind === 'material' ? '01图书馆/' : '02知识库/';
+  const relativePath = identity.path.slice(root.length);
   const filename = relativePath.split('/').at(-1)!;
-  const pathWithoutExtension = path.slice(0, -3);
+  const pathWithoutExtension = identity.path.slice(0, -3);
   const relativeWithoutExtension = relativePath.slice(0, -3);
   const filenameWithoutExtension = filename.slice(0, -3);
   return [...new Set([
-    path,
     pathWithoutExtension,
-    relativePath,
     relativeWithoutExtension,
-    filename,
     filenameWithoutExtension,
-    record.title
-  ])];
+    identity.title.trim().normalize('NFC')
+  ].filter((key) => key.length > 0))];
+}
+
+function markdownBody(markdown: string): string {
+  const documentStart = markdown.startsWith('\uFEFF') ? 1 : 0;
+  const firstNewline = markdown.indexOf('\n', documentStart);
+  if (firstNewline < 0) return markdown;
+  const opening = markdown.slice(documentStart, firstNewline).replace(/\r$/u, '');
+  if (opening !== '---') return markdown;
+
+  let lineStart = firstNewline + 1;
+  while (lineStart <= markdown.length) {
+    const newline = markdown.indexOf('\n', lineStart);
+    const lineEnd = newline < 0 ? markdown.length : newline;
+    const line = markdown.slice(lineStart, lineEnd).replace(/\r$/u, '');
+    if (line === '---') return newline < 0 ? '' : markdown.slice(newline + 1);
+    if (newline < 0) return '';
+    lineStart = newline + 1;
+  }
+  return '';
+}
+
+function addCandidate(
+  candidates: Map<string, Map<string, IndexedMarkdownIdentity>>,
+  key: string,
+  identity: IndexedMarkdownIdentity
+): void {
+  const matches = candidates.get(key) ?? new Map<string, IndexedMarkdownIdentity>();
+  matches.set(identity.id, identity);
+  candidates.set(key, matches);
 }
 
 function resolveInternalKnowledgeLinks(
   markdown: string,
-  records: readonly KnowledgeRecord[]
+  detailPath: string,
+  materials: readonly MaterialRecord[],
+  knowledge: readonly KnowledgeRecord[]
 ): Array<{ path: string; title: string }> {
-  const candidates = new Map<string, Map<string, KnowledgeRecord>>();
-  for (const record of records) {
-    const keys = knowledgeReferenceKeys(record);
-    if (keys === undefined) continue;
-    for (const key of keys) {
-      const matches = candidates.get(key) ?? new Map<string, KnowledgeRecord>();
-      matches.set(record.path, record);
-      candidates.set(key, matches);
+  const exactCandidates = new Map<string, Map<string, IndexedMarkdownIdentity>>();
+  const fallbackCandidates = new Map<string, Map<string, IndexedMarkdownIdentity>>();
+  for (const [kind, records] of [
+    ['material', materials],
+    ['knowledge', knowledge]
+  ] as const) {
+    for (const record of records) {
+      const identity = indexedMarkdownIdentity(kind, record);
+      if (identity === undefined) continue;
+      addCandidate(exactCandidates, identity.path, identity);
+      for (const key of fallbackReferenceKeys(identity)) {
+        addCandidate(fallbackCandidates, key, identity);
+      }
     }
   }
 
   const resolved: Array<{ path: string; title: string }> = [];
   const seen = new Set<string>();
-  for (const extracted of extractWikiLinks(markdown)) {
+  for (const extracted of extractWikiLinks(markdownBody(markdown))) {
     const target = safeWikiTarget(extracted);
     if (target === undefined) continue;
-    const matches = candidates.get(target);
+    const matches = target.kind === 'exact'
+      ? exactCandidates.get(target.path)
+      : fallbackCandidates.get(target.key);
     if (matches === undefined || matches.size !== 1) continue;
-    const record = matches.values().next().value as KnowledgeRecord | undefined;
-    if (record === undefined || seen.has(record.path)) continue;
-    seen.add(record.path);
-    resolved.push({ path: record.path, title: record.title });
+    const identity = matches.values().next().value as IndexedMarkdownIdentity | undefined;
+    if (
+      identity === undefined
+      || identity.kind !== 'knowledge'
+      || identity.path === detailPath
+      || seen.has(identity.path)
+    ) {
+      continue;
+    }
+    seen.add(identity.path);
+    resolved.push({ path: identity.path, title: identity.title });
   }
   return resolved;
 }
@@ -400,13 +474,19 @@ export function createReadService(input: {
       } catch {
         throw new PublicApiError('MARKDOWN_ENCODING_INVALID', 'Knowledge note is not valid UTF-8', 422);
       }
+      const indexedMaterials = collectMaterials(input.repository, {});
       const indexedKnowledge = collectKnowledge(input.repository, { includeObsolete: true });
       assertIndexVersionUnchanged(indexVersion, input.currentIndexVersion);
       return {
         path,
         title: after.title,
         markdown,
-        internalKnowledgeLinks: resolveInternalKnowledgeLinks(markdown, indexedKnowledge),
+        internalKnowledgeLinks: resolveInternalKnowledgeLinks(
+          markdown,
+          path,
+          indexedMaterials,
+          indexedKnowledge
+        ),
         versionMarker: {
           rawSha256: computedSha256,
           ...(live.upstreamVersion === undefined ? {} : { upstreamVersion: live.upstreamVersion })

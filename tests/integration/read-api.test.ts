@@ -623,6 +623,81 @@ describe('versioned read APIs', () => {
       .not.toMatch(/00大脑规则|01图书馆|03大讲堂|file:|obsidian:|https:/u);
   });
 
+  it('resolves only body links with globally unique normalized and layered index identities', async () => {
+    const markdown = [
+      '---',
+      '类型: 知识笔记',
+      '来源资料: ["[[YAML目标]]"]',
+      '---',
+      '[[正文标题]]',
+      '[[同名]]',
+      '[[02知识库/同名.md]]',
+      '[[跨库标题]]',
+      '[[仅资料]]',
+      '[[foo.pdf]]',
+      '[[foo.md]]',
+      '[[foo.md.md]]',
+      `[[${'Café'.normalize('NFD')}]]`,
+      '[[子目录/相对.md]]',
+      '[[来源]]'
+    ].join('\n');
+    const gatewayFixture = createGateway({ '02知识库/来源.md': markdown });
+    const live = await gatewayFixture.gateway.readRaw('02知识库/来源.md');
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+
+    for (const record of [
+      material({ path: '01图书馆/同名.md', title: '同名' }),
+      material({ path: '01图书馆/标题资料.md', title: '跨库标题' }),
+      material({ path: '01图书馆/仅资料.md', title: '仅资料' })
+    ]) {
+      repository.replaceFile({ kind: 'material', record });
+    }
+    for (const record of [
+      knowledge({ path: live.path, title: '来源', rawSha256: live.rawSha256 }),
+      knowledge({ path: '02知识库/YAML目标.md', title: 'YAML目标', rawSha256: '1'.repeat(64) }),
+      knowledge({ path: '02知识库/正文路径.md', title: '正文标题', rawSha256: '2'.repeat(64) }),
+      knowledge({ path: '02知识库/同名.md', title: '同名', rawSha256: '3'.repeat(64) }),
+      knowledge({ path: '02知识库/标题知识.md', title: '跨库标题', rawSha256: '4'.repeat(64) }),
+      knowledge({ path: '02知识库/foo.pdf.md', title: 'PDF Markdown', rawSha256: '5'.repeat(64) }),
+      knowledge({ path: '02知识库/foo.md', title: 'Foo exact', rawSha256: '6'.repeat(64) }),
+      knowledge({ path: '02知识库/foo.md.md', title: 'Foo double', rawSha256: '7'.repeat(64) }),
+      knowledge({ path: '02知识库/Café.md', title: 'Café', rawSha256: '8'.repeat(64) }),
+      knowledge({ path: '02知识库/子目录/相对.md', title: '相对', rawSha256: '9'.repeat(64) })
+    ]) {
+      repository.replaceFile({ kind: 'knowledge', record });
+    }
+
+    let indexVersionReads = 0;
+    const server = createReadServer({
+      repository,
+      gateway: gatewayFixture.gateway,
+      database,
+      currentIndexVersion: () => {
+        indexVersionReads += 1;
+        return 7;
+      }
+    });
+    const readsBeforeDetail = indexVersionReads;
+    const detail = await server.inject({
+      method: 'GET',
+      url: `/api/v1/knowledge/file?path=${encodeURIComponent(live.path)}`,
+      headers: requestHeaders()
+    });
+
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json<{ data: { internalKnowledgeLinks: unknown[] } }>().data.internalKnowledgeLinks)
+      .toEqual([
+        { path: '02知识库/正文路径.md', title: '正文标题' },
+        { path: '02知识库/同名.md', title: '同名' },
+        { path: '02知识库/foo.md', title: 'Foo exact' },
+        { path: '02知识库/foo.md.md', title: 'Foo double' },
+        { path: '02知识库/Café.md', title: 'Café' },
+        { path: '02知识库/子目录/相对.md', title: '相对' }
+      ]);
+    expect(indexVersionReads - readsBeforeDetail).toBe(2);
+  });
+
   it('fails closed when live metadata lies or the indexed projection changes during a detail read', async () => {
     const markdown = '# coherent';
     const gatewayFixture = createGateway({ '02知识库/竞态.md': markdown });
