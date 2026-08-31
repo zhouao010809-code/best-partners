@@ -123,6 +123,7 @@ type PaginationFocusOutcome = 'next' | 'terminal' | 'failed';
 
 type PaginationFocusHarness = {
   readonly api: ReadConsoleApi;
+  readonly focusControlLabel: string;
   readonly path: '/queue' | '/knowledge';
   readonly resultText: string;
   readonly resultsHeading: string;
@@ -140,6 +141,7 @@ function queuePaginationFocusHarness(outcome: PaginationFocusOutcome): Paginatio
   const resultText = outcome === 'failed' ? '读取材料未完成，请稍后重试。' : '延迟材料';
   return {
     api: createApi({ listMaterials }),
+    focusControlLabel: '标题',
     path: '/queue',
     resultText,
     resultsHeading: '材料结果',
@@ -165,6 +167,7 @@ function knowledgePaginationFocusHarness(outcome: PaginationFocusOutcome): Pagin
   const resultText = outcome === 'failed' ? '读取知识未完成，请稍后重试。' : '延迟知识';
   return {
     api: createApi({ listKnowledge }),
+    focusControlLabel: '标题与 YAML 召回字段',
     path: '/knowledge',
     resultText,
     resultsHeading: '知识结果',
@@ -184,6 +187,11 @@ const PAGINATION_FOCUS_PAGES = [
   { name: 'knowledge', createHarness: knowledgePaginationFocusHarness }
 ] as const;
 
+function simulateNativeDisabledFocusLoss(): void {
+  document.body.tabIndex = -1;
+  document.body.focus();
+}
+
 describe('Phase 1 read pages', () => {
   beforeEach(() => {
     const nonce = document.createElement('meta');
@@ -199,6 +207,7 @@ describe('Phase 1 read pages', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    document.body.removeAttribute('tabindex');
     document.head.querySelector('meta[name="csp-nonce"]')?.remove();
   });
 
@@ -496,9 +505,8 @@ describe('Phase 1 read pages', () => {
       const loadMore = await screen.findByRole('button', { name: '加载更多' });
       await user.click(loadMore);
       await waitFor(() => expect(loadMore).toBeDisabled());
-      const main = screen.getByRole('main');
-      main.focus();
-      expect(main).toHaveFocus();
+      simulateNativeDisabledFocusLoss();
+      expect(document.body).toHaveFocus();
 
       harness.settle();
       await screen.findByText(harness.resultText);
@@ -516,9 +524,8 @@ describe('Phase 1 read pages', () => {
       const loadMore = await screen.findByRole('button', { name: '加载更多' });
       await user.click(loadMore);
       await waitFor(() => expect(loadMore).toBeDisabled());
-      const main = screen.getByRole('main');
-      main.focus();
-      expect(main).toHaveFocus();
+      simulateNativeDisabledFocusLoss();
+      expect(document.body).toHaveFocus();
 
       harness.settle();
       await screen.findByText(harness.resultText);
@@ -536,13 +543,32 @@ describe('Phase 1 read pages', () => {
       const loadMore = await screen.findByRole('button', { name: '加载更多' });
       await user.click(loadMore);
       await waitFor(() => expect(loadMore).toBeDisabled());
-      const main = screen.getByRole('main');
-      main.focus();
-      expect(main).toHaveFocus();
+      simulateNativeDisabledFocusLoss();
+      expect(document.body).toHaveFocus();
 
       harness.settle();
       await screen.findByText(harness.resultText);
       expect(screen.getByRole('heading', { name: harness.resultsHeading })).toHaveFocus();
+    }
+  );
+
+  it.each(PAGINATION_FOCUS_PAGES)(
+    'preserves active $name filter focus when delayed pagination settles',
+    async ({ createHarness }) => {
+      const user = userEvent.setup();
+      const harness = createHarness('next');
+      renderRoute(harness.path, harness.api);
+
+      const loadMore = await screen.findByRole('button', { name: '加载更多' });
+      await user.click(loadMore);
+      await waitFor(() => expect(loadMore).toBeDisabled());
+      const filter = screen.getByLabelText(harness.focusControlLabel);
+      await user.click(filter);
+      expect(filter).toHaveFocus();
+
+      harness.settle();
+      await screen.findByText(harness.resultText);
+      expect(filter).toHaveFocus();
     }
   );
 

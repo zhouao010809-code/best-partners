@@ -79,7 +79,10 @@ export function QueuePage() {
   const [resource, setResource] = useState<PageResource<QueueData>>({ status: 'loading' });
   const resourceRef = useRef(resource);
   const generationRef = useRef(0);
-  const paginationFocusIntentRef = useRef<number | undefined>(undefined);
+  const paginationFocusIntentRef = useRef<{
+    readonly generation: number;
+    readonly trigger: HTMLButtonElement;
+  } | undefined>(undefined);
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
   const loadMoreRef = useRef<HTMLButtonElement>(null);
@@ -151,10 +154,13 @@ export function QueuePage() {
   }, [applied, applyRevision, requestPage, runtime.dataRevision]);
 
   useEffect(() => {
-    if (paginationFocusIntentRef.current !== generationRef.current
+    const intent = paginationFocusIntentRef.current;
+    if (intent === undefined
+      || intent.generation !== generationRef.current
       || resource.status === 'loading'
       || resource.status === 'refreshing') return;
     paginationFocusIntentRef.current = undefined;
+    if (document.activeElement !== document.body && document.activeElement !== intent.trigger) return;
     const target = resource.status === 'ready' && resource.data.nextCursor !== undefined
       ? loadMoreRef.current
       : resultsHeadingRef.current;
@@ -174,13 +180,14 @@ export function QueuePage() {
 
   function loadMore(): void {
     if (resource.status !== 'ready' || resource.data.nextCursor === undefined) return;
-    const ownedFocus = document.activeElement === loadMoreRef.current;
+    const trigger = loadMoreRef.current;
+    const ownedFocus = trigger !== null && document.activeElement === trigger;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     generationRef.current += 1;
     const generation = generationRef.current;
-    paginationFocusIntentRef.current = ownedFocus ? generation : undefined;
+    paginationFocusIntentRef.current = ownedFocus ? { generation, trigger } : undefined;
     setResource({ status: 'refreshing', data: resource.data });
     void requestPage(applied, resource.data.nextCursor, true, generation, controller);
   }
