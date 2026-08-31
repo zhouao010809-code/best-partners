@@ -24,6 +24,37 @@ import {
 const encoder = new TextEncoder();
 const fixture = (name: string) => readFile(fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url)));
 
+const libraryFrontmatter = (overrides = '') => `---
+类型: 原始资料
+处理状态: 未归档
+来源平台: 个人
+原始标题:
+作者:
+原始链接:
+采集日期:
+所属主题: []
+关键词: []
+知识入库状态: 未提炼
+生成知识: []
+备注:
+${overrides}---
+正文`;
+
+const knowledgeFrontmatter = (overrides = '') => `---
+类型: 知识笔记
+来源类型: AI提炼
+使用状态: AI总结
+知识类型: 方法
+所属主题: []
+关键词: []
+来源资料: []
+适用场景: []
+核心结论: 有效结论
+关键要点: []
+使用边界: 有效边界
+${overrides}---
+正文`;
+
 class RuleGateway implements VaultGateway {
   readonly reads: string[] = [];
 
@@ -107,6 +138,41 @@ describe('current frontmatter contracts', () => {
     expect(extractWikiLinks('[[A]] and [[B|label]]')).toEqual(['A', 'B']);
   });
 
+  it('accepts a UTF-8 BOM while preserving the original body view', () => {
+    const original = encoder.encode(`\uFEFF${libraryFrontmatter()}`);
+    const parsed = parseFrontmatter(original);
+
+    expect(new TextDecoder().decode(parsed.bodyBytes)).toBe('正文');
+    expect(parsed.bodyBytes.buffer).toBe(original.buffer);
+  });
+
+  it('treats canonical empty optional library scalars as absent', () => {
+    const result = parseLibraryNote(
+      encoder.encode(libraryFrontmatter()),
+      '01图书馆/来自个人/回退标题.md'
+    );
+
+    expect(result.issues).toEqual([]);
+    expect(result.record?.title).toBe('回退标题');
+    expect(result.record).not.toHaveProperty('collectedAt');
+  });
+
+  it('rejects missing required structural arrays instead of silently defaulting them', () => {
+    const library = libraryFrontmatter().replace('生成知识: []\n', '');
+    const knowledge = knowledgeFrontmatter().replace('关键要点: []\n', '');
+
+    expect(parseLibraryNote(encoder.encode(library)).issues[0]?.code).toBe('INVALID_FIELD');
+    expect(parseKnowledgeNote(encoder.encode(knowledge)).issues[0]?.code).toBe('INVALID_FIELD');
+  });
+
+  it('rejects blank required recall text', () => {
+    const blankConclusion = knowledgeFrontmatter().replace('核心结论: 有效结论', '核心结论: ""');
+    const blankBoundary = knowledgeFrontmatter().replace('使用边界: 有效边界', '使用边界: "  "');
+
+    expect(parseKnowledgeNote(encoder.encode(blankConclusion)).record).toBeUndefined();
+    expect(parseKnowledgeNote(encoder.encode(blankBoundary)).record).toBeUndefined();
+  });
+
   it.each([
     ['missing closing delimiter', '---\n类型: 原始资料\n正文'],
     ['duplicate YAML keys', '---\n类型: 原始资料\n类型: 知识笔记\n---\n正文'],
@@ -137,6 +203,8 @@ describe('rule bundle compatibility', () => {
     expect(first.sources.map((source) => source.path)).toEqual(RULE_BUNDLE_SOURCE_PATHS);
     expect(first.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(first.fingerprint).toBe(second.fingerprint);
+    expect(Object.isFrozen(first.sources)).toBe(true);
+    expect(first.sources.every(Object.isFrozen)).toBe(true);
   });
 
   it('marks candidate generation and write planning stale while keeping reads available', async () => {

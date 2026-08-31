@@ -10,8 +10,12 @@ export const RULE_BUNDLE_SOURCE_PATHS = [
 ] as const;
 
 export type RuleBundle = {
-  fingerprint: string;
-  sources: ReadonlyArray<{ path: string; text: string; rawSha256: string }>;
+  readonly fingerprint: string;
+  readonly sources: ReadonlyArray<{
+    readonly path: string;
+    readonly text: string;
+    readonly rawSha256: string;
+  }>;
 };
 
 export async function loadRuleBundle(gateway: VaultGateway): Promise<RuleBundle> {
@@ -32,7 +36,8 @@ export async function loadRuleBundle(gateway: VaultGateway): Promise<RuleBundle>
     hash.update('\0', 'utf8');
   }
 
-  return { fingerprint: hash.digest('hex'), sources };
+  const immutableSources = Object.freeze(sources.map((source) => Object.freeze(source)));
+  return Object.freeze({ fingerprint: hash.digest('hex'), sources: immutableSources });
 }
 
 export class RuleBundleGuard {

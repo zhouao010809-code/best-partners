@@ -36,8 +36,12 @@ function locateFrontmatter(bytes: Uint8Array): {
   yamlEnd: number;
   bodyStart: number;
 } {
-  const opening = lineEnd(bytes, 0);
-  if (!isDelimiter(bytes, 0, opening.contentEnd) || opening.nextStart === bytes.byteLength) {
+  const documentStart = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  const opening = lineEnd(bytes, documentStart);
+  if (
+    !isDelimiter(bytes, documentStart, opening.contentEnd)
+    || opening.nextStart === bytes.byteLength
+  ) {
     throw new FrontmatterError('FRONTMATTER_OPENING_DELIMITER_MISSING');
   }
 

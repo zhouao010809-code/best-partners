@@ -10,14 +10,27 @@ export const SOURCE_PLATFORMS = [
 ] as const;
 export const KNOWLEDGE_STATUSES = ['未提炼', '部分入库', '已入库'] as const;
 
+const optionalScalar = z.preprocess(
+  (value) => value === null || (typeof value === 'string' && value.trim().length === 0)
+    ? undefined
+    : value,
+  z.string().optional()
+);
+const stringList = z.array(z.string().trim().min(1));
+
 const librarySchema = z.object({
   类型: z.literal('原始资料'),
   处理状态: z.enum(['未归档', '已归档']),
   来源平台: z.enum(SOURCE_PLATFORMS),
-  原始标题: z.string().optional(),
-  采集日期: z.string().optional(),
+  原始标题: optionalScalar,
+  作者: optionalScalar,
+  原始链接: optionalScalar,
+  采集日期: optionalScalar,
+  所属主题: stringList,
+  关键词: stringList,
   知识入库状态: z.enum(KNOWLEDGE_STATUSES),
-  生成知识: z.array(z.string()).default([])
+  生成知识: stringList,
+  备注: optionalScalar
 });
 
 function filenameTitle(path: string): string {

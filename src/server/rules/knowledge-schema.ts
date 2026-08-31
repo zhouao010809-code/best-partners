@@ -9,18 +9,30 @@ export const KNOWLEDGE_TYPES = [
   '概念', '原理', '模型', '方法', 'SOP', '标准', '案例', '数据', '观点', '素材'
 ] as const;
 
+const optionalScalar = z.preprocess(
+  (value) => value === null || (typeof value === 'string' && value.trim().length === 0)
+    ? undefined
+    : value,
+  z.string().optional()
+);
+const stringList = z.array(z.string().trim().min(1));
+const requiredScalar = z.string().trim().min(1);
+
 const knowledgeSchema = z.object({
   类型: z.literal('知识笔记'),
   来源类型: z.enum(['AI提炼', '人工输入']),
   使用状态: z.enum(USAGE_STATUSES),
   知识类型: z.enum(KNOWLEDGE_TYPES),
-  所属主题: z.array(z.string()).default([]),
-  关键词: z.array(z.string()).default([]),
-  来源资料: z.array(z.string()).default([]),
-  适用场景: z.array(z.string()).default([]),
-  核心结论: z.string(),
-  关键要点: z.array(z.string()).default([]),
-  使用边界: z.string()
+  所属主题: stringList,
+  关键词: stringList,
+  来源资料: stringList,
+  适用场景: stringList,
+  核心结论: requiredScalar,
+  关键要点: stringList,
+  使用边界: requiredScalar,
+  创建日期: optionalScalar,
+  更新日期: optionalScalar,
+  备注: optionalScalar
 });
 
 function filenameTitle(path: string): string {
