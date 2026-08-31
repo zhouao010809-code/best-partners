@@ -3,6 +3,7 @@ import { createCsrfProtector } from './security/csrf.js';
 import { registerHtmlCsp } from './security/csp.js';
 import { isAllowedHost, isAllowedOrigin } from './security/origin-host.js';
 import { createSessionManager } from './security/session.js';
+import type { HealthService, HealthSnapshot } from './services/health-service.js';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -38,11 +39,25 @@ function errorStatusCode(error: unknown): number {
     : 500;
 }
 
-export function buildServer() {
+const DEFAULT_HEALTH_SNAPSHOT: HealthSnapshot = {
+  status: 'recovery-only',
+  writeGate: {
+    status: 'blocked',
+    missing: ['profile', 'database'],
+    fingerprintMatches: false
+  }
+};
+
+const DEFAULT_HEALTH_SERVICE: HealthService = {
+  getSnapshot: async () => DEFAULT_HEALTH_SNAPSHOT
+};
+
+export function buildServer(options: { readonly healthService?: HealthService } = {}) {
   const app = Fastify({ logger: false, bodyLimit: MAX_JSON_BODY_BYTES });
   const nodeEnv = process.env.NODE_ENV;
   const sessions = createSessionManager();
   const csrf = createCsrfProtector();
+  const healthService = options.healthService ?? DEFAULT_HEALTH_SERVICE;
 
   registerHtmlCsp(app);
   app.setErrorHandler((error, _request, reply) => {
@@ -80,11 +95,7 @@ export function buildServer() {
   });
 
   app.get('/api/v1/health', async () => ({
-    data: {
-      status: 'booting' as const,
-      apiVersion: 'v1' as const,
-      writeGate: 'closed' as const
-    },
+    data: await healthService.getSnapshot(),
     version: 1
   }));
   app.get('/api/v1/bootstrap', async (_request, reply) => {

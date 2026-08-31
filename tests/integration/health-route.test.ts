@@ -8,7 +8,7 @@ describe('GET /api/v1/health', () => {
     await Promise.all(servers.splice(0).map((server) => server.close()));
   });
 
-  it('returns a versioned boot snapshot', async () => {
+  it('returns a versioned fail-closed health snapshot', async () => {
     const server = buildServer();
     servers.push(server);
     const response = await server.inject({
@@ -19,9 +19,12 @@ describe('GET /api/v1/health', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       data: {
-        status: 'booting',
-        apiVersion: 'v1',
-        writeGate: 'closed'
+        status: 'recovery-only',
+        writeGate: {
+          status: 'blocked',
+          missing: ['profile', 'database'],
+          fingerprintMatches: false
+        }
       },
       version: 1
     });
