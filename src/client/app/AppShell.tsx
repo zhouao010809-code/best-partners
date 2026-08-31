@@ -235,6 +235,8 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   const healthRequestRef = useRef<Promise<ApiClientResult<HealthSnapshot>> | undefined>(undefined);
   const latestHealthRequestRef = useRef<Promise<ApiClientResult<HealthSnapshot>> | undefined>(undefined);
   const focusCycleRef = useRef<Promise<void> | undefined>(undefined);
+  const healthOwnerSequenceRef = useRef(0);
+  const activeFocusOwnerRef = useRef<number | undefined>(undefined);
   const controllersRef = useRef(new Set<AbortController>());
   const [health, setHealth] = useState<Resource<HealthSnapshot>>({ status: 'loading' });
   const [dataRevision, setDataRevision] = useState(0);
@@ -257,12 +259,21 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   }, [api]);
 
   const refreshHealth = useCallback(async (): Promise<void> => {
+    if (activeFocusOwnerRef.current !== undefined) {
+      await readHealth();
+      return;
+    }
+
+    healthOwnerSequenceRef.current += 1;
+    const refreshOwner = healthOwnerSequenceRef.current;
     const currentData = resourceData(healthRef.current);
     setHealth(refreshingResource(currentData));
     const request = readHealth();
     const result = await request;
     if (
       !mountedRef.current
+      || activeFocusOwnerRef.current !== undefined
+      || healthOwnerSequenceRef.current !== refreshOwner
       || latestHealthRequestRef.current !== request
       || isCancelled(result)
     ) return;
@@ -273,11 +284,14 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
     setHealth(failedResource(stableRuntimeFailure(result.state.status), currentData));
   }, [readHealth]);
 
-  const executeFocusCycle = useCallback(async (): Promise<void> => {
+  const executeFocusCycle = useCallback(async (focusOwner: number): Promise<void> => {
+    const ownsFocusState = (): boolean => (
+      mountedRef.current && activeFocusOwnerRef.current === focusOwner
+    );
     const previousData = resourceData(healthRef.current);
     setHealth(refreshingResource(previousData));
     const authoritativeResult = await readHealth();
-    if (!mountedRef.current || isCancelled(authoritativeResult)) return;
+    if (!ownsFocusState() || isCancelled(authoritativeResult)) return;
     if (!authoritativeResult.ok) {
       setHealth(failedResource(
         stableRuntimeFailure(authoritativeResult.state.status),
@@ -299,11 +313,11 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
       !rebuild.ok
       && !isCancelled(rebuild)
       && rebuild.state.status === 'disconnected'
-      && mountedRef.current
+      && ownsFocusState()
     ) {
       rebuild = await api.rebuildIndex(authoritative.index.version, idempotencyKey);
     }
-    if (!mountedRef.current || isCancelled(rebuild)) return;
+    if (!ownsFocusState() || isCancelled(rebuild)) return;
     if (!rebuild.ok) {
       setHealth(failedResource(stableRuntimeFailure(rebuild.state.status), authoritative));
       return;
@@ -314,9 +328,9 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
     let job = rebuild.value;
     try {
       while (ACTIVE_INDEX_JOB_STATUSES.has(job.status)) {
-        if (!mountedRef.current || cycleController.signal.aborted) return;
+        if (!ownsFocusState() || cycleController.signal.aborted) return;
         const jobResult = await api.getIndexJob(job.id, cycleController.signal);
-        if (!mountedRef.current || cycleController.signal.aborted || isCancelled(jobResult)) return;
+        if (!ownsFocusState() || cycleController.signal.aborted || isCancelled(jobResult)) return;
         if (!jobResult.ok) {
           setHealth(failedResource(stableRuntimeFailure(jobResult.state.status), authoritative));
           return;
@@ -330,11 +344,11 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
       controllersRef.current.delete(cycleController);
     }
 
-    if (!mountedRef.current || cycleController.signal.aborted) return;
+    if (!ownsFocusState() || cycleController.signal.aborted) return;
     const finalHealthRequest = readHealth(true);
     const finalHealth = await finalHealthRequest;
     if (
-      !mountedRef.current
+      !ownsFocusState()
       || latestHealthRequestRef.current !== finalHealthRequest
       || isCancelled(finalHealth)
     ) return;
@@ -356,8 +370,14 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
 
   const runFocusCycle = useCallback((): Promise<void> => {
     if (focusCycleRef.current !== undefined) return focusCycleRef.current;
-    const cycle = executeFocusCycle().finally(() => {
-      if (focusCycleRef.current === cycle) focusCycleRef.current = undefined;
+    healthOwnerSequenceRef.current += 1;
+    const focusOwner = healthOwnerSequenceRef.current;
+    activeFocusOwnerRef.current = focusOwner;
+    const cycle = executeFocusCycle(focusOwner).finally(() => {
+      if (focusCycleRef.current === cycle) {
+        focusCycleRef.current = undefined;
+        if (activeFocusOwnerRef.current === focusOwner) activeFocusOwnerRef.current = undefined;
+      }
     });
     focusCycleRef.current = cycle;
     return cycle;
@@ -380,6 +400,8 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
     });
     return () => {
       mountedRef.current = false;
+      healthOwnerSequenceRef.current += 1;
+      activeFocusOwnerRef.current = undefined;
       for (const controller of controllersRef.current) controller.abort();
       controllersRef.current.clear();
       healthRequestRef.current = undefined;

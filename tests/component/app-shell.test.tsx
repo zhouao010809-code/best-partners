@@ -346,6 +346,66 @@ describe('live console runtime', () => {
     expect(screen.getByTestId('revision')).toHaveTextContent('1');
   });
 
+  it('keeps focus-owned refreshing state when refreshHealth joins its initial health request', async () => {
+    const user = userEvent.setup();
+    let releaseFocusHealth!: (result: ApiClientResult<HealthSnapshot>) => void;
+    const focusHealth = new Promise<ApiClientResult<HealthSnapshot>>((resolve) => {
+      releaseFocusHealth = resolve;
+    });
+    let releaseRebuild!: (result: ApiClientResult<IndexJob>) => void;
+    const rebuild = new Promise<ApiClientResult<IndexJob>>((resolve) => {
+      releaseRebuild = resolve;
+    });
+    const getHealth = vi.fn()
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockReturnValueOnce(focusHealth)
+      .mockResolvedValueOnce(ok(readyHealth(8)));
+    const rebuildIndex = vi.fn(() => rebuild);
+    const api = createApi({ getHealth, rebuildIndex });
+    renderShell(api);
+    await screen.findByText('索引 v7 已就绪');
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('button', { name: '刷新运行时健康状态' }));
+
+    await act(async () => {
+      releaseFocusHealth(ok(readyHealth(7)));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(rebuildIndex).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('运行时快照')).toHaveTextContent('refreshing');
+    expect(screen.getByText('索引刷新中')).toBeVisible();
+    expect(screen.queryByText('索引 v7 已就绪')).not.toBeInTheDocument();
+
+    act(() => releaseRebuild(ok(completedJob(8))));
+    await waitFor(() => expect(screen.getByTestId('revision')).toHaveTextContent('1'));
+    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+  });
+
+  it('allows a health refresh started after a focus cycle to publish its newer snapshot', async () => {
+    const user = userEvent.setup();
+    const getHealth = vi.fn()
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(ok(readyHealth(8)))
+      .mockResolvedValueOnce(ok(readyHealth(9)));
+    const api = createApi({ getHealth });
+    renderShell(api);
+    await screen.findByText('索引 v7 已就绪');
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(screen.getByTestId('revision')).toHaveTextContent('1'));
+    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: '刷新运行时健康状态' }));
+
+    expect(await screen.findByText('索引 v9 已就绪')).toBeVisible();
+    expect(getHealth).toHaveBeenCalledTimes(4);
+    expect(screen.getByLabelText('运行时快照')).toHaveTextContent('ready');
+  });
+
   it.each([
     [{ status: 'ready', version: 10, refreshedAt: '2026-09-01T00:00:00.000Z' }, 10],
     [{ status: 'building', version: 11, startedAt: '2026-09-01T00:00:00.000Z' }, 11],
