@@ -287,12 +287,14 @@ export function createHealthService(input: {
         : missingCapabilities(profile);
       if (!input.writeEnabled) missing.push('writeEnabled');
       if (blocker !== undefined) missing.push(blocker);
+      const index: HealthIndexSnapshot = blocker === undefined
+        ? publicIndexSnapshot(input.indexState.snapshot())
+        : { status: 'unavailable', reason: 'RECOVERY_ONLY' };
+      const schemaIssuesUnavailable = index.status !== 'ready' && index.status !== 'stale';
       return {
         status: blocker === undefined ? 'ready' : 'recovery-only',
         plugin: connection.plugin,
-        index: blocker === undefined
-          ? publicIndexSnapshot(input.indexState.snapshot())
-          : { status: 'unavailable', reason: 'RECOVERY_ONLY' },
+        index,
         model: modelSnapshot(input.model),
         writeGate: {
           status: missing.length === 0 ? 'enabled' : 'blocked',
@@ -300,7 +302,7 @@ export function createHealthService(input: {
           fingerprintMatches
         },
         schemaIssues: schemaIssuesSnapshot({
-          unavailable: blocker !== undefined,
+          unavailable: schemaIssuesUnavailable,
           ...(input.schemaIssues === undefined ? {} : { source: input.schemaIssues })
         })
       };

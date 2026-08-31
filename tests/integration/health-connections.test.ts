@@ -169,4 +169,76 @@ describe('GET /api/v1/health Connections contract', () => {
     expect(response.body).not.toContain(secret);
     expect(response.body).not.toContain('apiKey');
   });
+
+  it.each([
+    {
+      name: 'building',
+      index: {
+        status: 'building' as const,
+        startedAt: '2026-09-01T12:00:00.000Z'
+      }
+    },
+    {
+      name: 'failed',
+      index: {
+        status: 'failed' as const,
+        reason: 'upstream secret must stay private'
+      }
+    }
+  ])('keeps schema issues unavailable while a normal-database index is $name', async ({ index }) => {
+    const stateKernel = await normalKernel();
+    let indexSnapshotCalls = 0;
+    let schemaIssueCountCalls = 0;
+    const service = createHealthService({
+      writeEnabled: false,
+      gateway: {
+        fingerprint: async () => ({
+          pluginId: 'obsidian-local-rest-api',
+          pluginVersion: '5.1.0',
+          obsidianVersion: '1.13.7'
+        }),
+        readOpenApi: async () => { throw new Error('profile unavailable'); }
+      },
+      profileDirectory: join(roots[0] ?? tmpdir(), 'profiles'),
+      stateKernel,
+      indexState: {
+        snapshot: () => {
+          indexSnapshotCalls += 1;
+          return index;
+        }
+      },
+      model: { baseUrl: 'https://models.example' },
+      schemaIssues: {
+        count: () => {
+          schemaIssueCountCalls += 1;
+          return 0;
+        }
+      }
+    });
+    const server = buildServer({ healthService: service });
+    servers.push(server);
+
+    const response = await server.inject({
+      method: 'GET',
+      url: '/api/v1/health',
+      headers: { host: '127.0.0.1:4317' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      data: {
+        index: {
+          status: index.status,
+          ...(index.status === 'failed' ? { reason: 'INDEX_FAILED' } : {})
+        },
+        schemaIssues: {
+          status: 'unavailable',
+          count: 0,
+          reason: 'INDEX_UNAVAILABLE'
+        }
+      }
+    });
+    expect(indexSnapshotCalls).toBe(1);
+    expect(schemaIssueCountCalls).toBe(0);
+  });
 });
