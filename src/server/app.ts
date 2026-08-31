@@ -47,7 +47,10 @@ export function buildServer() {
   registerHtmlCsp(app);
   app.setErrorHandler((error, _request, reply) => {
     const statusCode = errorStatusCode(error);
-    return reply.code(statusCode).send(safeFailureForStatus(statusCode));
+    return reply
+      .code(statusCode)
+      .type('application/json; charset=utf-8')
+      .send(safeFailureForStatus(statusCode));
   });
   app.setNotFoundHandler((_request, reply) => reply
     .code(404)
@@ -57,10 +60,11 @@ export function buildServer() {
     if (!isAllowedHost(request.headers.host)) {
       return reply.code(421).send(safeError('MISDIRECTED_REQUEST', 'Request authority rejected'));
     }
-    if (!isAllowedOrigin(request.headers.origin, nodeEnv)) {
+    const isMutation = MUTATION_METHODS.has(request.method);
+    if (!isAllowedOrigin(request.headers.origin, nodeEnv, isMutation)) {
       return reply.code(403).send(safeError('ORIGIN_FORBIDDEN', 'Origin rejected'));
     }
-    if (!MUTATION_METHODS.has(request.method)) {
+    if (!isMutation) {
       return;
     }
 
