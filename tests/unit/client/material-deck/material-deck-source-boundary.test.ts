@@ -11,6 +11,16 @@ const runtimeFiles = [
   'useDeckStyleSheet.ts',
   'material-deck.css'
 ] as const;
+const forbiddenRuntimePatterns = [
+  /@ant-design\/icons/u,
+  /\bLark\w*/u,
+  /\bProduction\w*/u,
+  /publish|schedul|archiv/iu,
+  /DataRecovery/u,
+  /onGoPlanning|onGoContent/u,
+  /(?:发布|排期|归档|拍摄|剪辑|审核)/u,
+  /\/Users\/ao\/Desktop\/production-deck-source-kit/u
+] as const;
 
 function read(relativePath: string): string {
   return readFileSync(resolve(projectRoot, relativePath), 'utf8');
@@ -36,18 +46,17 @@ describe('MaterialDeck source boundary', () => {
       .map(readSource)
       .join('\n');
 
-    for (const forbidden of [
-      /@ant-design\/icons/u,
-      /\bLark\w*/u,
-      /\bProduction\w*/u,
-      /\b(?:publish|schedule|archive)\b/iu,
-      /DataRecovery/u,
-      /onGoPlanning|onGoContent/u,
-      /(?:发布|排期|归档|拍摄|剪辑|审核)/u,
-      /\/Users\/ao\/Desktop\/production-deck-source-kit/u
-    ]) {
+    for (const forbidden of forbiddenRuntimePatterns) {
       expect(runtimeSource).not.toMatch(forbidden);
     }
+  });
+
+  it.each([
+    'publishRecords',
+    'openSchedule',
+    'archiveTargetRef'
+  ])('detects the legacy camelCase or stem probe %s', (probe) => {
+    expect(forbiddenRuntimePatterns.some((pattern) => pattern.test(probe))).toBe(true);
   });
 
   it('contains no React style prop, imperative inline style, or fixed DOM id', () => {

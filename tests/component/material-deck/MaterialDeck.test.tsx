@@ -269,6 +269,27 @@ describe('MaterialDeck interactions', () => {
     expect(container.querySelector('[data-material-detail-mode="preview"]')).toBeNull();
   });
 
+  it('still enters preview at 220ms after moving exactly 12px', () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <MaterialDeck cards={[makeCard(1)]} onPrimaryAction={vi.fn()} />
+    );
+    const first = cardTriggers(container)[0]!;
+    fireEvent.pointerDown(first, {
+      pointerId: 8,
+      isPrimary: true,
+      button: 0,
+      clientX: 10,
+      clientY: 10
+    });
+    fireEvent.pointerMove(first, { pointerId: 8, clientX: 22, clientY: 10 });
+    act(() => vi.advanceTimersByTime(220));
+
+    expect(container.querySelector('[data-material-detail-mode="preview"]')).toBeInTheDocument();
+    fireEvent.pointerUp(first, { pointerId: 8 });
+    expect(container.querySelector('[data-material-detail-mode="preview"]')).toBeNull();
+  });
+
   it('cancels an active preview after movement and still suppresses its synthetic click', () => {
     vi.useFakeTimers();
     const { container } = render(
