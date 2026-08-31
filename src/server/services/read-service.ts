@@ -15,6 +15,7 @@ import type {
 } from '../../shared/api/schemas.js';
 import type { z } from 'zod';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { extractWikiLinks } from '../rules/wikilinks.js';
 
 type MaterialApiQuery = z.output<typeof materialQuerySchema>;
 type KnowledgeApiQuery = z.output<typeof knowledgeQuerySchema>;
@@ -26,6 +27,7 @@ export interface ReadService {
     path: string;
     title: string;
     markdown: string;
+    internalKnowledgeLinks: Array<{ path: string; title: string }>;
     versionMarker: { rawSha256: string; upstreamVersion?: string };
   }>;
   openKnowledge(path: string): Promise<{ opened: true; path: string }>;
@@ -234,6 +236,92 @@ function sameProjectionVersion(left: KnowledgeRecord, right: KnowledgeRecord): b
     && left.upstreamVersion === right.upstreamVersion;
 }
 
+function safeWikiTarget(target: string): string | undefined {
+  const heading = target.indexOf('#');
+  const block = target.indexOf('^');
+  const separators = [heading, block].filter((index) => index >= 0);
+  const end = separators.length === 0 ? target.length : Math.min(...separators);
+  const base = target.slice(0, end).trim();
+  if (
+    base.length === 0
+    || base.length > 1024
+    || base !== base.normalize('NFC')
+    || base.startsWith('/')
+    || base.includes('\\')
+    || base.includes('\0')
+    || /%[0-9a-f]{2}/iu.test(base)
+    || /^[a-z][a-z0-9+.-]*:/iu.test(base)
+    || /^(?:00大脑规则|01图书馆|03大讲堂)(?:\/|$)/u.test(base)
+  ) {
+    return undefined;
+  }
+
+  const withExtension = base.endsWith('.md') ? base : `${base}.md`;
+  const validationPath = withExtension.startsWith('02知识库/')
+    ? withExtension
+    : `02知识库/${withExtension}`;
+  try {
+    if (normalizeKnowledgePath(validationPath) !== validationPath) return undefined;
+  } catch {
+    return undefined;
+  }
+  return base;
+}
+
+function knowledgeReferenceKeys(record: KnowledgeRecord): string[] | undefined {
+  let path: string;
+  try {
+    path = normalizeKnowledgePath(record.path);
+  } catch {
+    return undefined;
+  }
+  if (path !== record.path) return undefined;
+  const relativePath = path.slice('02知识库/'.length);
+  const filename = relativePath.split('/').at(-1)!;
+  const pathWithoutExtension = path.slice(0, -3);
+  const relativeWithoutExtension = relativePath.slice(0, -3);
+  const filenameWithoutExtension = filename.slice(0, -3);
+  return [...new Set([
+    path,
+    pathWithoutExtension,
+    relativePath,
+    relativeWithoutExtension,
+    filename,
+    filenameWithoutExtension,
+    record.title
+  ])];
+}
+
+function resolveInternalKnowledgeLinks(
+  markdown: string,
+  records: readonly KnowledgeRecord[]
+): Array<{ path: string; title: string }> {
+  const candidates = new Map<string, Map<string, KnowledgeRecord>>();
+  for (const record of records) {
+    const keys = knowledgeReferenceKeys(record);
+    if (keys === undefined) continue;
+    for (const key of keys) {
+      const matches = candidates.get(key) ?? new Map<string, KnowledgeRecord>();
+      matches.set(record.path, record);
+      candidates.set(key, matches);
+    }
+  }
+
+  const resolved: Array<{ path: string; title: string }> = [];
+  const seen = new Set<string>();
+  for (const extracted of extractWikiLinks(markdown)) {
+    const target = safeWikiTarget(extracted);
+    if (target === undefined) continue;
+    const matches = candidates.get(target);
+    if (matches === undefined || matches.size !== 1) continue;
+    const record = matches.values().next().value as KnowledgeRecord | undefined;
+    if (record === undefined || seen.has(record.path)) continue;
+    seen.add(record.path);
+    resolved.push({ path: record.path, title: record.title });
+  }
+  return resolved;
+}
+
 export function createReadService(input: {
   repository: IndexRepository;
   gateway: OpenableVaultGateway;
@@ -287,6 +375,7 @@ export function createReadService(input: {
 
     getKnowledgeDetail: async (requestedPath) => {
       const path = normalizeKnowledgePath(requestedPath);
+      const indexVersion = readIndexVersion(input.currentIndexVersion);
       const before = input.repository.getKnowledge(path);
       if (before === undefined) {
         throw new PublicApiError('KNOWLEDGE_NOT_FOUND', 'Knowledge note was not found', 404);
@@ -311,10 +400,13 @@ export function createReadService(input: {
       } catch {
         throw new PublicApiError('MARKDOWN_ENCODING_INVALID', 'Knowledge note is not valid UTF-8', 422);
       }
+      const indexedKnowledge = collectKnowledge(input.repository, { includeObsolete: true });
+      assertIndexVersionUnchanged(indexVersion, input.currentIndexVersion);
       return {
         path,
         title: after.title,
         markdown,
+        internalKnowledgeLinks: resolveInternalKnowledgeLinks(markdown, indexedKnowledge),
         versionMarker: {
           rawSha256: computedSha256,
           ...(live.upstreamVersion === undefined ? {} : { upstreamVersion: live.upstreamVersion })

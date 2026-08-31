@@ -9,7 +9,12 @@ import type { HealthService, HealthSnapshot } from './services/health-service.js
 import type { IndexRepository } from './index/index-repository.js';
 import type { OpenableVaultGateway } from './vault/VaultGateway.js';
 import { PublicApiError } from '../shared/api/errors.js';
-import { apiFailureSchema } from '../shared/api/schemas.js';
+import {
+  API_VERSION,
+  apiFailureSchema,
+  bootstrapDataSchema,
+  bootstrapResponseSchema
+} from '../shared/api/schemas.js';
 import { createReadService } from './services/read-service.js';
 import {
   IndexJobService,
@@ -20,6 +25,7 @@ import { registerKnowledgeRoutes } from './api/routes/knowledge.js';
 import { registerOperationRoutes } from './api/routes/operations.js';
 import { registerIndexJobRoutes } from './api/routes/index-jobs.js';
 import { registerHealthRoutes } from './api/routes/health.js';
+import { parseApiOutput } from './api/route-validation.js';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -220,10 +226,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     const session = sessions.issue();
     reply.header('set-cookie', session.setCookie);
     reply.header('cache-control', 'no-store');
-    return {
-      data: { csrfToken: csrf.issue(session.sessionId) },
-      version: 1
-    };
+    const data = parseApiOutput(bootstrapDataSchema, {
+      csrfToken: csrf.issue(session.sessionId)
+    });
+    return parseApiOutput(bootstrapResponseSchema, { data, version: API_VERSION });
   });
   if (indexJobs !== undefined || options.onClose !== undefined) {
     app.addHook('onClose', async () => {

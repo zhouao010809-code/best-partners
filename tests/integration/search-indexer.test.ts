@@ -52,6 +52,8 @@ function knowledgeNote(input: {
   status?: 'AI总结' | '已优化' | '定论' | '过时';
   conclusion?: string;
   body?: string;
+  createdAt?: string;
+  updatedAt?: string;
 } = {}): string {
   return `---
 类型: 知识笔记
@@ -65,6 +67,7 @@ function knowledgeNote(input: {
 核心结论: ${input.conclusion ?? '只存召回字段。'}
 关键要点: [标题先行, 正文后取]
 使用边界: 不存正文。
+${input.createdAt === undefined ? '' : `创建日期: "${input.createdAt}"\n`}${input.updatedAt === undefined ? '' : `更新日期: "${input.updatedAt}"\n`}备注:
 ---
 
 ${input.body ?? '不应进入 SQLite 的知识正文'}
@@ -142,7 +145,11 @@ describe('SearchIndexer', () => {
     const forbiddenKnowledgeBody = 'SENSITIVE_KNOWLEDGE_BODY_43';
     const gateway = new FakeVaultGateway({
       '01图书馆/资料.md': materialNote({ title: '资料', body: forbiddenMaterialBody }),
-      '02知识库/知识.md': knowledgeNote({ body: forbiddenKnowledgeBody })
+      '02知识库/知识.md': knowledgeNote({
+        body: forbiddenKnowledgeBody,
+        createdAt: '2026-08-30',
+        updatedAt: '2026-08-31'
+      })
     });
     const { database, repository } = createRepository();
     const indexer = new SearchIndexer({ gateway, repository, maxRawReadsPerPoll: 20 });
@@ -161,6 +168,45 @@ describe('SearchIndexer', () => {
       '{"collectedAt":"2026-08-31","knowledgeStatus":"未提炼","processingStatus":"未归档","sourcePlatform":"B站","title":"资料"}'
     );
     expect(stored[0]?.linksJson).toBe('["已有知识"]');
+    expect(stored[1]?.yamlJson).toBe(
+      '{"createdAt":"2026-08-30","knowledgeType":"方法","recallFields":{"boundary":"不存正文。","conclusion":"只存召回字段。","keyPoints":["标题先行","正文后取"],"keywords":["检索","召回"],"scenarios":["构建只读索引"],"topics":["知识管理"]},"sourceType":"AI提炼","title":"知识","updatedAt":"2026-08-31","usageStatus":"AI总结"}'
+    );
+    expect(stored[1]?.linksJson).toBe('["一份资料"]');
+    expect(repository.getKnowledge('02知识库/知识.md')).toMatchObject({
+      createdAt: '2026-08-30',
+      updatedAt: '2026-08-31'
+    });
+  });
+
+  it('round-trips legacy knowledge without dates and includes date-only changes in manifest identity', async () => {
+    const gateway = new FakeVaultGateway({
+      '02知识库/旧知识.md': knowledgeNote()
+    });
+    const { repository } = createRepository();
+    const indexer = new SearchIndexer({ gateway, repository, maxRawReadsPerPoll: 20 });
+    await indexer.refresh();
+
+    const legacy = repository.getKnowledge('02知识库/旧知识.md');
+    expect(legacy).toBeDefined();
+    expect(legacy).not.toHaveProperty('createdAt');
+    expect(legacy).not.toHaveProperty('updatedAt');
+    const before = repository.getManifestEntry('02知识库/旧知识.md');
+
+    repository.replaceFile({
+      kind: 'knowledge',
+      record: {
+        ...legacy!,
+        createdAt: '2026-08-30',
+        updatedAt: '2026-08-31'
+      }
+    });
+    const after = repository.getManifestEntry('02知识库/旧知识.md');
+
+    expect(repository.getKnowledge('02知识库/旧知识.md')).toMatchObject({
+      createdAt: '2026-08-30',
+      updatedAt: '2026-08-31'
+    });
+    expect(after?.manifestSha256).not.toBe(before?.manifestSha256);
   });
 
   it('excludes obsolete knowledge by default and includes it only when requested', async () => {

@@ -66,6 +66,8 @@ function knowledge(input: Partial<KnowledgeRecord> & Pick<KnowledgeRecord, 'path
       boundary: '不搜索正文'
     },
     sourceMaterials: input.sourceMaterials ?? ['原始资料'],
+    ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
     ...(input.upstreamVersion === undefined ? {} : { upstreamVersion: input.upstreamVersion })
   };
 }
@@ -539,6 +541,7 @@ describe('versioned read APIs', () => {
         path: live.path,
         title: '安全知识',
         markdown,
+        internalKnowledgeLinks: [],
         versionMarker: { rawSha256: live.rawSha256 }
       },
       version: 1
@@ -567,6 +570,57 @@ describe('versioned read APIs', () => {
     expectFailure(conflicted, 409, 'VERSION_CONFLICT');
     expect(conflicted.headers['cache-control']).toBe('no-store');
     expect(conflicted.body).not.toContain(`${markdown}\nchanged`);
+  });
+
+  it('resolves only unique exact indexed 02 knowledge wikilinks from live Markdown', async () => {
+    const markdown = [
+      '# 内链',
+      '[[02知识库/知识管理/唯一#小节^块|显示名]]',
+      '[[唯一^块|重复目标]]',
+      '[[02知识库/知识管理/唯一.md]]',
+      '[[重名]]',
+      '[[02知识库/子目录/重名.md#精确路径]]',
+      '[[不存在]]',
+      '[[00大脑规则/规则.md]]',
+      '[[01图书馆/资料.md]]',
+      '[[03大讲堂/秘密.md]]',
+      '[[02知识库/../01图书馆/逃逸.md]]',
+      '[[../逃逸.md]]',
+      '[[file:///Users/ao/秘密.md]]',
+      '[[obsidian://open?vault=秘密]]',
+      '[[https://example.com/不是内链]]'
+    ].join('\n');
+    const gatewayFixture = createGateway({ '02知识库/来源.md': markdown });
+    const live = await gatewayFixture.gateway.readRaw('02知识库/来源.md');
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    for (const record of [
+      knowledge({ path: live.path, title: '来源', rawSha256: live.rawSha256 }),
+      knowledge({ path: '02知识库/知识管理/唯一.md', title: '唯一', rawSha256: '1'.repeat(64) }),
+      knowledge({ path: '02知识库/甲/重名.md', title: '重名', rawSha256: '2'.repeat(64) }),
+      knowledge({ path: '02知识库/子目录/重名.md', title: '重名', rawSha256: '3'.repeat(64) }),
+      knowledge({ path: '02知识库/01图书馆/逃逸.md', title: '逃逸', rawSha256: '4'.repeat(64) })
+    ]) {
+      repository.replaceFile({ kind: 'knowledge', record });
+    }
+    const server = createReadServer({ repository, gateway: gatewayFixture.gateway, database });
+
+    const detail = await server.inject({
+      method: 'GET',
+      url: `/api/v1/knowledge/file?path=${encodeURIComponent(live.path)}`,
+      headers: requestHeaders()
+    });
+
+    expect(detail.statusCode).toBe(200);
+    const internalKnowledgeLinks = detail
+      .json<{ data: { internalKnowledgeLinks: unknown[] } }>()
+      .data.internalKnowledgeLinks;
+    expect(internalKnowledgeLinks).toEqual([
+      { path: '02知识库/知识管理/唯一.md', title: '唯一' },
+      { path: '02知识库/子目录/重名.md', title: '重名' }
+    ]);
+    expect(JSON.stringify(internalKnowledgeLinks))
+      .not.toMatch(/00大脑规则|01图书馆|03大讲堂|file:|obsidian:|https:/u);
   });
 
   it('fails closed when live metadata lies or the indexed projection changes during a detail read', async () => {
@@ -625,6 +679,33 @@ describe('versioned read APIs', () => {
       headers: requestHeaders()
     });
     expectFailure(raced, 409, 'VERSION_CONFLICT');
+
+    let indexVersion = 7;
+    let indexVersionReads = 0;
+    const versionRacingRepository = {
+      ...repository,
+      listKnowledge: (query: Parameters<IndexRepository['listKnowledge']>[0]) => {
+        const page = repository.listKnowledge(query);
+        indexVersion = 8;
+        return page;
+      }
+    } as IndexRepository;
+    const versionRacingServer = createReadServer({
+      repository: versionRacingRepository,
+      gateway: gatewayFixture.gateway,
+      database,
+      currentIndexVersion: () => {
+        indexVersionReads += 1;
+        return indexVersion;
+      }
+    });
+    const versionRaced = await versionRacingServer.inject({
+      method: 'GET',
+      url: `/api/v1/knowledge/file?path=${encodeURIComponent(indexed.path)}`,
+      headers: requestHeaders()
+    });
+    expectFailure(versionRaced, 409, 'VERSION_CONFLICT');
+    expect(indexVersionReads).toBe(3);
   });
 
   it('opens only an indexed knowledge note through the dedicated read-only gateway command', async () => {

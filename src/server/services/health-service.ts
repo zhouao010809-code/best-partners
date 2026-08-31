@@ -63,7 +63,7 @@ export type HealthSchemaIssuesSnapshot =
   };
 
 export type HealthIndexSnapshot =
-  | { readonly status: 'building'; readonly startedAt: string }
+  | { readonly status: 'building'; readonly version: number; readonly startedAt: string }
   | { readonly status: 'ready'; readonly version: number; readonly refreshedAt: string }
   | {
     readonly status: 'stale';
@@ -73,6 +73,7 @@ export type HealthIndexSnapshot =
   }
   | {
     readonly status: 'failed';
+    readonly version: number;
     readonly lastSuccessAt?: string;
     readonly reason: 'INDEX_FAILED';
   }
@@ -94,7 +95,7 @@ function publicIndexSnapshot(
 ): HealthIndexSnapshot {
   switch (snapshot.status) {
     case 'building':
-      return { status: 'building', startedAt: snapshot.startedAt };
+      return { status: 'building', version: snapshot.version, startedAt: snapshot.startedAt };
     case 'ready':
       return {
         status: 'ready',
@@ -111,6 +112,7 @@ function publicIndexSnapshot(
     case 'failed':
       return {
         status: 'failed',
+        version: snapshot.version,
         ...(snapshot.lastSuccessAt === undefined ? {} : { lastSuccessAt: snapshot.lastSuccessAt }),
         reason: 'INDEX_FAILED'
       };

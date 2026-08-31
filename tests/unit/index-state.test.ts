@@ -70,6 +70,7 @@ describe('IndexStateController', () => {
 
     expect(controller.snapshot()).toEqual({
       status: 'building',
+      version: 0,
       startedAt: '2026-08-31T00:00:00.000Z'
     });
 
@@ -123,12 +124,21 @@ describe('IndexStateController', () => {
     const clock = new FakeClock(Date.parse('2026-08-31T00:00:00.000Z'));
     const controller = new IndexStateController(clock.now);
     controller.recordFailure('startup failed');
-    expect(controller.snapshot()).toEqual({ status: 'failed', reason: 'startup failed' });
+    expect(controller.snapshot()).toEqual({ status: 'failed', version: 0, reason: 'startup failed' });
 
     controller.recordSuccess(1);
     clock.advance(1_000);
     controller.recordFailure('transient');
     expect(status(controller.snapshot())).toBe('ready');
+  });
+
+  it('never publishes an unsafe version from a successful refresh', () => {
+    const controller = new IndexStateController(() => new Date('2026-08-31T00:00:00.000Z'));
+
+    expect(() => controller.recordSuccess(-1)).toThrowError('INDEX_VERSION_INVALID');
+    expect(() => controller.recordSuccess(Number.MAX_SAFE_INTEGER + 1))
+      .toThrowError('INDEX_VERSION_INVALID');
+    expect(controller.snapshot()).toMatchObject({ status: 'building', version: 0 });
   });
 });
 
@@ -372,6 +382,7 @@ describe('IndexScheduler', () => {
     expect(firstSignal?.aborted).toBe(true);
     expect(scheduler.snapshot().state).toEqual({
       status: 'failed',
+      version: 0,
       reason: 'INDEX_REFRESH_TIMEOUT'
     });
     expect(refreshes).toBe(1);

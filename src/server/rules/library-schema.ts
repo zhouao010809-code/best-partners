@@ -3,6 +3,7 @@ import type { ParsedNote, MaterialRecord } from '../../shared/domain/records.js'
 import { sha256Bytes } from '../vault/raw-bytes.js';
 import { FrontmatterError, parseFrontmatter } from './frontmatter.js';
 import { normalizeWikiLinkList } from './wikilinks.js';
+import { isIsoCalendarDate } from '../../shared/domain/iso-date.js';
 
 export const SOURCE_PLATFORMS = [
   'B站', 'YouTube', '抖音', '小红书', '公众号', '飞书', 'X推特',
@@ -16,6 +17,12 @@ const optionalScalar = z.preprocess(
     : value,
   z.string().optional()
 );
+const optionalIsoDate = z.preprocess(
+  (value) => value === null || (typeof value === 'string' && value.trim().length === 0)
+    ? undefined
+    : value,
+  z.string().refine(isIsoCalendarDate, 'Expected a valid YYYY-MM-DD calendar date').optional()
+);
 const stringList = z.array(z.string().trim().min(1));
 
 const librarySchema = z.object({
@@ -25,7 +32,7 @@ const librarySchema = z.object({
   原始标题: optionalScalar,
   作者: optionalScalar,
   原始链接: optionalScalar,
-  采集日期: optionalScalar,
+  采集日期: optionalIsoDate,
   所属主题: stringList,
   关键词: stringList,
   知识入库状态: z.enum(KNOWLEDGE_STATUSES),

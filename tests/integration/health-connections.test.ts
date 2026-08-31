@@ -147,6 +147,7 @@ describe('GET /api/v1/health Connections contract', () => {
       indexState: {
         snapshot: () => ({
           status: 'building' as const,
+          version: 0,
           startedAt: '2026-09-01T12:00:00.000Z'
         })
       },
@@ -175,6 +176,7 @@ describe('GET /api/v1/health Connections contract', () => {
       name: 'building',
       index: {
         status: 'building' as const,
+        version: 0,
         startedAt: '2026-09-01T12:00:00.000Z'
       }
     },
@@ -182,6 +184,7 @@ describe('GET /api/v1/health Connections contract', () => {
       name: 'failed',
       index: {
         status: 'failed' as const,
+        version: 0,
         reason: 'upstream secret must stay private'
       }
     }
@@ -229,6 +232,7 @@ describe('GET /api/v1/health Connections contract', () => {
       data: {
         index: {
           status: index.status,
+          version: index.version,
           ...(index.status === 'failed' ? { reason: 'INDEX_FAILED' } : {})
         },
         schemaIssues: {

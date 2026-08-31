@@ -157,6 +157,50 @@ describe('current frontmatter contracts', () => {
     expect(result.record).not.toHaveProperty('collectedAt');
   });
 
+  it('projects optional knowledge dates without inventing dates for legacy notes', () => {
+    const dated = parseKnowledgeNote(
+      encoder.encode(knowledgeFrontmatter(
+        '创建日期: "2026-08-30"\n更新日期: "2026-08-31"\n'
+      )),
+      '02知识库/有日期.md'
+    );
+    const legacy = parseKnowledgeNote(
+      encoder.encode(knowledgeFrontmatter()),
+      '02知识库/旧笔记.md'
+    );
+
+    expect(dated.issues).toEqual([]);
+    expect(dated.record).toMatchObject({
+      createdAt: '2026-08-30',
+      updatedAt: '2026-08-31'
+    });
+    expect(legacy.issues).toEqual([]);
+    expect(legacy.record).not.toHaveProperty('createdAt');
+    expect(legacy.record).not.toHaveProperty('updatedAt');
+  });
+
+  it('accepts real leap days and rejects impossible material and knowledge calendar dates', () => {
+    const leapDay = libraryFrontmatter().replace(
+      '采集日期:\n',
+      '采集日期: "2024-02-29"\n'
+    );
+    const invalidMaterial = libraryFrontmatter().replace(
+      '采集日期:\n',
+      '采集日期: "2026-02-29"\n'
+    );
+    const invalidKnowledge = knowledgeFrontmatter('创建日期: "2026-04-31"\n');
+
+    expect(parseLibraryNote(encoder.encode(leapDay)).record?.collectedAt).toBe('2024-02-29');
+    expect(parseLibraryNote(encoder.encode(invalidMaterial))).toMatchObject({
+      record: undefined,
+      issues: [{ code: 'INVALID_FIELD', field: '采集日期' }]
+    });
+    expect(parseKnowledgeNote(encoder.encode(invalidKnowledge))).toMatchObject({
+      record: undefined,
+      issues: [{ code: 'INVALID_FIELD', field: '创建日期' }]
+    });
+  });
+
   it('rejects missing required structural arrays instead of silently defaulting them', () => {
     const library = libraryFrontmatter().replace('生成知识: []\n', '');
     const knowledge = knowledgeFrontmatter().replace('关键要点: []\n', '');

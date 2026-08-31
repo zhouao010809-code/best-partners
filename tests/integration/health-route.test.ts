@@ -51,7 +51,7 @@ describe('GET /api/v1/health', () => {
     {
       name: 'building',
       status: 'ready' as const,
-      index: { status: 'building' as const, startedAt: '2026-09-01T00:00:00.000Z' }
+      index: { status: 'building' as const, version: 0, startedAt: '2026-09-01T00:00:00.000Z' }
     },
     {
       name: 'recovery unavailable',

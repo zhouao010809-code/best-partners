@@ -138,7 +138,7 @@ describe('IndexJobService background persistence', () => {
         };
       },
       snapshot: () => ({
-        state: { status: 'building', startedAt: '2026-08-31T00:00:00.000Z' }
+        state: { status: 'building', version: 0, startedAt: '2026-08-31T00:00:00.000Z' }
       })
     };
     let tick = 0;
@@ -186,7 +186,7 @@ describe('IndexJobService background persistence', () => {
     const scheduler: IndexSchedulerPort = {
       requestFocusRefresh: () => refresh,
       snapshot: () => ({
-        state: { status: 'building', startedAt: '2026-08-31T00:00:00.000Z' }
+        state: { status: 'building', version: 0, startedAt: '2026-08-31T00:00:00.000Z' }
       })
     };
     const service = new IndexJobService({

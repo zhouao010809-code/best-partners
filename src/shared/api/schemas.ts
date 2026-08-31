@@ -1,15 +1,19 @@
 import { z } from 'zod';
+import { isIsoCalendarDate } from '../domain/iso-date.js';
 
 export const API_VERSION = 1;
 export const MAX_CURSOR_LENGTH = 12_288;
 
-const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
+const isoDateSchema = z.string().refine(isIsoCalendarDate, {
+  message: 'Expected a valid YYYY-MM-DD calendar date'
+});
 const vaultPathSchema = z.string().min(1).max(1024);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const operationIdSchema = z.string().min(1).max(128).regex(/^[a-z0-9._:-]+$/iu);
 const opaqueCursorSchema = z.string()
   .max(MAX_CURSOR_LENGTH)
   .regex(/^[A-Za-z0-9_-]+\.[a-f0-9]{64}$/u);
+const csrfTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
 
 export const knowledgeStatusSchema = z.enum(['未提炼', '部分入库', '已入库']);
 export const usageStatusSchema = z.enum(['AI总结', '已优化', '定论', '过时']);
@@ -22,7 +26,7 @@ export const materialRecordSchema = z.object({
   sourcePlatform: z.string().min(1).max(128),
   processingStatus: z.enum(['未归档', '已归档']),
   knowledgeStatus: knowledgeStatusSchema,
-  collectedAt: z.string().max(64).optional(),
+  collectedAt: isoDateSchema.optional(),
   generatedKnowledge: z.array(z.string().max(1024)).max(1000)
 }).strict();
 
@@ -31,6 +35,8 @@ export const knowledgeRecordSchema = z.object({
   rawSha256: sha256Schema,
   upstreamVersion: z.string().min(1).max(512).optional(),
   title: z.string().min(1).max(1000),
+  createdAt: isoDateSchema.optional(),
+  updatedAt: isoDateSchema.optional(),
   sourceType: z.enum(['AI提炼', '人工输入']),
   usageStatus: usageStatusSchema,
   knowledgeType: z.string().min(1).max(128),
@@ -113,6 +119,10 @@ export const liveKnowledgeDetailSchema = z.object({
   path: vaultPathSchema,
   title: z.string().min(1).max(1000),
   markdown: z.string(),
+  internalKnowledgeLinks: z.array(z.object({
+    path: vaultPathSchema,
+    title: z.string().min(1).max(1000)
+  }).strict()),
   versionMarker: z.object({
     rawSha256: sha256Schema,
     upstreamVersion: z.string().min(1).max(512).optional()
@@ -156,6 +166,7 @@ export const healthSnapshotSchema = z.object({
   index: z.discriminatedUnion('status', [
     z.object({
       status: z.literal('building'),
+      version: z.number().int().nonnegative(),
       startedAt: z.string().datetime()
     }).strict(),
     z.object({
@@ -171,6 +182,7 @@ export const healthSnapshotSchema = z.object({
     }).strict(),
     z.object({
       status: z.literal('failed'),
+      version: z.number().int().nonnegative(),
       lastSuccessAt: z.string().datetime().optional(),
       reason: z.literal('INDEX_FAILED')
     }).strict(),
@@ -219,6 +231,12 @@ export function successEnvelopeSchema<T extends z.ZodType>(data: T) {
     operationId: operationIdSchema.optional()
   }).strict();
 }
+
+export const bootstrapDataSchema = z.object({
+  csrfToken: csrfTokenSchema
+}).strict();
+
+export const bootstrapResponseSchema = successEnvelopeSchema(bootstrapDataSchema);
 
 export const apiFailureSchema = z.object({
   error: z.object({

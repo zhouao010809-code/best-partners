@@ -7,10 +7,10 @@ export const INDEX_STALE_AFTER_FAILURES = 2;
 export const INDEX_STALE_AFTER_MS = 60_000;
 
 export type IndexState =
-  | { status: 'building'; startedAt: string }
+  | { status: 'building'; version: number; startedAt: string }
   | { status: 'ready'; version: number; refreshedAt: string }
   | { status: 'stale'; version: number; lastSuccessAt: string; reason: string }
-  | { status: 'failed'; lastSuccessAt?: string; reason: string };
+  | { status: 'failed'; version: number; lastSuccessAt?: string; reason: string };
 
 type LastSuccess = {
   version: number;
@@ -22,15 +22,23 @@ export class IndexStateController {
   private lastSuccess: LastSuccess | undefined;
   private consecutiveFailures = 0;
   private awaitingStartupRefresh = false;
+  private currentVersion = 0;
 
   constructor(
     private readonly now: () => Date,
     metadata?: IndexMetadata
   ) {
     const startedAt = this.now();
-    this.state = { status: 'building', startedAt: startedAt.toISOString() };
+    if (metadata !== undefined) {
+      assertIndexMetadata(metadata);
+      this.currentVersion = metadata.version;
+    }
+    this.state = {
+      status: 'building',
+      version: this.currentVersion,
+      startedAt: startedAt.toISOString()
+    };
     if (metadata === undefined) return;
-    assertIndexMetadata(metadata);
     if (metadata.version === 0) return;
 
     const lastSuccessAt = new Date(metadata.updatedAt);
@@ -57,6 +65,10 @@ export class IndexStateController {
   }
 
   recordSuccess(version: number, at: Date = this.now()): void {
+    if (!Number.isSafeInteger(version) || version < 0) {
+      throw new Error('INDEX_VERSION_INVALID');
+    }
+    this.currentVersion = version;
     this.lastSuccess = { version, at };
     this.consecutiveFailures = 0;
     this.awaitingStartupRefresh = false;
@@ -66,7 +78,7 @@ export class IndexStateController {
   recordFailure(reason: string, at: Date = this.now()): void {
     this.consecutiveFailures += 1;
     if (this.lastSuccess === undefined) {
-      this.state = { status: 'failed', reason };
+      this.state = { status: 'failed', version: this.currentVersion, reason };
       return;
     }
 

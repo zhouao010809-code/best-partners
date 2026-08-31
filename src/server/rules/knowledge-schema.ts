@@ -3,6 +3,7 @@ import type { KnowledgeRecord, ParsedNote } from '../../shared/domain/records.js
 import { sha256Bytes } from '../vault/raw-bytes.js';
 import { FrontmatterError, parseFrontmatter } from './frontmatter.js';
 import { normalizeWikiLinkList } from './wikilinks.js';
+import { isIsoCalendarDate } from '../../shared/domain/iso-date.js';
 
 export const USAGE_STATUSES = ['AI总结', '已优化', '定论', '过时'] as const;
 export const KNOWLEDGE_TYPES = [
@@ -14,6 +15,12 @@ const optionalScalar = z.preprocess(
     ? undefined
     : value,
   z.string().optional()
+);
+const optionalIsoDate = z.preprocess(
+  (value) => value === null || (typeof value === 'string' && value.trim().length === 0)
+    ? undefined
+    : value,
+  z.string().refine(isIsoCalendarDate, 'Expected a valid YYYY-MM-DD calendar date').optional()
 );
 const stringList = z.array(z.string().trim().min(1));
 const requiredScalar = z.string().trim().min(1);
@@ -30,8 +37,8 @@ const knowledgeSchema = z.object({
   核心结论: requiredScalar,
   关键要点: stringList,
   使用边界: requiredScalar,
-  创建日期: optionalScalar,
-  更新日期: optionalScalar,
+  创建日期: optionalIsoDate,
+  更新日期: optionalIsoDate,
   备注: optionalScalar
 });
 
@@ -97,6 +104,8 @@ export function parseKnowledgeNote(
     rawSha256: sha256Bytes(bytes),
     ...(upstreamVersion === undefined ? {} : { upstreamVersion }),
     title: filenameTitle(path),
+    ...(validated.data.创建日期 === undefined ? {} : { createdAt: validated.data.创建日期 }),
+    ...(validated.data.更新日期 === undefined ? {} : { updatedAt: validated.data.更新日期 }),
     sourceType: validated.data.来源类型,
     usageStatus: validated.data.使用状态,
     knowledgeType: validated.data.知识类型,

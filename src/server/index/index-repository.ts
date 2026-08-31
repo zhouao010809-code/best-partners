@@ -134,6 +134,8 @@ function projection(entry: IndexedFile): { yamlJson: string; linksJson: string }
   return {
     yamlJson: canonicalJson({
       title: record.title,
+      ...(record.createdAt === undefined ? {} : { createdAt: record.createdAt }),
+      ...(record.updatedAt === undefined ? {} : { updatedAt: record.updatedAt }),
       sourceType: record.sourceType,
       usageStatus: record.usageStatus,
       knowledgeType: record.knowledgeType,
@@ -167,6 +169,8 @@ function materialFromRow(row: SearchRow): MaterialRecord {
 function knowledgeFromRow(row: SearchRow): KnowledgeRecord {
   const yaml = JSON.parse(row.yamlJson) as {
     title: string;
+    createdAt?: string;
+    updatedAt?: string;
     sourceType: KnowledgeRecord['sourceType'];
     usageStatus: UsageStatus;
     knowledgeType: string;
@@ -177,6 +181,8 @@ function knowledgeFromRow(row: SearchRow): KnowledgeRecord {
     rawSha256: row.rawSha256,
     ...(row.upstreamVersion === null ? {} : { upstreamVersion: row.upstreamVersion }),
     title: yaml.title,
+    ...(yaml.createdAt === undefined ? {} : { createdAt: yaml.createdAt }),
+    ...(yaml.updatedAt === undefined ? {} : { updatedAt: yaml.updatedAt }),
     sourceType: yaml.sourceType,
     usageStatus: yaml.usageStatus,
     knowledgeType: yaml.knowledgeType,

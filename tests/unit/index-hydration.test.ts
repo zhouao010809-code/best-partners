@@ -15,6 +15,7 @@ describe('IndexStateController startup hydration', () => {
 
     expect(controller.snapshot()).toEqual({
       status: 'building',
+      version: 0,
       startedAt: NOW.toISOString()
     });
   });

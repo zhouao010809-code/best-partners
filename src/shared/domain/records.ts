@@ -18,6 +18,8 @@ export type KnowledgeRecord = {
   rawSha256: string;
   upstreamVersion?: string;
   title: string;
+  createdAt?: string;
+  updatedAt?: string;
   sourceType: 'AI提炼' | '人工输入';
   usageStatus: UsageStatus;
   knowledgeType: string;
