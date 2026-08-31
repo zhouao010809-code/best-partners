@@ -103,6 +103,7 @@ export function KnowledgePage() {
   const resourceRef = useRef(resource);
   const selectedRef = useRef(selected);
   const generationRef = useRef(0);
+  const paginationFocusIntentRef = useRef<number | undefined>(undefined);
   const listControllerRef = useRef<AbortController | undefined>(undefined);
   const detailCacheRef = useRef(new Map<string, LiveKnowledgeDetail>());
   const detailInFlightRef = useRef(new Map<string, InFlightDetail>());
@@ -155,7 +156,6 @@ export function KnowledgePage() {
     const nextSeen = new Set(seenCursors);
     if (result.value.nextCursor !== undefined) nextSeen.add(result.value.nextCursor);
     const items = [...currentItems, ...result.value.items];
-    const hadFocusedLoadMore = document.activeElement === loadMoreRef.current;
     setResource({
       status: 'ready',
       data: {
@@ -173,12 +173,10 @@ export function KnowledgePage() {
         setSelected(replacement);
       }
     }
-    if (hadFocusedLoadMore && result.value.nextCursor === undefined) {
-      queueMicrotask(() => resultsHeadingRef.current?.focus({ preventScroll: true }));
-    }
   }, [closeDetail, runtime.api]);
 
   useEffect(() => {
+    paginationFocusIntentRef.current = undefined;
     generationRef.current += 1;
     const generation = generationRef.current;
     listControllerRef.current?.abort();
@@ -193,6 +191,17 @@ export function KnowledgePage() {
     void requestPage(applied, undefined, false, generation, controller);
     return () => controller.abort();
   }, [applied, applyRevision, requestPage, runtime.dataRevision]);
+
+  useEffect(() => {
+    if (paginationFocusIntentRef.current !== generationRef.current
+      || resource.status === 'loading'
+      || resource.status === 'refreshing') return;
+    paginationFocusIntentRef.current = undefined;
+    const target = resource.status === 'ready' && resource.data.nextCursor !== undefined
+      ? loadMoreRef.current
+      : resultsHeadingRef.current;
+    (target ?? resultsHeadingRef.current)?.focus({ preventScroll: true });
+  }, [resource]);
 
   useEffect(() => {
     for (const pending of detailInFlightRef.current.values()) pending.controller.abort();
@@ -259,11 +268,13 @@ export function KnowledgePage() {
 
   function loadMore(): void {
     if (resource.status !== 'ready' || resource.data.nextCursor === undefined) return;
+    const ownedFocus = document.activeElement === loadMoreRef.current;
     listControllerRef.current?.abort();
     const controller = new AbortController();
     listControllerRef.current = controller;
     generationRef.current += 1;
     const generation = generationRef.current;
+    paginationFocusIntentRef.current = ownedFocus ? generation : undefined;
     setResource({ status: 'refreshing', data: resource.data });
     void requestPage(applied, resource.data.nextCursor, true, generation, controller);
   }

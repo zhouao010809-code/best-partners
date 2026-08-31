@@ -119,6 +119,71 @@ function renderRoute(path: string, api: ReadConsoleApi = browserReadConsoleApi):
   );
 }
 
+type PaginationFocusOutcome = 'next' | 'terminal' | 'failed';
+
+type PaginationFocusHarness = {
+  readonly api: ReadConsoleApi;
+  readonly path: '/queue' | '/knowledge';
+  readonly resultText: string;
+  readonly resultsHeading: string;
+  readonly settle: () => void;
+};
+
+function queuePaginationFocusHarness(outcome: PaginationFocusOutcome): PaginationFocusHarness {
+  const pendingPage = deferred<ApiClientResult<MaterialPage>>();
+  const listMaterials = vi.fn()
+    .mockResolvedValueOnce(ok({
+      items: [material({ title: '焦点材料' })],
+      nextCursor: 'focus.queue.a'.padEnd(72, 'a')
+    }))
+    .mockImplementationOnce(() => pendingPage.promise);
+  const resultText = outcome === 'failed' ? '读取材料未完成，请稍后重试。' : '延迟材料';
+  return {
+    api: createApi({ listMaterials }),
+    path: '/queue',
+    resultText,
+    resultsHeading: '材料结果',
+    settle: () => {
+      pendingPage.resolve(outcome === 'failed'
+        ? failure<MaterialPage>('operation-error')
+        : ok({
+            items: [material({ path: '01图书馆/延迟材料.md', title: resultText })],
+            ...(outcome === 'next' ? { nextCursor: 'focus.queue.b'.padEnd(72, 'b') } : {})
+          }));
+    }
+  };
+}
+
+function knowledgePaginationFocusHarness(outcome: PaginationFocusOutcome): PaginationFocusHarness {
+  const pendingPage = deferred<ApiClientResult<KnowledgePage>>();
+  const listKnowledge = vi.fn()
+    .mockResolvedValueOnce(ok({
+      items: [knowledge({ title: '焦点知识' })],
+      nextCursor: 'focus.knowledge.a'.padEnd(72, 'a')
+    }))
+    .mockImplementationOnce(() => pendingPage.promise);
+  const resultText = outcome === 'failed' ? '读取知识未完成，请稍后重试。' : '延迟知识';
+  return {
+    api: createApi({ listKnowledge }),
+    path: '/knowledge',
+    resultText,
+    resultsHeading: '知识结果',
+    settle: () => {
+      pendingPage.resolve(outcome === 'failed'
+        ? failure<KnowledgePage>('operation-error')
+        : ok({
+            items: [knowledge({ path: '02知识库/延迟知识.md', title: resultText })],
+            ...(outcome === 'next' ? { nextCursor: 'focus.knowledge.b'.padEnd(72, 'b') } : {})
+          }));
+    }
+  };
+}
+
+const PAGINATION_FOCUS_PAGES = [
+  { name: 'queue', createHarness: queuePaginationFocusHarness },
+  { name: 'knowledge', createHarness: knowledgePaginationFocusHarness }
+] as const;
+
 describe('Phase 1 read pages', () => {
   beforeEach(() => {
     const nonce = document.createElement('meta');
@@ -420,6 +485,66 @@ describe('Phase 1 read pages', () => {
     expect(recoveredLoadMore).toBeEnabled();
     expect(recoveredLoadMore).toHaveAttribute('aria-busy', 'false');
   });
+
+  it.each(PAGINATION_FOCUS_PAGES)(
+    'restores $name pagination focus to the enabled button after a delayed page still has a cursor',
+    async ({ createHarness }) => {
+      const user = userEvent.setup();
+      const harness = createHarness('next');
+      renderRoute(harness.path, harness.api);
+
+      const loadMore = await screen.findByRole('button', { name: '加载更多' });
+      await user.click(loadMore);
+      await waitFor(() => expect(loadMore).toBeDisabled());
+      const main = screen.getByRole('main');
+      main.focus();
+      expect(main).toHaveFocus();
+
+      harness.settle();
+      await screen.findByText(harness.resultText);
+      expect(screen.getByRole('button', { name: '加载更多' })).toHaveFocus();
+    }
+  );
+
+  it.each(PAGINATION_FOCUS_PAGES)(
+    'moves $name pagination focus to the results heading after a delayed terminal page',
+    async ({ createHarness }) => {
+      const user = userEvent.setup();
+      const harness = createHarness('terminal');
+      renderRoute(harness.path, harness.api);
+
+      const loadMore = await screen.findByRole('button', { name: '加载更多' });
+      await user.click(loadMore);
+      await waitFor(() => expect(loadMore).toBeDisabled());
+      const main = screen.getByRole('main');
+      main.focus();
+      expect(main).toHaveFocus();
+
+      harness.settle();
+      await screen.findByText(harness.resultText);
+      expect(screen.getByRole('heading', { name: harness.resultsHeading })).toHaveFocus();
+    }
+  );
+
+  it.each(PAGINATION_FOCUS_PAGES)(
+    'moves $name pagination focus to the results heading after a delayed failure',
+    async ({ createHarness }) => {
+      const user = userEvent.setup();
+      const harness = createHarness('failed');
+      renderRoute(harness.path, harness.api);
+
+      const loadMore = await screen.findByRole('button', { name: '加载更多' });
+      await user.click(loadMore);
+      await waitFor(() => expect(loadMore).toBeDisabled());
+      const main = screen.getByRole('main');
+      main.focus();
+      expect(main).toHaveFocus();
+
+      harness.settle();
+      await screen.findByText(harness.resultText);
+      expect(screen.getByRole('heading', { name: harness.resultsHeading })).toHaveFocus();
+    }
+  );
 
   it('rejects an impossible queue date range locally with zero new requests', async () => {
     const user = userEvent.setup();

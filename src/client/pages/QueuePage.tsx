@@ -79,6 +79,7 @@ export function QueuePage() {
   const [resource, setResource] = useState<PageResource<QueueData>>({ status: 'loading' });
   const resourceRef = useRef(resource);
   const generationRef = useRef(0);
+  const paginationFocusIntentRef = useRef<number | undefined>(undefined);
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const resultsHeadingRef = useRef<HTMLHeadingElement>(null);
   const loadMoreRef = useRef<HTMLButtonElement>(null);
@@ -122,7 +123,6 @@ export function QueuePage() {
     }
     const nextSeen = new Set(seenCursors);
     if (result.value.nextCursor !== undefined) nextSeen.add(result.value.nextCursor);
-    const hadFocusedLoadMore = document.activeElement === loadMoreRef.current;
     setResource({
       status: 'ready',
       data: {
@@ -131,12 +131,10 @@ export function QueuePage() {
         seenCursors: nextSeen
       }
     });
-    if (hadFocusedLoadMore && result.value.nextCursor === undefined) {
-      queueMicrotask(() => resultsHeadingRef.current?.focus({ preventScroll: true }));
-    }
   }, [runtime.api]);
 
   useEffect(() => {
+    paginationFocusIntentRef.current = undefined;
     generationRef.current += 1;
     const generation = generationRef.current;
     controllerRef.current?.abort();
@@ -152,6 +150,17 @@ export function QueuePage() {
     return () => controller.abort();
   }, [applied, applyRevision, requestPage, runtime.dataRevision]);
 
+  useEffect(() => {
+    if (paginationFocusIntentRef.current !== generationRef.current
+      || resource.status === 'loading'
+      || resource.status === 'refreshing') return;
+    paginationFocusIntentRef.current = undefined;
+    const target = resource.status === 'ready' && resource.data.nextCursor !== undefined
+      ? loadMoreRef.current
+      : resultsHeadingRef.current;
+    (target ?? resultsHeadingRef.current)?.focus({ preventScroll: true });
+  }, [resource]);
+
   function applyFilters(): void {
     const query = queryFromDraft(draft);
     if ('error' in query) {
@@ -165,11 +174,13 @@ export function QueuePage() {
 
   function loadMore(): void {
     if (resource.status !== 'ready' || resource.data.nextCursor === undefined) return;
+    const ownedFocus = document.activeElement === loadMoreRef.current;
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     generationRef.current += 1;
     const generation = generationRef.current;
+    paginationFocusIntentRef.current = ownedFocus ? generation : undefined;
     setResource({ status: 'refreshing', data: resource.data });
     void requestPage(applied, resource.data.nextCursor, true, generation, controller);
   }
