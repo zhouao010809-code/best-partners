@@ -1,7 +1,9 @@
 import Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'node:crypto';
-import type { IndexRefreshResult } from '../index/SearchIndexer.js';
-import type { IndexState } from '../index/index-state.js';
+import type {
+  IndexRefreshAttempt,
+  IndexSchedulerSnapshot
+} from '../index/index-scheduler.js';
 import { canonicalJson } from '../index/index-repository.js';
 import { PublicApiError } from '../../shared/api/errors.js';
 
@@ -20,8 +22,8 @@ export type IndexJobSnapshot = {
 };
 
 export interface IndexSchedulerPort {
-  requestFocusRefresh(): Promise<void>;
-  snapshot(): { state: IndexState; refresh?: IndexRefreshResult };
+  requestFocusRefresh(): Promise<IndexRefreshAttempt>;
+  snapshot(): IndexSchedulerSnapshot;
   stopAndWait?(): Promise<void>;
 }
 
@@ -279,26 +281,23 @@ export class IndexJobService {
   private async drive(id: string): Promise<void> {
     try {
       while (!this.stopping) {
-        await this.input.scheduler.requestFocusRefresh();
+        const attempt = await this.input.scheduler.requestFocusRefresh();
         if (this.stopping) break;
-        const snapshot = this.input.scheduler.snapshot();
-        const refresh = snapshot.refresh;
-        if (refresh?.status === 'refreshing') {
-          this.updateProgress(id, refresh.checked, refresh.total, refresh.version);
-          continue;
-        }
-        if (snapshot.state.status === 'failed' || snapshot.state.status === 'stale') {
+        if (attempt.outcome === 'failed') {
           this.fail(id, 'INDEX_REBUILD_FAILED');
           return;
         }
-        if (refresh?.status === 'ready') {
-          this.complete(id, refresh.checked, refresh.total, refresh.version);
+        if (attempt.outcome === 'stopped') {
+          this.interrupt(id, 'SERVER_STOPPED');
           return;
         }
-        if (snapshot.state.status === 'ready') {
-          this.complete(id, 0, 0, snapshot.state.version);
-          return;
+        const refresh = attempt.refresh;
+        if (refresh.status === 'refreshing') {
+          this.updateProgress(id, refresh.checked, refresh.total, refresh.version);
+          continue;
         }
+        this.complete(id, refresh.checked, refresh.total, refresh.version);
+        return;
       }
       this.interrupt(id, 'SERVER_STOPPED');
     } catch {

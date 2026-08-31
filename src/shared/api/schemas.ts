@@ -6,6 +6,7 @@ const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 const vaultPathSchema = z.string().min(1).max(1024);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const operationIdSchema = z.string().min(1).max(128).regex(/^[a-z0-9._:-]+$/iu);
+const opaqueCursorSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 
 export const knowledgeStatusSchema = z.enum(['未提炼', '部分入库', '已入库']);
 export const usageStatusSchema = z.enum(['AI总结', '已优化', '定论', '过时']);
@@ -54,7 +55,7 @@ export const materialQuerySchema = z.object({
   collectedFrom: isoDateSchema.optional(),
   collectedTo: isoDateSchema.optional(),
   title: z.string().min(1).max(1000).optional(),
-  cursor: z.string().min(1).max(128).optional(),
+  cursor: opaqueCursorSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional()
 }).strict().superRefine((query, context) => {
   if (
@@ -76,7 +77,7 @@ export const knowledgeQuerySchema = z.object({
   usageStatus: usageStatusSchema.optional(),
   knowledgeType: z.string().min(1).max(128).optional(),
   topic: z.string().min(1).max(512).optional(),
-  cursor: z.string().min(1).max(128).optional(),
+  cursor: opaqueCursorSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional()
 }).strict();
 
@@ -92,17 +93,17 @@ export const indexJobParamsSchema = z.object({
 
 export const materialPageSchema = z.object({
   items: z.array(materialRecordSchema),
-  nextCursor: z.string().min(1).max(128).optional()
+  nextCursor: opaqueCursorSchema.optional()
 }).strict();
 
 export const knowledgePageSchema = z.object({
   items: z.array(knowledgeRecordSchema),
-  nextCursor: z.string().min(1).max(128).optional()
+  nextCursor: opaqueCursorSchema.optional()
 }).strict();
 
 export const operationPageSchema = z.object({
   items: z.array(z.never()),
-  nextCursor: z.string().min(1).max(128).optional()
+  nextCursor: opaqueCursorSchema.optional()
 }).strict();
 
 export const liveKnowledgeDetailSchema = z.object({
@@ -137,6 +138,32 @@ export const indexJobSchema = z.object({
 
 export const healthSnapshotSchema = z.object({
   status: z.enum(['ready', 'recovery-only']),
+  index: z.discriminatedUnion('status', [
+    z.object({
+      status: z.literal('building'),
+      startedAt: z.string().datetime()
+    }).strict(),
+    z.object({
+      status: z.literal('ready'),
+      version: z.number().int().nonnegative(),
+      refreshedAt: z.string().datetime()
+    }).strict(),
+    z.object({
+      status: z.literal('stale'),
+      version: z.number().int().nonnegative(),
+      lastSuccessAt: z.string().datetime(),
+      reason: z.literal('INDEX_STALE')
+    }).strict(),
+    z.object({
+      status: z.literal('failed'),
+      lastSuccessAt: z.string().datetime().optional(),
+      reason: z.literal('INDEX_FAILED')
+    }).strict(),
+    z.object({
+      status: z.literal('unavailable'),
+      reason: z.enum(['RECOVERY_ONLY', 'READ_API_UNAVAILABLE'])
+    }).strict()
+  ]),
   writeGate: z.object({
     status: z.enum(['blocked', 'enabled']),
     missing: z.array(z.string().max(128)),

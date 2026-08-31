@@ -41,12 +41,6 @@ try {
     config.obsidianApiKey,
     fetch
   );
-  const healthService = createHealthService({
-    writeEnabled: config.writeEnabled,
-    gateway,
-    profileDirectory: join(config.appDataDir, 'contract-profiles'),
-    stateKernel
-  });
   const app = stateKernel.mode === 'normal'
     ? (() => {
       const repository = createIndexRepository(stateKernel.db);
@@ -85,6 +79,13 @@ try {
         now
       });
       indexScheduler = scheduler;
+      const healthService = createHealthService({
+        writeEnabled: config.writeEnabled,
+        gateway,
+        profileDirectory: join(config.appDataDir, 'contract-profiles'),
+        stateKernel,
+        indexState: { snapshot: () => scheduler.snapshot().state }
+      });
       const server = buildServer({
         healthService,
         onClose: shutdown,
@@ -100,7 +101,18 @@ try {
       void scheduler.requestFocusRefresh();
       return server;
     })()
-    : buildServer({ healthService, onClose: shutdown });
+    : buildServer({
+      healthService: createHealthService({
+        writeEnabled: config.writeEnabled,
+        gateway,
+        profileDirectory: join(config.appDataDir, 'contract-profiles'),
+        stateKernel,
+        indexState: {
+          snapshot: () => ({ status: 'unavailable', reason: 'RECOVERY_ONLY' })
+        }
+      }),
+      onClose: shutdown
+    });
 
   await app.listen(listenOptions);
 } catch (error) {

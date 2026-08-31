@@ -17,13 +17,31 @@ export type IndexSchedulerSnapshot = {
   refresh?: IndexRefreshResult;
 };
 
+export type IndexRefreshAttempt =
+  | {
+    generation: number;
+    outcome: 'succeeded';
+    refresh: IndexRefreshResult;
+  }
+  | {
+    generation: number;
+    outcome: 'failed';
+    reason: 'INDEX_REFRESH_FAILED' | 'INDEX_REFRESH_TIMEOUT';
+  }
+  | {
+    generation: number;
+    outcome: 'stopped';
+    reason: 'INDEX_REFRESH_STOPPED';
+  };
+
 export class IndexScheduler {
   private cancelInterval: (() => void) | undefined;
-  private activeRefresh: Promise<void> | undefined;
+  private activeRefresh: Promise<IndexRefreshAttempt> | undefined;
   private activeAbortController: AbortController | undefined;
   private followUpRequested = false;
   private lastRefresh: IndexRefreshResult | undefined;
   private stopped = false;
+  private attemptGeneration = 0;
 
   constructor(private readonly input: {
     refresh: (signal: AbortSignal) => Promise<IndexRefreshResult>;
@@ -54,23 +72,35 @@ export class IndexScheduler {
     await active;
   }
 
-  requestFocusRefresh(): Promise<void> {
+  requestFocusRefresh(): Promise<IndexRefreshAttempt> {
     return this.refreshNow();
   }
 
-  refreshNow(): Promise<void> {
-    if (this.stopped) return Promise.resolve();
+  refreshNow(): Promise<IndexRefreshAttempt> {
+    if (this.stopped) {
+      return Promise.resolve({
+        generation: this.attemptGeneration,
+        outcome: 'stopped',
+        reason: 'INDEX_REFRESH_STOPPED'
+      });
+    }
     if (this.activeRefresh !== undefined) {
       this.followUpRequested = true;
       return this.activeRefresh;
     }
 
-    const run = async (): Promise<void> => {
+    const run = async (): Promise<IndexRefreshAttempt> => {
+      let outcome: IndexRefreshAttempt = {
+        generation: this.attemptGeneration,
+        outcome: 'stopped',
+        reason: 'INDEX_REFRESH_STOPPED'
+      };
       try {
         do {
           this.followUpRequested = false;
-          await this.runOneRefresh();
+          outcome = await this.runOneRefresh();
         } while (!this.stopped && this.followUpRequested);
+        return outcome;
       } finally {
         this.activeRefresh = undefined;
       }
@@ -87,7 +117,9 @@ export class IndexScheduler {
     };
   }
 
-  private async runOneRefresh(): Promise<void> {
+  private async runOneRefresh(): Promise<IndexRefreshAttempt> {
+    this.attemptGeneration += 1;
+    const generation = this.attemptGeneration;
     const controller = new AbortController();
     this.activeAbortController = controller;
     let timedOut = false;
@@ -108,14 +140,26 @@ export class IndexScheduler {
           const reason = error instanceof Error ? error.message : 'INDEX_REFRESH_FAILED';
           this.input.state.recordFailure(reason, this.input.now());
         }
-        return;
+        if (timedOut) {
+          return { generation, outcome: 'failed', reason: 'INDEX_REFRESH_TIMEOUT' };
+        }
+        if (this.stopped) {
+          return { generation, outcome: 'stopped', reason: 'INDEX_REFRESH_STOPPED' };
+        }
+        return { generation, outcome: 'failed', reason: 'INDEX_REFRESH_FAILED' };
       }
 
-      if (this.stopped || timedOut || controller.signal.aborted) return;
+      if (this.stopped || controller.signal.aborted) {
+        if (timedOut) {
+          return { generation, outcome: 'failed', reason: 'INDEX_REFRESH_TIMEOUT' };
+        }
+        return { generation, outcome: 'stopped', reason: 'INDEX_REFRESH_STOPPED' };
+      }
       this.lastRefresh = { ...result };
       if (result.status === 'ready') {
         this.input.state.recordSuccess(result.version, this.input.now());
       }
+      return { generation, outcome: 'succeeded', refresh: { ...result } };
     } finally {
       try {
         cancelDeadline();

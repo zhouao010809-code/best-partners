@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildServer } from '../../src/server/app.js';
 import { applyMigrations } from '../../src/server/db/migrate.js';
 import { createIndexRepository, type IndexRepository } from '../../src/server/index/index-repository.js';
+import { IndexScheduler } from '../../src/server/index/index-scheduler.js';
+import { IndexStateController } from '../../src/server/index/index-state.js';
+import type { IndexSchedulerPort } from '../../src/server/services/index-job-service.js';
 import { FakeVaultGateway } from '../../src/server/vault/FakeVaultGateway.js';
 import type { KnowledgeRecord, MaterialRecord } from '../../src/shared/domain/records.js';
 
@@ -93,22 +96,45 @@ function createReadServer(input: {
   currentIndexVersion?: () => number;
   requestFocusRefresh?: () => Promise<void>;
   rebuildSnapshot?: () => RebuildSnapshot;
+  indexScheduler?: IndexSchedulerPort;
 }) {
   const database = input.database ?? openDatabase();
   let operationSequence = 0;
   let jobSequence = 0;
+  let refreshGeneration = 0;
+  const snapshot = input.rebuildSnapshot ?? (() => ({
+      state: { status: 'ready', version: 7, refreshedAt: '2026-08-31T00:00:00.000Z' },
+      refresh: { status: 'ready', checked: 0, total: 0, version: 7 }
+    }));
+  const indexScheduler: IndexSchedulerPort = input.indexScheduler ?? {
+    requestFocusRefresh: async () => {
+      refreshGeneration += 1;
+      await (input.requestFocusRefresh ?? (async () => {}))();
+      return {
+        generation: refreshGeneration,
+        outcome: 'succeeded',
+        refresh: snapshot().refresh
+      };
+    },
+    snapshot
+  };
   const server = buildServer({
+    healthService: {
+      getSnapshot: async () => ({
+        status: 'ready',
+        writeGate: {
+          status: 'blocked',
+          missing: ['writeEnabled'],
+          fingerprintMatches: true
+        },
+        index: indexScheduler.snapshot().state
+      })
+    },
     readApi: {
       repository: input.repository,
       gateway: input.gateway,
       database,
-      indexScheduler: {
-        requestFocusRefresh: input.requestFocusRefresh ?? (async () => {}),
-        snapshot: input.rebuildSnapshot ?? (() => ({
-          state: { status: 'ready', version: 7, refreshedAt: '2026-08-31T00:00:00.000Z' },
-          refresh: { status: 'ready', checked: 0, total: 0, version: 7 }
-        }))
-      },
+      indexScheduler,
       currentIndexVersion: input.currentIndexVersion ?? (() => 7),
       now: () => '2026-08-31T00:00:00.000Z',
       operationIdFactory: () => `operation-${++operationSequence}`,
@@ -215,6 +241,35 @@ describe('versioned read APIs', () => {
     expectFailure(invalid, 400, 'VALIDATION_ERROR');
   });
 
+  it('round-trips a fixed-length opaque material cursor for long Unicode vault paths', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    for (const [suffix, title] of [['甲', '一'], ['乙', '二']] as const) {
+      repository.replaceFile({ kind: 'material', record: material({
+        path: `01图书馆/${'很长的中文路径'.repeat(45)}${suffix}.md`,
+        title
+      }) });
+    }
+    const { gateway } = createGateway({});
+    const server = createReadServer({ repository, gateway, database });
+
+    const first = await server.inject({
+      method: 'GET', url: '/api/v1/materials?limit=1', headers: requestHeaders()
+    });
+    expect(first.statusCode).toBe(200);
+    const firstPage = first.json<{ data: { items: unknown[]; nextCursor: string } }>().data;
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.nextCursor).toMatch(/^[a-f0-9]{64}$/);
+
+    const second = await server.inject({
+      method: 'GET',
+      url: `/api/v1/materials?limit=1&cursor=${firstPage.nextCursor}`,
+      headers: requestHeaders()
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ data: { items: unknown[] } }>().data.items).toHaveLength(1);
+  });
+
   it('searches knowledge only through title and YAML recall fields and excludes obsolete notes by default', async () => {
     const database = openDatabase();
     const repository = createIndexRepository(database);
@@ -253,6 +308,36 @@ describe('versioned read APIs', () => {
     });
     expect(obsolete.json<{ data: { items: Array<{ path: string }> } }>().data.items)
       .toMatchObject([{ path: '02知识库/过时.md' }]);
+  });
+
+  it('round-trips a fixed-length opaque knowledge cursor for long Unicode vault paths', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    for (const [suffix, hash] of [['甲', 'b'], ['乙', 'c']] as const) {
+      repository.replaceFile({ kind: 'knowledge', record: knowledge({
+        path: `02知识库/${'很长的中文路径'.repeat(45)}${suffix}.md`,
+        title: suffix,
+        rawSha256: hash.repeat(64)
+      }) });
+    }
+    const { gateway } = createGateway({});
+    const server = createReadServer({ repository, gateway, database });
+
+    const first = await server.inject({
+      method: 'GET', url: '/api/v1/knowledge?limit=1', headers: requestHeaders()
+    });
+    expect(first.statusCode).toBe(200);
+    const firstPage = first.json<{ data: { items: unknown[]; nextCursor: string } }>().data;
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.nextCursor).toMatch(/^[a-f0-9]{64}$/);
+
+    const second = await server.inject({
+      method: 'GET',
+      url: `/api/v1/knowledge?limit=1&cursor=${firstPage.nextCursor}`,
+      headers: requestHeaders()
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ data: { items: unknown[] } }>().data.items).toHaveLength(1);
   });
 
   it('returns only hash-verified live Markdown for an indexed knowledge path', async () => {
@@ -427,6 +512,39 @@ describe('versioned read APIs', () => {
 });
 
 describe('persistent index rebuild jobs', () => {
+  it('uses the index version exposed by health for a rebuild command', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const { gateway } = createGateway({});
+    const server = createReadServer({ repository, gateway, database });
+
+    const health = await server.inject({
+      method: 'GET', url: '/api/v1/health', headers: requestHeaders()
+    });
+    expect(health.statusCode).toBe(200);
+    const indexVersion = health.json<{
+      data: { index: { status: string; version: number } };
+      version: number;
+    }>();
+    expect(indexVersion).toMatchObject({
+      data: { index: { status: 'ready', version: 7 } },
+      version: 1
+    });
+
+    const session = await bootstrap(server);
+    const rebuild = await server.inject({
+      method: 'POST',
+      url: '/api/v1/index-jobs/rebuild',
+      headers: mutationHeaders(session, {
+        'content-type': 'application/json',
+        'idempotency-key': 'health-version-rebuild'
+      }),
+      payload: { indexVersion: indexVersion.data.index.version }
+    });
+    expect(rebuild.statusCode).toBe(202);
+    expect(rebuild.json()).toMatchObject({ data: { requestedIndexVersion: 7 }, version: 1 });
+  });
+
   it('requires session, CSRF, index version, and idempotency key', async () => {
     const database = openDatabase();
     const repository = createIndexRepository(database);
@@ -677,6 +795,53 @@ describe('persistent index rebuild jobs', () => {
       version: 1
     });
     expect(snapshot.body).not.toMatch(/Bearer |vault-secret|\/Users\/ao\//i);
+  });
+
+  it('does not complete a rebuild from an older ready snapshot when its real scheduler attempt fails', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const { gateway } = createGateway({});
+    let fail = false;
+    const now = () => new Date('2026-08-31T00:00:00.000Z');
+    const scheduler = new IndexScheduler({
+      refresh: async () => {
+        if (fail) throw new Error('current rebuild failed');
+        return { status: 'ready', checked: 2, total: 2, version: 7 };
+      },
+      state: new IndexStateController(now),
+      intervals: { every: () => () => {} },
+      deadlines: { after: () => () => {} },
+      now
+    });
+    await scheduler.requestFocusRefresh();
+    expect(scheduler.snapshot()).toMatchObject({
+      state: { status: 'ready', version: 7 },
+      refresh: { status: 'ready', version: 7 }
+    });
+    fail = true;
+    const server = createReadServer({
+      repository,
+      gateway,
+      database,
+      indexScheduler: scheduler
+    });
+    const session = await bootstrap(server);
+
+    const accepted = await server.inject({
+      method: 'POST',
+      url: '/api/v1/index-jobs/rebuild',
+      headers: mutationHeaders(session, {
+        'content-type': 'application/json',
+        'idempotency-key': 'real-scheduler-failure'
+      }),
+      payload: { indexVersion: 7 }
+    });
+    expect(accepted.statusCode).toBe(202);
+    await vi.waitFor(() => {
+      expect(database.prepare(`
+        SELECT status, error_code AS errorCode FROM index_jobs WHERE id = 'job-1'
+      `).get()).toEqual({ status: 'failed', errorCode: 'INDEX_REBUILD_FAILED' });
+    });
   });
 });
 

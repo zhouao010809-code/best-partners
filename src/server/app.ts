@@ -71,6 +71,10 @@ function errorStatusCode(error: unknown): number {
 
 const DEFAULT_HEALTH_SNAPSHOT: HealthSnapshot = {
   status: 'recovery-only',
+  index: {
+    status: 'unavailable',
+    reason: 'READ_API_UNAVAILABLE'
+  },
   writeGate: {
     status: 'blocked',
     missing: ['profile', 'database'],

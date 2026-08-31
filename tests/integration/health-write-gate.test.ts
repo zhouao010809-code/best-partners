@@ -23,6 +23,11 @@ const FINGERPRINT = {
   pluginVersion: '5.1.0',
   obsidianVersion: '1.13.7'
 } as const;
+const READY_INDEX = {
+  status: 'ready' as const,
+  version: 7,
+  refreshedAt: CHECKED_AT
+};
 const CAPABILITY_ORDER = [
   'safeRead',
   'safeCreate',
@@ -120,13 +125,19 @@ async function fixture(overrides: Partial<ContractProfileInput> = {}): Promise<{
   readonly profileDirectory: string;
   readonly recoveryDir: string;
   readonly stateKernel: StateKernel;
+  readonly indexState: { snapshot(): typeof READY_INDEX };
 }> {
   const root = await createRoot();
   const profileDirectory = join(root, 'profiles');
   const recoveryDir = join(root, 'recovery');
   await mkdir(recoveryDir, { mode: 0o700 });
   await writeContractProfile(profileDirectory, buildContractProfile(profileInput(overrides)));
-  return { profileDirectory, recoveryDir, stateKernel: normalKernel(recoveryDir) };
+  return {
+    profileDirectory,
+    recoveryDir,
+    stateKernel: normalKernel(recoveryDir),
+    indexState: { snapshot: () => READY_INDEX }
+  };
 }
 
 async function healthResponse(input: Parameters<typeof createHealthService>[0]) {
@@ -161,6 +172,7 @@ describe('GET /api/v1/health write gate', () => {
     })).resolves.toEqual({
       data: {
         status: 'ready',
+        index: READY_INDEX,
         writeGate: {
           status: 'blocked',
           missing: ['safeCreate', 'safeDelete', 'restartPersistence'],
@@ -235,6 +247,7 @@ describe('GET /api/v1/health write gate', () => {
     document = `${OPEN_API}paths: {}\n`;
     await expect(service.getSnapshot()).resolves.toEqual({
       status: 'ready',
+      index: READY_INDEX,
       writeGate: { status: 'blocked', missing: ['profile'], fingerprintMatches: false }
     });
   });
@@ -254,6 +267,7 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'ready',
+      index: READY_INDEX,
       writeGate: { status: 'blocked', missing: ['profile'], fingerprintMatches: false }
     });
     expect(JSON.stringify(snapshot)).not.toContain(secret);
@@ -277,6 +291,7 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'recovery-only',
+      index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
       writeGate: { status: 'blocked', missing: ['database'], fingerprintMatches: true }
     });
     expect(JSON.stringify(snapshot)).not.toContain(secretEntry);
@@ -297,6 +312,7 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'recovery-only',
+      index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
       writeGate: { status: 'blocked', missing: ['recovery'], fingerprintMatches: true }
     });
     expect(JSON.stringify(snapshot)).not.toContain(secretEntry);
@@ -314,6 +330,7 @@ describe('GET /api/v1/health write gate', () => {
       stateKernel: normalKernel(missingRecoveryDir)
     }).getSnapshot()).resolves.toEqual({
       status: 'recovery-only',
+      index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
       writeGate: { status: 'blocked', missing: ['recovery'], fingerprintMatches: true }
     });
   });
@@ -330,6 +347,7 @@ describe('GET /api/v1/health write gate', () => {
     expect(response.json()).toEqual({
       data: {
         status: 'recovery-only',
+        index: { status: 'unavailable', reason: 'READ_API_UNAVAILABLE' },
         writeGate: {
           status: 'blocked',
           missing: ['profile', 'database'],

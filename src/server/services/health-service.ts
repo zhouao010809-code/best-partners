@@ -8,6 +8,7 @@ import {
   type StoredContractProfile
 } from '../vault/contract-profile-store.js';
 import type { VaultGateway } from '../vault/VaultGateway.js';
+import type { IndexState } from '../index/index-state.js';
 
 const REQUIRED_CAPABILITIES = [
   'safeRead',
@@ -24,6 +25,7 @@ type RequiredCapability = typeof REQUIRED_CAPABILITIES[number];
 
 export interface HealthSnapshot {
   readonly status: 'ready' | 'recovery-only';
+  readonly index: HealthIndexSnapshot;
   readonly writeGate: {
     readonly status: 'blocked' | 'enabled';
     readonly missing: readonly string[];
@@ -31,8 +33,61 @@ export interface HealthSnapshot {
   };
 }
 
+export type HealthIndexSnapshot =
+  | { readonly status: 'building'; readonly startedAt: string }
+  | { readonly status: 'ready'; readonly version: number; readonly refreshedAt: string }
+  | {
+    readonly status: 'stale';
+    readonly version: number;
+    readonly lastSuccessAt: string;
+    readonly reason: 'INDEX_STALE';
+  }
+  | {
+    readonly status: 'failed';
+    readonly lastSuccessAt?: string;
+    readonly reason: 'INDEX_FAILED';
+  }
+  | {
+    readonly status: 'unavailable';
+    readonly reason: 'RECOVERY_ONLY' | 'READ_API_UNAVAILABLE';
+  };
+
+export interface HealthIndexStateSource {
+  snapshot(): IndexState | Extract<HealthIndexSnapshot, { status: 'unavailable' }>;
+}
+
 export interface HealthService {
   getSnapshot(): Promise<HealthSnapshot>;
+}
+
+function publicIndexSnapshot(
+  snapshot: ReturnType<HealthIndexStateSource['snapshot']>
+): HealthIndexSnapshot {
+  switch (snapshot.status) {
+    case 'building':
+      return { status: 'building', startedAt: snapshot.startedAt };
+    case 'ready':
+      return {
+        status: 'ready',
+        version: snapshot.version,
+        refreshedAt: snapshot.refreshedAt
+      };
+    case 'stale':
+      return {
+        status: 'stale',
+        version: snapshot.version,
+        lastSuccessAt: snapshot.lastSuccessAt,
+        reason: 'INDEX_STALE'
+      };
+    case 'failed':
+      return {
+        status: 'failed',
+        ...(snapshot.lastSuccessAt === undefined ? {} : { lastSuccessAt: snapshot.lastSuccessAt }),
+        reason: 'INDEX_FAILED'
+      };
+    case 'unavailable':
+      return snapshot;
+  }
 }
 
 function fieldPassed(profile: StoredContractProfile, capability: RequiredCapability): boolean {
@@ -101,6 +156,7 @@ export function createHealthService(input: {
   readonly gateway: Pick<VaultGateway, 'fingerprint' | 'readOpenApi'>;
   readonly profileDirectory: string;
   readonly stateKernel: StateKernel;
+  readonly indexState: HealthIndexStateSource;
 }): HealthService {
   return {
     getSnapshot: async () => {
@@ -116,6 +172,9 @@ export function createHealthService(input: {
       if (blocker !== undefined) missing.push(blocker);
       return {
         status: blocker === undefined ? 'ready' : 'recovery-only',
+        index: blocker === undefined
+          ? publicIndexSnapshot(input.indexState.snapshot())
+          : { status: 'unavailable', reason: 'RECOVERY_ONLY' },
         writeGate: {
           status: missing.length === 0 ? 'enabled' : 'blocked',
           missing,

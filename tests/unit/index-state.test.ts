@@ -208,7 +208,7 @@ describe('IndexScheduler', () => {
     await scheduler.refreshNow();
     fail = true;
     clock.advance(1_000);
-    await expect(scheduler.refreshNow()).resolves.toBeUndefined();
+    await expect(scheduler.refreshNow()).resolves.toMatchObject({ outcome: 'failed' });
     expect(status(scheduler.snapshot().state)).toBe('ready');
 
     clock.advance(1_000);

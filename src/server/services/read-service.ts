@@ -14,6 +14,7 @@ import type {
   materialQuerySchema
 } from '../../shared/api/schemas.js';
 import type { z } from 'zod';
+import { createHash } from 'node:crypto';
 
 type MaterialApiQuery = z.output<typeof materialQuerySchema>;
 type KnowledgeApiQuery = z.output<typeof knowledgeQuerySchema>;
@@ -50,19 +51,21 @@ function normalizeKnowledgePath(input: string): string {
   return path;
 }
 
-function decodeCursor(cursor: string | undefined): string | undefined {
-  if (cursor === undefined) return undefined;
-  try {
-    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-    if (decoded.length === 0 || Buffer.from(decoded, 'utf8').toString('base64url') !== cursor) {
-      throw new Error('invalid cursor');
-    }
-    return decoded;
-  } catch {
+function opaqueCursor(path: string): string {
+  return createHash('sha256').update(path, 'utf8').digest('hex');
+}
+
+function cursorOffset<T extends { path: string }>(records: readonly T[], cursor?: string): number {
+  if (cursor === undefined) return 0;
+  const matches = records
+    .map((record, index) => ({ index, cursor: opaqueCursor(record.path) }))
+    .filter((entry) => entry.cursor === cursor);
+  if (matches.length !== 1) {
     throw new PublicApiError('VALIDATION_ERROR', 'Request validation failed', 400, {
-      cursor: 'Invalid cursor'
+      cursor: 'Unknown cursor'
     });
   }
+  return matches[0]!.index + 1;
 }
 
 function paginateByPath<T extends { path: string }>(
@@ -70,17 +73,14 @@ function paginateByPath<T extends { path: string }>(
   cursor: string | undefined,
   requestedLimit: number | undefined
 ): Page<T> {
-  const afterPath = decodeCursor(cursor);
   const limit = requestedLimit ?? DEFAULT_API_PAGE_SIZE;
-  const eligible = afterPath === undefined
-    ? records
-    : records.filter((record) => record.path > afterPath);
+  const eligible = records.slice(cursorOffset(records, cursor));
   const items = eligible.slice(0, limit);
   const finalItem = items.at(-1);
   return {
     items: [...items],
     ...(eligible.length > items.length && finalItem !== undefined
-      ? { nextCursor: Buffer.from(finalItem.path, 'utf8').toString('base64url') }
+      ? { nextCursor: opaqueCursor(finalItem.path) }
       : {})
   };
 }

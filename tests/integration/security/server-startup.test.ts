@@ -182,7 +182,8 @@ describe('server listen boundary', () => {
       writeEnabled: false,
       gateway: startup.gateway,
       profileDirectory: '/tmp/xiaozhao-app-data/contract-profiles',
-      stateKernel: startup.normalKernel
+      stateKernel: startup.normalKernel,
+      indexState: { snapshot: expect.any(Function) }
     });
     expect(startup.createIndexRepository).toHaveBeenCalledWith(startup.normalKernel.db);
     expect(startup.loadPersistedIndexVersion).toHaveBeenCalledWith(startup.normalKernel.db, 0);
