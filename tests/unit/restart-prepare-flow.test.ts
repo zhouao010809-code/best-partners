@@ -1,64 +1,124 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { RestartPending } from '../helpers/restart-pending.js';
-import { runRestartPrepareFlow } from '../helpers/restart-prepare-flow.js';
+import type {
+  PreparedRestartPending,
+  PreparingRestartPending,
+  RestartPending
+} from '../helpers/restart-pending.js';
+import {
+  selectRestartPreparation,
+  confirmPreparedRestartBlocked,
+  runRestartPrepareFlow
+} from '../helpers/restart-prepare-flow.js';
 
-function pending(): RestartPending {
+function preparing(): PreparingRestartPending {
   return {
     schemaVersion: 1,
-    phase: 'prepared',
+    phase: 'preparing',
     runId: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
     root: 'library',
     noteId: 'restart.md',
     rawSha256: 'a'.repeat(64),
-    upstreamVersion: 'version-token:1',
-    profileKey: 'b'.repeat(64)
+    profileKey: 'b'.repeat(64),
+    manualCleanupReasonCode: 'MANUAL_CLEANUP_REQUIRED'
   };
 }
 
-describe('restart prepare flow', () => {
-  it.each(['profile update', 'pending write'] as const)(
-    'persists a sanitized cleanup record when %s fails after note observation',
-    async (failurePoint) => {
-      const record = pending();
-      const writeCleanup = vi.fn(async () => {});
-      const writePending = vi.fn(async () => {
-        if (failurePoint === 'pending write') throw new Error('PENDING_WRITE_FAILED');
-      });
+function prepared(value: PreparingRestartPending): PreparedRestartPending {
+  return { ...value, phase: 'prepared', upstreamVersion: 'version-token:1' };
+}
 
-      await expect(runRestartPrepareFlow({
-        prepareObservedRecord: async () => record,
-        updateProfile: async () => {
-          if (failurePoint === 'profile update') throw new Error('CONTRACT_PROFILE_CONFLICT');
-        },
-        writePending,
-        writeCleanup
-      })).rejects.toThrowError(
-        failurePoint === 'profile update' ? 'CONTRACT_PROFILE_CONFLICT' : 'PENDING_WRITE_FAILED'
-      );
-      expect(writeCleanup).toHaveBeenCalledWith(record, {
-        status: 'unverified',
-        reasonCode: 'MANUAL_CLEANUP_REQUIRED'
-      });
+describe('restart prepare flow', () => {
+  it('does not announce a prepared restart until the current profile is blocked again', async () => {
+    const announce = vi.fn();
+    await expect(confirmPreparedRestartBlocked({
+      blockProfile: async () => { throw new Error('CONTRACT_PROFILE_CONFLICT'); },
+      announce
+    })).rejects.toThrowError('CONTRACT_PROFILE_CONFLICT');
+    expect(announce).not.toHaveBeenCalled();
+
+    await expect(confirmPreparedRestartBlocked({
+      blockProfile: async () => {},
+      announce
+    })).resolves.toBeUndefined();
+    expect(announce).toHaveBeenCalledOnce();
+  });
+
+  it('reuses an exact active preparing identity instead of allocating a new run', () => {
+    const active = preparing();
+    const fresh = { ...preparing(), runId: '01ARZ3NDEKTSV4RRFFQ69G5FAW' };
+    expect(selectRestartPreparation(active, fresh)).toEqual(active);
+    expect(selectRestartPreparation(undefined, fresh)).toEqual(fresh);
+  });
+
+  it.each([
+    { ...prepared(preparing()) },
+    { ...preparing(), profileKey: 'c'.repeat(64) },
+    { ...preparing(), rawSha256: 'c'.repeat(64) }
+  ] as RestartPending[])(
+    'refuses to replace another active restart identity',
+    (active) => {
+      expect(() => selectRestartPreparation(active, preparing()))
+        .toThrowError('RESTART_PENDING_ALREADY_ACTIVE');
     }
   );
 
-  it('does not invent an orphan record when note observation fails before identifiers exist', async () => {
-    const writeCleanup = vi.fn(async () => {});
+  it('blocks the profile, then durably records identity, before test-vault mutation', async () => {
+    const order: string[] = [];
+    const wal = preparing();
     await expect(runRestartPrepareFlow({
-      prepareObservedRecord: async () => { throw new Error('CONTRACT_OBSERVATION_TIMEOUT'); },
-      updateProfile: async () => {},
-      writePending: async () => {},
-      writeCleanup
-    })).rejects.toThrowError('CONTRACT_OBSERVATION_TIMEOUT');
-    expect(writeCleanup).not.toHaveBeenCalled();
+      preparing: wal,
+      writePreparing: async () => { order.push('wal'); },
+      blockProfile: async () => { order.push('profile-blocked'); },
+      mutateAndObserve: async () => {
+        order.push('mutate');
+        return { rawSha256: wal.rawSha256, upstreamVersion: 'version-token:1' };
+      },
+      markPrepared: async (current) => {
+        order.push('prepared');
+        return prepared(current);
+      }
+    })).resolves.toMatchObject({ phase: 'prepared' });
+    expect(order).toEqual(['profile-blocked', 'wal', 'mutate', 'prepared']);
   });
 
-  it('fails with a stable code if the orphan cleanup record cannot be persisted', async () => {
+  it.each(['wal', 'profile-blocked', 'mutate', 'prepared'] as const)(
+    'never runs a later phase when %s fails',
+    async (failurePoint) => {
+      const order: string[] = [];
+      const step = async (name: typeof failurePoint): Promise<void> => {
+        order.push(name);
+        if (name === failurePoint) throw new Error(`FAIL_${name}`);
+      };
+      const wal = preparing();
+      await expect(runRestartPrepareFlow({
+        preparing: wal,
+        writePreparing: async () => step('wal'),
+        blockProfile: async () => step('profile-blocked'),
+        mutateAndObserve: async () => {
+          await step('mutate');
+          return { rawSha256: wal.rawSha256, upstreamVersion: 'version-token:1' };
+        },
+        markPrepared: async (current) => {
+          await step('prepared');
+          return prepared(current);
+        }
+      })).rejects.toThrowError(`FAIL_${failurePoint}`);
+      expect(order.at(-1)).toBe(failurePoint);
+    }
+  );
+
+  it('retains the preparing identity when observation times out', async () => {
+    const wal = preparing();
+    const writePreparing = vi.fn(async () => {});
+    const markPrepared = vi.fn(async () => prepared(wal));
     await expect(runRestartPrepareFlow({
-      prepareObservedRecord: async () => pending(),
-      updateProfile: async () => { throw new Error('CONTRACT_PROFILE_CONFLICT'); },
-      writePending: async () => {},
-      writeCleanup: async () => { throw new Error('/private/secret path'); }
-    })).rejects.toThrowError('RESTART_PREPARE_ORPHAN_RECORD_FAILED');
+      preparing: wal,
+      writePreparing,
+      blockProfile: async () => {},
+      mutateAndObserve: async () => { throw new Error('CONTRACT_OBSERVATION_TIMEOUT'); },
+      markPrepared
+    })).rejects.toThrowError('CONTRACT_OBSERVATION_TIMEOUT');
+    expect(writePreparing).toHaveBeenCalledWith(wal);
+    expect(markPrepared).not.toHaveBeenCalled();
   });
 });

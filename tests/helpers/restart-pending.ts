@@ -1,26 +1,71 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, link, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, link, lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
-import type { StoredContractProfile } from '../../src/server/vault/contract-profile-store.js';
+import {
+  computeContractProfileRevision,
+  type StoredContractProfile
+} from '../../src/server/vault/contract-profile-store.js';
+
+const MAX_PENDING_BYTES = 16 * 1024;
+const PENDING_READ_TIMEOUT_MS = 1_000;
+const RESTART_FILE = 'restart-pending.json';
+const RESTART_RECOVERY_FILE = 'restart-pending.recovery.json';
 
 const reasonCodeSchema = z.string().min(1).max(128).regex(/^[A-Z0-9_:-]+$/);
-const restartPendingSchema = z.object({
+const runIdSchema = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+const restartIdentityFields = {
   schemaVersion: z.literal(1),
-  phase: z.enum(['prepared', 'restart-verified']),
-  runId: z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/),
+  runId: runIdSchema,
   root: z.enum(['library', 'knowledge']),
   noteId: z.string().min(1).max(64).regex(/^[a-z0-9._-]+$/i),
-  rawSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  upstreamVersion: z.string().min(1).max(256).regex(/^[a-z0-9._:-]+$/i),
-  profileKey: z.string().regex(/^[a-f0-9]{64}$/)
+  rawSha256: sha256Schema,
+  profileKey: sha256Schema,
+  manualCleanupReasonCode: z.literal('MANUAL_CLEANUP_REQUIRED')
+} as const;
+const upstreamVersionSchema = z.string().min(1).max(256).regex(/^[a-z0-9._:-]+$/i);
+const preparingRestartPendingSchema = z.object({
+  ...restartIdentityFields,
+  phase: z.literal('preparing')
 }).strict();
-const cleanupPendingSchema = restartPendingSchema.extend({
+const preparedRestartPendingSchema = z.object({
+  ...restartIdentityFields,
+  phase: z.literal('prepared'),
+  upstreamVersion: upstreamVersionSchema
+}).strict();
+const restartVerifiedPendingSchema = z.object({
+  ...restartIdentityFields,
+  phase: z.literal('restart-verified'),
+  upstreamVersion: upstreamVersionSchema,
+  verifiedAt: z.string().datetime({ offset: true }),
+  intendedProfileRevision: sha256Schema
+}).strict();
+const restartPendingSchema = z.discriminatedUnion('phase', [
+  preparingRestartPendingSchema,
+  preparedRestartPendingSchema,
+  restartVerifiedPendingSchema
+]);
+const cleanupFields = {
   cleanupStatus: z.enum(['unverified', 'failed']),
   cleanupReasonCode: reasonCodeSchema
+} as const;
+const cleanupPendingSchema = z.discriminatedUnion('phase', [
+  preparingRestartPendingSchema.extend(cleanupFields).strict(),
+  preparedRestartPendingSchema.extend(cleanupFields).strict(),
+  restartVerifiedPendingSchema.extend(cleanupFields).strict()
+]);
+const activationSchema = z.object({
+  verifiedAt: z.string().datetime({ offset: true }),
+  intendedProfileRevision: sha256Schema
 }).strict();
 
 export type RestartPending = z.infer<typeof restartPendingSchema>;
+export type PreparingRestartPending = z.infer<typeof preparingRestartPendingSchema>;
+export type PreparedRestartPending = z.infer<typeof preparedRestartPendingSchema>;
+export type RestartVerifiedPending = z.infer<typeof restartVerifiedPendingSchema>;
+export type ObservedRestartPending = PreparedRestartPending | RestartVerifiedPending;
 export type CleanupPending = z.infer<typeof cleanupPendingSchema>;
 
 function hasCode(error: unknown, code: string): boolean {
@@ -28,13 +73,17 @@ function hasCode(error: unknown, code: string): boolean {
     && (error as NodeJS.ErrnoException).code === code;
 }
 
-async function exists(path: string): Promise<boolean> {
+async function settleBeforeDeadline<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (hasCode(error, 'ENOENT')) return false;
-    throw error;
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('pending read timeout')), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -60,10 +109,67 @@ async function resolvePendingDirectory(directory: string, create: boolean): Prom
     await mkdir(candidate, { mode: 0o700 });
     const created = await lstat(candidate);
     if (created.isSymbolicLink() || !created.isDirectory()) throw new Error('unsafe');
+    await syncDirectory(parent);
   }
   if (await realpath(candidate) !== candidate) throw new Error('unsafe');
   if (create) await chmod(candidate, 0o700);
   return candidate;
+}
+
+async function readRegularFileNoFollow(path: string): Promise<string> {
+  if (typeof constants.O_NOFOLLOW !== 'number' || constants.O_NOFOLLOW === 0) {
+    throw new Error('nofollow unavailable');
+  }
+  const before = await settleBeforeDeadline(lstat(path), PENDING_READ_TIMEOUT_MS);
+  if (
+    before.isSymbolicLink()
+    || !before.isFile()
+    || before.nlink !== 1
+    || (before.mode & 0o777) !== 0o600
+    || before.size > MAX_PENDING_BYTES
+  ) {
+    throw new Error('unsafe pending file');
+  }
+  const handle = await settleBeforeDeadline(
+    open(path, constants.O_RDONLY | constants.O_NOFOLLOW),
+    PENDING_READ_TIMEOUT_MS
+  );
+  try {
+    const opened = await settleBeforeDeadline(handle.stat(), PENDING_READ_TIMEOUT_MS);
+    if (
+      !opened.isFile()
+      || opened.nlink !== 1
+      || (opened.mode & 0o777) !== 0o600
+      || opened.dev !== before.dev
+      || opened.ino !== before.ino
+      || opened.size > MAX_PENDING_BYTES
+    ) {
+      throw new Error('unsafe pending file');
+    }
+    const buffer = Buffer.alloc(MAX_PENDING_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const { bytesRead } = await settleBeforeDeadline(
+        handle.read(buffer, offset, buffer.byteLength - offset, offset),
+        PENDING_READ_TIMEOUT_MS
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset > MAX_PENDING_BYTES) throw new Error('pending file too large');
+    return buffer.subarray(0, offset).toString('utf8');
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+async function readIfPresent(path: string): Promise<string | undefined> {
+  try {
+    return await readRegularFileNoFollow(path);
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return undefined;
+    throw error;
+  }
 }
 
 async function withPendingLock<T>(directory: string, operation: () => Promise<T>): Promise<T> {
@@ -95,16 +201,12 @@ async function withPendingLock<T>(directory: string, operation: () => Promise<T>
   } catch (error) {
     operationFailure = error;
   }
-  try {
-    await lock.close();
-  } catch {
-    // A committed pending-state transition remains authoritative.
-  }
+  await lock.close().catch(() => {});
   try {
     await unlink(lockPath);
     await syncDirectory(directory);
   } catch {
-    // A leftover lock makes later transitions fail closed; it cannot undo this one.
+    // A leftover lock blocks later transitions; it cannot undo this operation.
   }
   if (!completed) throw operationFailure;
   return value as T;
@@ -114,45 +216,95 @@ async function atomicWriteExclusive(
   directory: string,
   fileName: string,
   serialized: string,
-  allowExistingExact = false
+  allowExistingExact: boolean,
+  syncAfterCommit: (directory: string) => Promise<void> = syncDirectory
 ): Promise<void> {
   const target = join(directory, fileName);
   const temporary = join(directory, `${fileName}.${randomUUID()}.tmp`);
   const stored = `${serialized}\n`;
+  const existing = await readIfPresent(target);
+  if (existing !== undefined) {
+    if (!allowExistingExact || existing !== stored) throw new Error('target exists');
+    await syncAfterCommit(directory);
+    return;
+  }
+
   let handle;
+  let linked = false;
   try {
-    if (await exists(target)) {
-      if (allowExistingExact && await readFile(target, 'utf8') === stored) return;
-      throw new Error('target exists');
-    }
     handle = await open(temporary, 'wx', 0o600);
     await handle.writeFile(stored, 'utf8');
     await handle.sync();
     await handle.close();
     handle = undefined;
-    if (await exists(target)) throw new Error('target exists');
-    await rename(temporary, target);
-    // Rename is the commit point. A post-commit fsync failure must not make the
-    // caller restore another active record alongside this one.
-    await syncDirectory(directory).catch(() => {});
+    try {
+      await link(temporary, target);
+      linked = true;
+    } catch (error) {
+      if (
+        !hasCode(error, 'EEXIST')
+        || !allowExistingExact
+        || await readRegularFileNoFollow(target) !== stored
+      ) {
+        throw error;
+      }
+    }
+    await unlink(temporary);
+    if (linked && await readRegularFileNoFollow(target) !== stored) {
+      throw new Error('exclusive write mismatch');
+    }
+    await syncAfterCommit(directory);
   } catch (error) {
-    try {
-      await handle?.close();
-    } catch {
-      // Best-effort close before removing an uncommitted record.
+    await handle?.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
+}
+
+async function replaceExactRecord(
+  directory: string,
+  expected: RestartPending,
+  desired: RestartPending,
+  syncAfterCommit: (directory: string) => Promise<void> = syncDirectory
+): Promise<RestartPending> {
+  const target = join(directory, RESTART_FILE);
+  const expectedBytes = `${JSON.stringify(expected)}\n`;
+  const desiredBytes = `${JSON.stringify(desired)}\n`;
+  const currentBytes = await readRegularFileNoFollow(target);
+  if (currentBytes === desiredBytes) {
+    await syncAfterCommit(directory);
+    return desired;
+  }
+  if (currentBytes !== expectedBytes) throw new Error('pending mismatch');
+
+  const temporary = join(directory, `restart-pending.transition.${randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await open(temporary, 'wx', 0o600);
+    await handle.writeFile(desiredBytes, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporary, target);
+    await syncAfterCommit(directory);
+    if (await readRegularFileNoFollow(target) !== desiredBytes) {
+      throw new Error('pending transition mismatch');
     }
-    try {
-      await unlink(temporary);
-    } catch {
-      // The temporary file may not have been created.
-    }
+    return desired;
+  } catch (error) {
+    await handle?.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
     throw error;
   }
 }
 
 export async function writeRestartPending(
   profileDirectory: string,
-  value: RestartPending
+  value: RestartPending,
+  options: {
+    /** @internal deterministic durability-failure injection. */
+    readonly testOnlySyncAfterCommit?: (directory: string) => Promise<void>;
+  } = {}
 ): Promise<void> {
   let parsed: RestartPending;
   try {
@@ -163,10 +315,30 @@ export async function writeRestartPending(
   try {
     const canonicalDirectory = await resolvePendingDirectory(profileDirectory, true);
     await withPendingLock(canonicalDirectory, async () => {
-      await atomicWriteExclusive(canonicalDirectory, 'restart-pending.json', JSON.stringify(parsed));
+      await atomicWriteExclusive(
+        canonicalDirectory,
+        RESTART_FILE,
+        JSON.stringify(parsed),
+        true,
+        options.testOnlySyncAfterCommit
+      );
     });
   } catch {
     throw new Error('RESTART_PENDING_WRITE_FAILED');
+  }
+}
+
+async function loadRestartFromDirectory(directory: string): Promise<RestartPending | undefined> {
+  try {
+    const targetBytes = await readIfPresent(join(directory, RESTART_FILE));
+    if (targetBytes !== undefined) {
+      return restartPendingSchema.parse(JSON.parse(targetBytes) as unknown);
+    }
+    const recoveryBytes = await readIfPresent(join(directory, RESTART_RECOVERY_FILE));
+    if (recoveryBytes === undefined) return undefined;
+    return restartPendingSchema.parse(JSON.parse(recoveryBytes) as unknown);
+  } catch {
+    return undefined;
   }
 }
 
@@ -174,61 +346,104 @@ export async function loadRestartPending(
   profileDirectory: string
 ): Promise<RestartPending | undefined> {
   try {
-    const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
-    return restartPendingSchema.parse(
-      JSON.parse(await readFile(join(canonicalDirectory, 'restart-pending.json'), 'utf8')) as unknown
+    return await loadRestartFromDirectory(
+      await resolvePendingDirectory(profileDirectory, false)
     );
   } catch {
     return undefined;
   }
 }
 
-export async function markRestartPendingVerified(
+export async function markRestartPendingPrepared(
   profileDirectory: string,
-  expected: RestartPending
-): Promise<RestartPending> {
-  let parsedExpected: RestartPending;
+  expected: PreparingRestartPending,
+  observation: { readonly rawSha256: string; readonly upstreamVersion: string },
+  options: {
+    /** @internal deterministic durability-failure injection. */
+    readonly testOnlySyncAfterCommit?: (directory: string) => Promise<void>;
+  } = {}
+): Promise<PreparedRestartPending> {
+  let parsedExpected: PreparingRestartPending;
+  let desired: PreparedRestartPending;
   try {
-    parsedExpected = restartPendingSchema.parse(expected);
+    parsedExpected = preparingRestartPendingSchema.parse(expected);
+    if (observation.rawSha256 !== parsedExpected.rawSha256) throw new Error('hash mismatch');
+    desired = preparedRestartPendingSchema.parse({
+      ...parsedExpected,
+      phase: 'prepared',
+      upstreamVersion: observation.upstreamVersion
+    });
   } catch {
     throw new Error('RESTART_PENDING_NOT_CURRENT');
   }
   try {
     const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
-    return await withPendingLock(canonicalDirectory, async () => {
-      const target = join(canonicalDirectory, 'restart-pending.json');
-      const current = restartPendingSchema.parse(
-        JSON.parse(await readFile(target, 'utf8')) as unknown
-      );
-      if (JSON.stringify(current) !== JSON.stringify(parsedExpected)) {
-        throw new Error('mismatch');
-      }
-      if (current.phase === 'restart-verified') return current;
-
-      const verified = restartPendingSchema.parse({ ...current, phase: 'restart-verified' });
-      const temporary = join(
+    return preparedRestartPendingSchema.parse(await withPendingLock(
+      canonicalDirectory,
+      () => replaceExactRecord(
         canonicalDirectory,
-        `restart-pending.verified.${randomUUID()}.tmp`
-      );
-      let handle;
-      try {
-        handle = await open(temporary, 'wx', 0o600);
-        await handle.writeFile(`${JSON.stringify(verified)}\n`, 'utf8');
-        await handle.sync();
-        await handle.close();
-        handle = undefined;
-        await rename(temporary, target);
-        await syncDirectory(canonicalDirectory);
-        return verified;
-      } catch (error) {
-        await handle?.close().catch(() => {});
-        await unlink(temporary).catch(() => {});
-        throw error;
-      }
+        parsedExpected,
+        desired,
+        options.testOnlySyncAfterCommit
+      )
+    ));
+  } catch {
+    throw new Error('RESTART_PENDING_NOT_CURRENT');
+  }
+}
+
+export async function markRestartPendingVerified(
+  profileDirectory: string,
+  expected: ObservedRestartPending,
+  activation: { readonly verifiedAt: string; readonly intendedProfileRevision: string },
+  options: {
+    /** @internal deterministic durability-failure injection. */
+    readonly testOnlySyncAfterCommit?: (directory: string) => Promise<void>;
+  } = {}
+): Promise<RestartVerifiedPending> {
+  let parsedExpected: ObservedRestartPending;
+  let desired: RestartVerifiedPending;
+  try {
+    parsedExpected = expected.phase === 'prepared'
+      ? preparedRestartPendingSchema.parse(expected)
+      : restartVerifiedPendingSchema.parse(expected);
+    const parsedActivation = activationSchema.parse(activation);
+    if (
+      parsedExpected.phase === 'restart-verified'
+      && parsedExpected.verifiedAt !== parsedActivation.verifiedAt
+    ) {
+      throw new Error('verified timestamp mismatch');
+    }
+    desired = restartVerifiedPendingSchema.parse({
+      ...parsedExpected,
+      phase: 'restart-verified',
+      ...parsedActivation
     });
   } catch {
     throw new Error('RESTART_PENDING_NOT_CURRENT');
   }
+  try {
+    const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
+    return restartVerifiedPendingSchema.parse(await withPendingLock(
+      canonicalDirectory,
+      () => replaceExactRecord(
+        canonicalDirectory,
+        parsedExpected,
+        desired,
+        options.testOnlySyncAfterCommit
+      )
+    ));
+  } catch {
+    throw new Error('RESTART_PENDING_NOT_CURRENT');
+  }
+}
+
+function cleanupFileName(runId: string): string {
+  return `cleanup-pending.${runId}.json`;
+}
+
+function cleanupRecoveryFileName(runId: string): string {
+  return `cleanup-pending.${runId}.recovery.json`;
 }
 
 export async function loadCleanupPending(
@@ -236,14 +451,13 @@ export async function loadCleanupPending(
   runId: string
 ): Promise<CleanupPending | undefined> {
   try {
-    const parsedRunId = restartPendingSchema.shape.runId.parse(runId);
+    const parsedRunId = runIdSchema.parse(runId);
     const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
-    return cleanupPendingSchema.parse(
-      JSON.parse(await readFile(
-        join(canonicalDirectory, `cleanup-pending.${parsedRunId}.json`),
-        'utf8'
-      )) as unknown
-    );
+    const value = await readIfPresent(join(canonicalDirectory, cleanupFileName(parsedRunId)))
+      ?? await readIfPresent(join(canonicalDirectory, cleanupRecoveryFileName(parsedRunId)));
+    if (value === undefined) return undefined;
+    const parsed = cleanupPendingSchema.parse(JSON.parse(value) as unknown);
+    return parsed.runId === parsedRunId ? parsed : undefined;
   } catch {
     return undefined;
   }
@@ -258,10 +472,6 @@ function buildCleanupPending(
     cleanupStatus: cleanup.status,
     cleanupReasonCode: cleanup.reasonCode
   });
-}
-
-function cleanupFileName(runId: string): string {
-  return `cleanup-pending.${runId}.json`;
 }
 
 export async function writeCleanupPending(
@@ -290,11 +500,130 @@ export async function writeCleanupPending(
   }
 }
 
+async function restoreNamedRecoveryAsTarget(
+  directory: string,
+  targetName: string,
+  recoveryName: string
+): Promise<void> {
+  const target = join(directory, targetName);
+  const recovery = join(directory, recoveryName);
+  const targetBytes = await readIfPresent(target);
+  const recoveryBytes = await readIfPresent(recovery);
+  if (targetBytes !== undefined) {
+    if (recoveryBytes !== undefined) {
+      if (recoveryBytes !== targetBytes) throw new Error('recovery mismatch');
+      await unlink(recovery);
+      await syncDirectory(directory);
+    }
+    return;
+  }
+  if (recoveryBytes === undefined) throw new Error('pending missing');
+  await rename(recovery, target);
+  await syncDirectory(directory);
+}
+
+export async function consumeCleanupPending(
+  profileDirectory: string,
+  expected: CleanupPending,
+  options: {
+    /** @internal deterministic rollback fault injection. */
+    readonly testOnlySyncAfterTargetUnlink?: (directory: string) => Promise<void>;
+  } = {}
+): Promise<void> {
+  let parsedExpected: CleanupPending;
+  try {
+    parsedExpected = cleanupPendingSchema.parse(expected);
+  } catch {
+    throw new Error('RESTART_PENDING_NOT_CURRENT');
+  }
+  try {
+    const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
+    await withPendingLock(canonicalDirectory, async () => {
+      const targetName = cleanupFileName(parsedExpected.runId);
+      const recoveryName = cleanupRecoveryFileName(parsedExpected.runId);
+      await restoreNamedRecoveryAsTarget(canonicalDirectory, targetName, recoveryName);
+      const target = join(canonicalDirectory, targetName);
+      const recovery = join(canonicalDirectory, recoveryName);
+      const expectedBytes = `${JSON.stringify(parsedExpected)}\n`;
+      if (await readRegularFileNoFollow(target) !== expectedBytes) {
+        throw new Error('pending mismatch');
+      }
+      await atomicWriteExclusive(
+        canonicalDirectory,
+        recoveryName,
+        JSON.stringify(parsedExpected),
+        true
+      );
+      try {
+        await unlink(target);
+        await (options.testOnlySyncAfterTargetUnlink ?? syncDirectory)(canonicalDirectory);
+      } catch (error) {
+        try {
+          const targetBytes = await readIfPresent(target);
+          if (targetBytes === undefined) await rename(recovery, target);
+          else if (targetBytes === expectedBytes) await unlink(recovery);
+          else throw new Error('target changed');
+          await syncDirectory(canonicalDirectory);
+        } catch {
+          // The loader recognizes the fixed recovery locator.
+        }
+        throw error;
+      }
+      await unlink(recovery).catch(() => {});
+      await syncDirectory(canonicalDirectory).catch(() => {});
+    });
+  } catch {
+    throw new Error('RESTART_PENDING_NOT_CURRENT');
+  }
+}
+
+function normalizedRestartIdentity(pending: RestartPending | CleanupPending): object {
+  return {
+    schemaVersion: pending.schemaVersion,
+    phase: pending.phase,
+    runId: pending.runId,
+    root: pending.root,
+    noteId: pending.noteId,
+    rawSha256: pending.rawSha256,
+    profileKey: pending.profileKey,
+    manualCleanupReasonCode: pending.manualCleanupReasonCode,
+    upstreamVersion: 'upstreamVersion' in pending ? pending.upstreamVersion : undefined,
+    verifiedAt: 'verifiedAt' in pending ? pending.verifiedAt : undefined,
+    intendedProfileRevision: 'intendedProfileRevision' in pending
+      ? pending.intendedProfileRevision : undefined
+  };
+}
+
+export function cleanupPendingMatchesRestart(
+  cleanup: CleanupPending,
+  pending: RestartPending
+): boolean {
+  return JSON.stringify(normalizedRestartIdentity(cleanup))
+    === JSON.stringify(normalizedRestartIdentity(pending));
+}
+
 export function restartPendingMatchesProfile(
   pending: RestartPending,
   profileKey: string
 ): boolean {
   return pending.profileKey === profileKey;
+}
+
+function verifiedRestartEvidenceMatches(
+  pending: RestartPending,
+  profile: StoredContractProfile
+): pending is RestartVerifiedPending {
+  if (pending.phase !== 'restart-verified') return false;
+  const restart = profile.evidence
+    .filter((record) => record.operation === 'restartPersistence')
+    .at(-1);
+  return pending.profileKey === profile.profileKey
+    && profile.restartPersistence === 'passed'
+    && profile.restartCheckedAt === pending.verifiedAt
+    && restart?.status === 'passed'
+    && restart.timestamp === pending.verifiedAt
+    && restart.reasonCode === 'RAW_HASH_AND_VERSION_PERSISTED'
+    && restart.primitive === 'RAW_REREAD';
 }
 
 export function restartPendingAlreadyCompleted(
@@ -304,25 +633,22 @@ export function restartPendingAlreadyCompleted(
   const cleanup = profile.evidence
     .filter((record) => record.operation === 'cleanup')
     .at(-1);
-  return restartPendingHasVerifiedRestart(pending, profile)
+  return verifiedRestartEvidenceMatches(pending, profile)
     && cleanup?.status === 'passed'
-    && cleanup.reasonCode === 'CONDITIONAL_NONPERMANENT_CLEANUP_PASSED'
+    && cleanup.reasonCode === restartCleanupPassedReasonCode(pending)
     && cleanup.primitive === 'DELETE_NON_PERMANENT';
+}
+
+export function restartCleanupPassedReasonCode(pending: RestartVerifiedPending): string {
+  return `CLEANUP_PASSED:${pending.runId}:${pending.intendedProfileRevision.toUpperCase()}`;
 }
 
 export function restartPendingHasVerifiedRestart(
   pending: RestartPending,
   profile: StoredContractProfile
 ): boolean {
-  const restart = profile.evidence
-    .filter((record) => record.operation === 'restartPersistence')
-    .at(-1);
-  return pending.phase === 'restart-verified'
-    && pending.profileKey === profile.profileKey
-    && profile.restartPersistence === 'passed'
-    && restart?.status === 'passed'
-    && restart.reasonCode === 'RAW_HASH_AND_VERSION_PERSISTED'
-    && restart.primitive === 'RAW_REREAD';
+  return verifiedRestartEvidenceMatches(pending, profile)
+    && computeContractProfileRevision(profile) === pending.intendedProfileRevision;
 }
 
 export function isVerifiedNonPermanentCleanup(
@@ -332,44 +658,83 @@ export function isVerifiedNonPermanentCleanup(
   return deleteStatus >= 200 && deleteStatus < 300 && rereadStatus === 404;
 }
 
-async function restoreClaim(
-  profileDirectory: string,
-  target: string,
-  claimed: string
-): Promise<void> {
-  try {
-    if (!(await exists(claimed))) return;
-    if (!(await exists(target))) {
-      await rename(claimed, target);
-    } else {
-      await rename(claimed, join(
-        profileDirectory,
-        `restart-pending.recovery.${randomUUID()}.json`
-      ));
-    }
-    await syncDirectory(profileDirectory);
-  } catch {
-    // The claim remains recoverable at its existing 0600 path if restoration cannot finish.
+export function classifyNonPermanentCleanup(input: {
+  readonly preReadStatus: number;
+  readonly deleteStatus?: number;
+  readonly rereadStatus?: number;
+}): {
+  readonly status: 'passed' | 'failed';
+  readonly reasonCode:
+    | 'CONDITIONAL_NONPERMANENT_CLEANUP_PASSED'
+    | 'CLEANUP_TARGET_ALREADY_MISSING'
+    | 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED';
+} {
+  if (input.preReadStatus === 404) {
+    return { status: 'failed', reasonCode: 'CLEANUP_TARGET_ALREADY_MISSING' };
   }
+  if (
+    input.preReadStatus === 200
+    && input.deleteStatus !== undefined
+    && input.rereadStatus !== undefined
+    && isVerifiedNonPermanentCleanup(input.deleteStatus, input.rereadStatus)
+  ) {
+    return {
+      status: 'passed',
+      reasonCode: 'CONDITIONAL_NONPERMANENT_CLEANUP_PASSED'
+    };
+  }
+  return { status: 'failed', reasonCode: 'CONDITIONAL_NONPERMANENT_CLEANUP_FAILED' };
 }
 
-async function claimCurrent(
-  profileDirectory: string,
-  expected: RestartPending
-): Promise<{ readonly target: string; readonly claimed: string }> {
-  const target = join(profileDirectory, 'restart-pending.json');
-  const claimed = join(profileDirectory, `restart-pending.claimed.${randomUUID()}.tmp`);
+async function restoreRecoveryAsTarget(directory: string): Promise<void> {
+  await restoreNamedRecoveryAsTarget(directory, RESTART_FILE, RESTART_RECOVERY_FILE);
+}
+
+async function consumeRestartPendingLocked(
+  directory: string,
+  expected: RestartPending,
+  syncAfterTargetUnlink: (directory: string) => Promise<void>
+): Promise<void> {
+  await restoreRecoveryAsTarget(directory);
+  const target = join(directory, RESTART_FILE);
+  const recovery = join(directory, RESTART_RECOVERY_FILE);
+  const expectedBytes = `${JSON.stringify(expected)}\n`;
+  if (await readRegularFileNoFollow(target) !== expectedBytes) {
+    throw new Error('pending mismatch');
+  }
+  await atomicWriteExclusive(
+    directory,
+    RESTART_RECOVERY_FILE,
+    JSON.stringify(expected),
+    true
+  );
   try {
-    await rename(target, claimed);
-    await syncDirectory(profileDirectory);
-    const actual = restartPendingSchema.parse(
-      JSON.parse(await readFile(claimed, 'utf8')) as unknown
-    );
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('mismatch');
-    return { target, claimed };
+    await unlink(target);
+    await syncAfterTargetUnlink(directory);
   } catch (error) {
-    await restoreClaim(profileDirectory, target, claimed);
+    try {
+      const targetBytes = await readIfPresent(target);
+      if (targetBytes === undefined) {
+        await rename(recovery, target);
+      } else if (targetBytes === expectedBytes) {
+        await unlink(recovery);
+      } else {
+        throw new Error('target changed');
+      }
+      await syncDirectory(directory);
+    } catch {
+      // The safe loader also recognizes the fixed recovery locator.
+    }
     throw error;
+  }
+  try {
+    await unlink(recovery);
+    // Removing the recovery locator is the consumption commit point. A failed
+    // post-unlink fsync can only resurrect an already-completed locator.
+    await syncDirectory(directory);
+  } catch {
+    // Cleanup-passed profile evidence is authoritative; a stale recovery record
+    // is safe to rediscover and consume again.
   }
 }
 
@@ -381,41 +746,19 @@ export async function consumeRestartPending(
     readonly testOnlySyncAfterClaimUnlink?: (directory: string) => Promise<void>;
   } = {}
 ): Promise<void> {
+  let parsedExpected: RestartPending;
+  try {
+    parsedExpected = restartPendingSchema.parse(expected);
+  } catch {
+    throw new Error('RESTART_PENDING_NOT_CURRENT');
+  }
   try {
     const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
-    await withPendingLock(canonicalDirectory, async () => {
-      const { target, claimed } = await claimCurrent(canonicalDirectory, expected);
-      const recovery = join(
-        canonicalDirectory,
-        `restart-pending.recovery.${randomUUID()}.json`
-      );
-      try {
-        await link(claimed, recovery);
-        await syncDirectory(canonicalDirectory);
-        await unlink(claimed);
-        await (options.testOnlySyncAfterClaimUnlink ?? syncDirectory)(canonicalDirectory);
-      } catch (error) {
-        try {
-          const source = await exists(claimed) ? claimed : recovery;
-          let restored = false;
-          if (!(await exists(target)) && await exists(source)) {
-            await rename(source, target);
-            restored = true;
-          }
-          if (restored && await exists(recovery)) await unlink(recovery);
-          await syncDirectory(canonicalDirectory);
-        } catch {
-          // Claimed/recovery bytes remain in the guarded store for manual recovery.
-        }
-        throw error;
-      }
-      try {
-        await unlink(recovery);
-        await syncDirectory(canonicalDirectory);
-      } catch {
-        // The active restart record is consumed; an ignored recovery link may remain.
-      }
-    });
+    await withPendingLock(canonicalDirectory, () => consumeRestartPendingLocked(
+      canonicalDirectory,
+      parsedExpected,
+      options.testOnlySyncAfterClaimUnlink ?? syncDirectory
+    ));
   } catch {
     throw new Error('RESTART_PENDING_NOT_CURRENT');
   }
@@ -427,36 +770,39 @@ export async function promoteRestartPendingToCleanup(
   cleanup: { readonly status: 'unverified' | 'failed'; readonly reasonCode: string },
   options: {
     /** @internal deterministic fault injection for post-commit cleanup tests. */
-    readonly testOnlyRemoveClaimAfterCleanupCommit?: (claimed: string) => Promise<void>;
+    readonly testOnlyRemoveClaimAfterCleanupCommit?: (target: string) => Promise<void>;
   } = {}
 ): Promise<void> {
+  let parsedExpected: RestartPending;
   let cleanupRecord: CleanupPending;
   try {
-    cleanupRecord = buildCleanupPending(expected, cleanup);
+    parsedExpected = restartPendingSchema.parse(expected);
+    cleanupRecord = buildCleanupPending(parsedExpected, cleanup);
   } catch {
     throw new Error('RESTART_PENDING_NOT_CURRENT');
   }
   try {
     const canonicalDirectory = await resolvePendingDirectory(profileDirectory, false);
     await withPendingLock(canonicalDirectory, async () => {
-      const { target, claimed } = await claimCurrent(canonicalDirectory, expected);
-      try {
-        await atomicWriteExclusive(
-          canonicalDirectory,
-          cleanupFileName(cleanupRecord.runId),
-          JSON.stringify(cleanupRecord),
-          true
+      await restoreRecoveryAsTarget(canonicalDirectory);
+      if (
+        await readRegularFileNoFollow(join(canonicalDirectory, RESTART_FILE))
+        !== `${JSON.stringify(parsedExpected)}\n`
+      ) {
+        throw new Error('pending mismatch');
+      }
+      await atomicWriteExclusive(
+        canonicalDirectory,
+        cleanupFileName(cleanupRecord.runId),
+        JSON.stringify(cleanupRecord),
+        true
+      );
+      if (options.testOnlyRemoveClaimAfterCleanupCommit !== undefined) {
+        await options.testOnlyRemoveClaimAfterCleanupCommit(
+          join(canonicalDirectory, RESTART_FILE)
         );
-      } catch (error) {
-        await restoreClaim(canonicalDirectory, target, claimed);
-        throw error;
       }
-      try {
-        await (options.testOnlyRemoveClaimAfterCleanupCommit ?? unlink)(claimed);
-        await syncDirectory(canonicalDirectory);
-      } catch {
-        // Cleanup is now the sole active record; the ignored claim preserves a recovery copy.
-      }
+      await consumeRestartPendingLocked(canonicalDirectory, parsedExpected, syncDirectory);
     });
   } catch {
     throw new Error('RESTART_PENDING_NOT_CURRENT');

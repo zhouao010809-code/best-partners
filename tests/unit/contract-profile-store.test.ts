@@ -22,6 +22,7 @@ import {
   computeFormalWriteGate,
   loadCurrentContractProfile,
   loadCurrentContractProfileState,
+  recoverContractProfileActivation,
   renderContractProfileMarkdown,
   writeContractProfile,
   type ContractProfileInput
@@ -403,6 +404,89 @@ describe('contract profile store', () => {
     expect(await readdir(directory)).toContain('activation-pending.json');
     await expect(loadCurrentContractProfileState(directory, profile)).resolves.toBeUndefined();
     await expect(loadCurrentContractProfileState(directory, previous)).resolves.toBeUndefined();
+  });
+
+  it('reconciles an indeterminate pointer commit on retry without overwriting the activated revision', async () => {
+    const directory = await storeDirectory();
+    const previous = buildContractProfile(profileInput({
+      checkedAt: '2026-08-31T00:00:00.000Z'
+    }));
+    const previousState = await writeContractProfile(directory, previous);
+    const next = buildContractProfile(profileInput({
+      safeDelete: false,
+      checkedAt: '2026-08-31T01:00:00.000Z'
+    }));
+    await expect(writeContractProfile(directory, next, {
+      expectedRevision: previousState.revision,
+      testOnlySyncAfterPointerCommit: async () => {
+        throw new Error('injected post-rename sync failure');
+      }
+    })).rejects.toThrowError('CONTRACT_PROFILE_WRITE_FAILED');
+
+    await expect(writeContractProfile(directory, next, {
+      expectedRevision: previousState.revision
+    })).rejects.toThrowError('CONTRACT_PROFILE_CONFLICT');
+    const recovered = await loadCurrentContractProfileState(directory, next);
+    expect(recovered?.revision).toBe(computeContractProfileRevision(next));
+    expect(await readdir(directory)).not.toContain('activation-pending.json');
+  });
+
+  it('offers an explicit fail-closed recovery entrypoint before a restart baseline load', async () => {
+    const directory = await storeDirectory();
+    const previous = buildContractProfile(profileInput({
+      checkedAt: '2026-08-31T00:00:00.000Z'
+    }));
+    const previousState = await writeContractProfile(directory, previous);
+    const next = buildContractProfile(profileInput({
+      safeDelete: false,
+      checkedAt: '2026-08-31T01:00:00.000Z'
+    }));
+    await expect(writeContractProfile(directory, next, {
+      expectedRevision: previousState.revision,
+      testOnlySyncAfterPointerCommit: async () => {
+        throw new Error('injected post-rename sync failure');
+      }
+    })).rejects.toThrowError('CONTRACT_PROFILE_WRITE_FAILED');
+    await expect(loadCurrentContractProfileState(directory, next)).resolves.toBeUndefined();
+
+    await expect(recoverContractProfileActivation(directory)).resolves.toBeUndefined();
+    await expect(loadCurrentContractProfileState(directory, next))
+      .resolves.toMatchObject({ profile: next });
+  });
+
+  it('finishes a staged revocation before exposing an older passing pointer', async () => {
+    const directory = await storeDirectory();
+    const passed = buildContractProfile(profileInput());
+    const passedState = await writeContractProfile(directory, passed);
+    const revokedAt = '2026-08-31T01:00:00.000Z';
+    const revoked = buildContractProfile(profileInput({
+      checkedAt: revokedAt,
+      safeRead: false,
+      evidence: [
+        ...passed.evidence,
+        {
+          operation: 'safeRead',
+          status: 'failed',
+          timestamp: revokedAt,
+          reasonCode: 'READ_FIDELITY_REVOKED',
+          primitive: 'RAW_REREAD'
+        }
+      ]
+    }));
+    expect(revoked.formalWriteGate).toBe('blocked');
+    await expect(writeContractProfile(directory, revoked, {
+      expectedRevision: passedState.revision,
+      testOnlyBeforePointerCommit: async () => {
+        throw new Error('injected pre-pointer failure');
+      }
+    })).rejects.toThrowError('CONTRACT_PROFILE_WRITE_FAILED');
+    await expect(loadCurrentContractProfileState(directory, passed)).resolves.toBeUndefined();
+
+    await expect(writeContractProfile(directory, revoked, {
+      expectedRevision: passedState.revision
+    })).rejects.toThrowError('CONTRACT_PROFILE_CONFLICT');
+    await expect(loadCurrentContractProfileState(directory, revoked))
+      .resolves.toMatchObject({ profile: revoked });
   });
 
   it('does not report failure after commit when store-lock cleanup fails', async () => {

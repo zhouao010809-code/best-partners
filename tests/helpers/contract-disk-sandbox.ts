@@ -7,6 +7,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
   realpathSync,
   renameSync,
   unlinkSync,
@@ -32,6 +33,7 @@ function assertRegularSingleLink(path: string): void {
 }
 
 export type ContractDiskSandbox = {
+  ensureFile(vaultPath: string, bytes: Uint8Array): Promise<'created' | 'existing'>;
   createFile(vaultPath: string, bytes: Uint8Array): Promise<void>;
   overwriteFile(vaultPath: string, bytes: Uint8Array): Promise<void>;
   renameFile(sourceVaultPath: string, destinationVaultPath: string): Promise<void>;
@@ -41,11 +43,26 @@ export type ContractDiskSandbox = {
 export function createContractDiskSandbox(input: {
   readonly canonicalTestVaultRoot: string;
   readonly runId: string;
+  /** @internal deterministic durability-failure injection. */
+  readonly testOnlySyncDirectory?: () => void;
 }): ContractDiskSandbox {
   if (typeof constants.O_NOFOLLOW !== 'number' || constants.O_NOFOLLOW === 0) {
     throw new Error('CONTRACT_DISK_NOFOLLOW_UNAVAILABLE');
   }
   const root = input.canonicalTestVaultRoot;
+
+  function syncCurrentDirectory(): void {
+    if (input.testOnlySyncDirectory !== undefined) {
+      input.testOnlySyncDirectory();
+      return;
+    }
+    const descriptor = openSync('.', constants.O_RDONLY);
+    try {
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+  }
 
   function navigateParent(vaultPath: string): { parentSegments: string[]; fileName: string } {
     const logical = assertSandboxVaultPath(vaultPath, input.runId);
@@ -62,6 +79,7 @@ export function createContractDiskSandbox(input: {
         mkdirSync(segment, { mode: 0o700 });
         const created = lstatSync(segment);
         if (created.isSymbolicLink() || !created.isDirectory()) throw new Error('unsafe');
+        syncCurrentDirectory();
       }
       process.chdir(segment);
       if (!containedBy(root, realpathSync('.'))) throw new Error('unsafe');
@@ -104,7 +122,45 @@ export function createContractDiskSandbox(input: {
     }
   }
 
+  function assertExactFinal(fileName: string, bytes: Uint8Array): void {
+    const before = lstatSync(fileName);
+    if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1) {
+      throw new Error('unsafe');
+    }
+    const descriptor = openSync(fileName, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const opened = fstatSync(descriptor);
+      if (
+        !opened.isFile()
+        || opened.nlink !== 1
+        || opened.dev !== before.dev
+        || opened.ino !== before.ino
+      ) {
+        throw new Error('unsafe');
+      }
+      if (!readFileSync(descriptor).equals(Buffer.from(bytes))) throw new Error('unsafe');
+    } finally {
+      closeSync(descriptor);
+    }
+  }
+
   return {
+    async ensureFile(vaultPath, bytes) {
+      let outcome: 'created' | 'existing' = 'existing';
+      guarded(() => {
+        const { fileName } = navigateParent(vaultPath);
+        try {
+          assertExactFinal(fileName, bytes);
+        } catch (error) {
+          if (!missing(error)) throw error;
+          writeFinal(fileName, bytes, true);
+          outcome = 'created';
+          syncCurrentDirectory();
+        }
+      });
+      return outcome;
+    },
+
     async createFile(vaultPath, bytes) {
       guarded(() => {
         const { fileName } = navigateParent(vaultPath);
@@ -115,6 +171,7 @@ export function createContractDiskSandbox(input: {
           if (!missing(error)) throw error;
         }
         writeFinal(fileName, bytes, true);
+        syncCurrentDirectory();
       });
     },
 
@@ -149,6 +206,7 @@ export function createContractDiskSandbox(input: {
         }
         renameSync(sourceName, destinationName);
         assertRegularSingleLink(destinationName);
+        syncCurrentDirectory();
       });
     },
 
@@ -157,6 +215,7 @@ export function createContractDiskSandbox(input: {
         const { fileName } = navigateParent(vaultPath);
         assertRegularSingleLink(fileName);
         unlinkSync(fileName);
+        syncCurrentDirectory();
       });
     }
   };

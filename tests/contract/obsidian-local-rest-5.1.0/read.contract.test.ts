@@ -9,8 +9,12 @@ import {
   requireContractEnvironment
 } from '../../helpers/contract-runtime.js';
 import {
+  loadProbeProfileBaseline,
+  persistProbeProfile
+} from '../../helpers/probe-profile-persistence.js';
+import {
   buildContractProfile,
-  writeContractProfile
+  computeContractProfileKey
 } from '../../../src/server/vault/contract-profile-store.js';
 
 describe('Local REST 5.1 read contract', () => {
@@ -30,6 +34,9 @@ describe('Local REST 5.1 read contract', () => {
     const fingerprint = await gateway.fingerprint();
     const openApi = await gateway.readOpenApi();
     const openApiSha256 = createHash('sha256').update(openApi, 'utf8').digest('hex');
+    const profileDirectory = join(canonicalRoots.appDataRoot, 'contract-profiles');
+    const profileKey = computeContractProfileKey({ ...fingerprint, openApiSha256 });
+    const profileBaseline = await loadProbeProfileBaseline(profileDirectory, profileKey);
     const expectedOpenApiSha256 = process.env.OBSIDIAN_EXPECTED_OPENAPI_SHA256;
     const compatible = fingerprint.pluginId === 'obsidian-local-rest-api'
       && fingerprint.pluginVersion.split('.')[0] === '5'
@@ -70,8 +77,9 @@ describe('Local REST 5.1 read contract', () => {
       }
     }
 
-    await writeContractProfile(
-      join(canonicalRoots.appDataRoot, 'contract-profiles'),
+    await persistProbeProfile(
+      profileDirectory,
+      profileBaseline,
       buildContractProfile({
         ...fingerprint,
         openApiSha256,

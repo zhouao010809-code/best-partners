@@ -113,4 +113,39 @@ describe('contract disk sandbox', () => {
     await sandbox.deleteFile(destination);
     await expect(access(join(current.root, ...destination.split('/')))).rejects.toBeDefined();
   });
+
+  it('idempotently ensures only an exact regular file for WAL-backed restart recovery', async () => {
+    const current = await fixture();
+    const roots = contractSandboxRoots(RUN_ID);
+    const path = `${roots.library}/restart.md`;
+    const sandbox = createContractDiskSandbox({ canonicalTestVaultRoot: current.root, runId: RUN_ID });
+
+    await expect(sandbox.ensureFile(path, new TextEncoder().encode('expected')))
+      .resolves.toBe('created');
+    await expect(sandbox.ensureFile(path, new TextEncoder().encode('expected')))
+      .resolves.toBe('existing');
+    await expect(sandbox.ensureFile(path, new TextEncoder().encode('different')))
+      .rejects.toThrowError('CONTRACT_DISK_PATH_UNSAFE');
+    await expect(readFile(join(current.root, ...path.split('/')), 'utf8'))
+      .resolves.toBe('expected');
+  });
+
+  it('reports directory durability failure after create without losing the WAL-addressable file', async () => {
+    const current = await fixture();
+    const path = `${contractSandboxRoots(RUN_ID).library}/restart.md`;
+    let syncCount = 0;
+    const sandbox = createContractDiskSandbox({
+      canonicalTestVaultRoot: current.root,
+      runId: RUN_ID,
+      testOnlySyncDirectory: () => {
+        syncCount += 1;
+        if (syncCount >= 5) throw new Error('injected directory sync failure');
+      }
+    });
+
+    await expect(sandbox.ensureFile(path, new TextEncoder().encode('expected')))
+      .rejects.toThrowError('CONTRACT_DISK_PATH_UNSAFE');
+    await expect(readFile(join(current.root, ...path.split('/')), 'utf8'))
+      .resolves.toBe('expected');
+  });
 });

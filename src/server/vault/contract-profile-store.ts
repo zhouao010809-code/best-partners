@@ -488,6 +488,46 @@ async function activationMarkerExists(directory: string): Promise<boolean> {
   }
 }
 
+async function reconcileActivationMarker(directory: string): Promise<void> {
+  if (!(await activationMarkerExists(directory))) return;
+  const marker = activationMarkerSchema.parse(
+    JSON.parse(await readRegularFileNoFollow(join(directory, ACTIVATION_MARKER_FILE))) as unknown
+  );
+  if (marker.checksumSha256 !== marker.revision) throw new Error('indeterminate activation');
+  const profileFile = profileFileName(marker.profileKey, marker.revision);
+  const reportFile = reportFileName(marker.profileKey, marker.revision);
+  const envelope = storedEnvelopeSchema.parse(
+    JSON.parse(await readRegularFileNoFollow(join(directory, profileFile))) as unknown
+  );
+  if (
+    envelope.profileKey !== marker.profileKey
+    || envelope.revision !== marker.revision
+    || envelope.checksumSha256 !== marker.checksumSha256
+    || envelope.profile.profileKey !== marker.profileKey
+    || computeContractProfileRevision(envelope.profile) !== marker.revision
+    || computeContractProfileKey(envelope.profile) !== marker.profileKey
+    || envelope.profile.formalWriteGate !== computeFormalWriteGate(envelope.profile)
+  ) {
+    throw new Error('indeterminate activation');
+  }
+  const report = await readRegularFileNoFollow(join(directory, reportFile));
+  if (report !== `${renderContractProfileMarkdown(envelope.profile)}\n`) {
+    throw new Error('indeterminate activation');
+  }
+  const pointer = currentPointerSchema.parse({
+    schemaVersion: CONTRACT_PROFILE_SCHEMA_VERSION,
+    profileKey: marker.profileKey,
+    revision: marker.revision,
+    checksumSha256: marker.checksumSha256,
+    profileFile,
+    reportFile
+  });
+  // The marker names the only transaction allowed to finish. Replaying its
+  // pointer before removing the marker cannot expose an older passing profile.
+  await atomicWritePointer(directory, pointer, syncDirectory);
+  await removeActivationMarker(directory);
+}
+
 async function withStoreLock<T>(
   directory: string,
   operation: () => Promise<T>,
@@ -546,6 +586,21 @@ async function withStoreLock<T>(
   return value as T;
 }
 
+export async function recoverContractProfileActivation(directory: string): Promise<void> {
+  let canonicalDirectory: string;
+  try {
+    canonicalDirectory = await resolveStoreDirectory(directory, false);
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return;
+    throw new Error('CONTRACT_PROFILE_WRITE_FAILED');
+  }
+  try {
+    await withStoreLock(canonicalDirectory, () => reconcileActivationMarker(canonicalDirectory));
+  } catch {
+    throw new Error('CONTRACT_PROFILE_WRITE_FAILED');
+  }
+}
+
 function parseStoredProfile(profile: StoredContractProfile): StoredContractProfile {
   try {
     const parsed = contractProfileSchema.parse(profile);
@@ -563,7 +618,6 @@ function parseStoredProfile(profile: StoredContractProfile): StoredContractProfi
 
 async function currentRevisionForCas(directory: string): Promise<string | null> {
   try {
-    if (await activationMarkerExists(directory)) throw new Error('indeterminate activation');
     const pointer = currentPointerSchema.parse(
       JSON.parse(await readRegularFileNoFollow(join(directory, 'current.json'))) as unknown
     );
@@ -581,6 +635,8 @@ export async function writeContractProfile(
     readonly expectedRevision?: string | null;
     /** @internal deterministic fault injection for commit-point tests. */
     readonly testOnlySyncAfterPointerCommit?: (directory: string) => Promise<void>;
+    /** @internal deterministic staged-activation recovery test. */
+    readonly testOnlyBeforePointerCommit?: () => Promise<void>;
     /** @internal deterministic fault injection for post-commit lock cleanup tests. */
     readonly testOnlyStoreLockCleanupAfterCommit?: () => Promise<void>;
   } = {}
@@ -595,6 +651,7 @@ export async function writeContractProfile(
 
   try {
     return await withStoreLock(canonicalDirectory, async () => {
+      await reconcileActivationMarker(canonicalDirectory);
       if (Object.prototype.hasOwnProperty.call(options, 'expectedRevision')) {
         const currentRevision = await currentRevisionForCas(canonicalDirectory);
         if (currentRevision !== options.expectedRevision) {
@@ -625,6 +682,7 @@ export async function writeContractProfile(
       await writeImmutable(join(canonicalDirectory, reportFile), renderContractProfileMarkdown(parsed));
       await syncDirectory(canonicalDirectory);
       await writeActivationMarker(canonicalDirectory, pointer);
+      await options.testOnlyBeforePointerCommit?.();
       await atomicWritePointer(
         canonicalDirectory,
         pointer,
@@ -639,21 +697,23 @@ export async function writeContractProfile(
   }
 }
 
-async function loadStateByKey(
+async function loadState(
   directory: string,
-  expectedKey: string
+  expectedKey?: string
 ): Promise<ContractProfileState | undefined> {
   try {
     const canonicalDirectory = await resolveStoreDirectory(directory, false);
     if (await activationMarkerExists(canonicalDirectory)) return undefined;
-    const parsedExpectedKey = sha256Schema.parse(expectedKey);
+    const parsedExpectedKey = expectedKey === undefined
+      ? undefined
+      : sha256Schema.parse(expectedKey);
     const pointer = currentPointerSchema.parse(
       JSON.parse(await readRegularFileNoFollow(join(canonicalDirectory, 'current.json'))) as unknown
     );
     const expectedProfileFile = profileFileName(pointer.profileKey, pointer.revision);
     const expectedReportFile = reportFileName(pointer.profileKey, pointer.revision);
     if (
-      pointer.profileKey !== parsedExpectedKey
+      (parsedExpectedKey !== undefined && pointer.profileKey !== parsedExpectedKey)
       || pointer.profileFile !== expectedProfileFile
       || pointer.reportFile !== expectedReportFile
       || pointer.checksumSha256 !== pointer.revision
@@ -666,12 +726,12 @@ async function loadStateByKey(
       )) as unknown
     );
     if (
-      envelope.profileKey !== parsedExpectedKey
+      envelope.profileKey !== pointer.profileKey
       || envelope.revision !== pointer.revision
       || envelope.checksumSha256 !== pointer.checksumSha256
-      || envelope.profile.profileKey !== parsedExpectedKey
+      || envelope.profile.profileKey !== pointer.profileKey
       || computeContractProfileRevision(envelope.profile) !== pointer.revision
-      || computeContractProfileKey(envelope.profile) !== parsedExpectedKey
+      || computeContractProfileKey(envelope.profile) !== pointer.profileKey
       || envelope.profile.formalWriteGate !== computeFormalWriteGate(envelope.profile)
     ) {
       return undefined;
@@ -695,7 +755,13 @@ export async function loadContractProfileStateByKey(
   directory: string,
   expectedKey: string
 ): Promise<ContractProfileState | undefined> {
-  return loadStateByKey(directory, expectedKey);
+  return loadState(directory, expectedKey);
+}
+
+export async function loadAnyCurrentContractProfileState(
+  directory: string
+): Promise<ContractProfileState | undefined> {
+  return loadState(directory);
 }
 
 export async function loadCurrentContractProfile(

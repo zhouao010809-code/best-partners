@@ -1,31 +1,51 @@
-import type { RestartPending } from './restart-pending.js';
+import type {
+  PreparedRestartPending,
+  PreparingRestartPending,
+  RestartPending
+} from './restart-pending.js';
+
+export type RestartObservation = {
+  readonly rawSha256: string;
+  readonly upstreamVersion: string;
+};
+
+export function selectRestartPreparation(
+  active: RestartPending | undefined,
+  fresh: PreparingRestartPending
+): PreparingRestartPending {
+  if (active === undefined) return fresh;
+  if (
+    active.phase === 'preparing'
+    && active.profileKey === fresh.profileKey
+    && active.root === fresh.root
+    && active.noteId === fresh.noteId
+    && active.rawSha256 === fresh.rawSha256
+  ) {
+    return active;
+  }
+  throw new Error('RESTART_PENDING_ALREADY_ACTIVE');
+}
+
+export async function confirmPreparedRestartBlocked(input: {
+  readonly blockProfile: () => Promise<unknown>;
+  readonly announce: () => void;
+}): Promise<void> {
+  await input.blockProfile();
+  input.announce();
+}
 
 export async function runRestartPrepareFlow(input: {
-  readonly prepareObservedRecord: () => Promise<RestartPending>;
-  readonly updateProfile: () => Promise<unknown>;
-  readonly writePending: (pending: RestartPending) => Promise<unknown>;
-  readonly writeCleanup: (
-    pending: RestartPending,
-    cleanup: { readonly status: 'unverified'; readonly reasonCode: 'MANUAL_CLEANUP_REQUIRED' }
-  ) => Promise<unknown>;
-}): Promise<RestartPending> {
-  let pending: RestartPending | undefined;
-  try {
-    pending = await input.prepareObservedRecord();
-    await input.updateProfile();
-    await input.writePending(pending);
-    return pending;
-  } catch (error) {
-    if (pending !== undefined) {
-      try {
-        await input.writeCleanup(pending, {
-          status: 'unverified',
-          reasonCode: 'MANUAL_CLEANUP_REQUIRED'
-        });
-      } catch {
-        throw new Error('RESTART_PREPARE_ORPHAN_RECORD_FAILED');
-      }
-    }
-    throw error;
-  }
+  readonly preparing: PreparingRestartPending;
+  readonly blockProfile: () => Promise<unknown>;
+  readonly writePreparing: (pending: PreparingRestartPending) => Promise<unknown>;
+  readonly mutateAndObserve: () => Promise<RestartObservation>;
+  readonly markPrepared: (
+    pending: PreparingRestartPending,
+    observation: RestartObservation
+  ) => Promise<PreparedRestartPending>;
+}): Promise<PreparedRestartPending> {
+  await input.blockProfile();
+  await input.writePreparing(input.preparing);
+  const observation = await input.mutateAndObserve();
+  return input.markPrepared(input.preparing, observation);
 }

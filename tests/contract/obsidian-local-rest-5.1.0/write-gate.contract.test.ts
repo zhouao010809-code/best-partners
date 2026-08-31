@@ -19,10 +19,12 @@ import {
   type CapabilityResult
 } from '../../helpers/write-probe-profile.js';
 import {
+  loadProbeProfileBaseline,
+  persistProbeProfile
+} from '../../helpers/probe-profile-persistence.js';
+import {
   computeContractProfileKey,
-  loadContractProfileByKey,
-  loadContractProfileStateByKey,
-  writeContractProfile
+  loadContractProfileStateByKey
 } from '../../../src/server/vault/contract-profile-store.js';
 
 function sha256(bytes: Uint8Array): string {
@@ -64,11 +66,13 @@ describe('Local REST 5.1 guarded write capability probe', () => {
       || fingerprint.pluginVersion.split('.')[0] !== '5'
       ? 'PLUGIN_CONTRACT_INCOMPATIBLE'
       : 'OPENAPI_FINGERPRINT_MISMATCH';
-    const checkedAt = new Date().toISOString();
     const profileDirectory = join(canonicalRoots.appDataRoot, 'contract-profiles');
     const profileKey = computeContractProfileKey({ ...fingerprint, openApiSha256 });
+    const profileBaseline = await loadProbeProfileBaseline(profileDirectory, profileKey);
+    const checkedAt = new Date().toISOString();
     const priorReadProfile = compatible
-      ? await loadContractProfileByKey(profileDirectory, profileKey)
+      && profileBaseline?.profile.profileKey === profileKey
+      ? profileBaseline.profile
       : undefined;
     const results: CapabilityResult[] = [];
 
@@ -90,7 +94,7 @@ describe('Local REST 5.1 guarded write capability probe', () => {
         openApiSha256,
         checkedAt,
         results,
-        persist: (profile) => writeContractProfile(profileDirectory, profile)
+        persist: (profile) => persistProbeProfile(profileDirectory, profileBaseline, profile)
       });
       return;
     }
@@ -369,7 +373,7 @@ describe('Local REST 5.1 guarded write capability probe', () => {
       checkedAt,
       ...(priorReadProfile === undefined ? {} : { priorReadProfile }),
       results,
-      persist: (value) => writeContractProfile(profileDirectory, value)
+      persist: (value) => persistProbeProfile(profileDirectory, profileBaseline, value)
     });
     const state = await loadContractProfileStateByKey(profileDirectory, profile.profileKey);
     expect(state).toBeDefined();
