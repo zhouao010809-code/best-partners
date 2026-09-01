@@ -242,6 +242,13 @@ describe('Phase 1 read pages', () => {
     expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
     expect(screen.getByTestId('metric-partial')).toHaveTextContent('1');
     expect(screen.getByTestId('metric-knowledge')).toHaveTextContent('1');
+    const deck = screen.getByRole('region', { name: '待提炼材料牌堆' });
+    expect(within(deck).getByRole('button', {
+      name: '待提炼，微信，未提炼'
+    })).toBeVisible();
+    expect(within(deck).queryByRole('button', {
+      name: '部分，网页，部分入库'
+    })).not.toBeInTheDocument();
     expect(browserReadConsoleApi.listMaterials).toHaveBeenCalledWith(
       { limit: 200 },
       expect.any(AbortSignal)

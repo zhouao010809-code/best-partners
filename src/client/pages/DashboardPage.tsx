@@ -132,15 +132,17 @@ function recentKnowledge(records: readonly KnowledgeItem[]): readonly KnowledgeI
 }
 
 function deckCards(materials: readonly MaterialItem[]): readonly MaterialDeckCard[] {
-  return materials.flatMap((record): MaterialDeckCard[] => record.knowledgeStatus === '已入库' ? [] : [{
-    key: record.path,
-    path: record.path,
-    title: record.title,
-    sourcePlatform: record.sourcePlatform,
-    ...(record.collectedAt === undefined ? {} : { collectedAt: record.collectedAt }),
-    knowledgeStatus: record.knowledgeStatus,
-    nextAction: record.knowledgeStatus === '未提炼' ? 'start' : 'resume'
-  }]);
+  return materials.flatMap((record): MaterialDeckCard[] => (
+    record.knowledgeStatus !== '未提炼' ? [] : [{
+      key: record.path,
+      path: record.path,
+      title: record.title,
+      sourcePlatform: record.sourcePlatform,
+      ...(record.collectedAt === undefined ? {} : { collectedAt: record.collectedAt }),
+      knowledgeStatus: record.knowledgeStatus,
+      nextAction: 'start'
+    }]
+  ));
 }
 
 function DashboardMetrics({ snapshot }: { readonly snapshot: DashboardSnapshot }) {

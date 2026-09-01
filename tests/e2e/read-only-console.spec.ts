@@ -119,7 +119,9 @@ for (const viewport of [
     await expect(page.getByTestId('metric-partial').locator('strong')).toHaveText('1');
     await expect(page.getByTestId('metric-knowledge').locator('strong')).toHaveText('4');
     await expect(page.getByTestId('metric-upgradeable').locator('strong')).toHaveText('2');
-    await expect(page.locator('[data-material-card-trigger]')).toHaveCount(3);
+    const deck = page.getByRole('region', { name: '待提炼材料牌堆' });
+    await expect(deck.locator('[data-material-card-trigger]')).toHaveCount(2);
+    await expect(deck.getByRole('button', { name: /部分入库：证据链/u })).toHaveCount(0);
 
     await expectNoRootOverflow(page);
   });
@@ -145,7 +147,7 @@ test('opens the dashboard deck by keyboard and restores the exact trigger on Esc
   await page.setViewportSize({ width: 1280, height: 900 });
   await openPage(page, '/');
   const triggers = page.locator('[data-material-card-trigger]');
-  await expect(triggers).toHaveCount(3);
+  await expect(triggers).toHaveCount(2);
 
   await triggers.first().focus();
   await page.keyboard.press('ArrowRight');
