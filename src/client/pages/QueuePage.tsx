@@ -8,6 +8,7 @@ import {
 } from '../components/MaterialFilters.js';
 import { PageState } from '../components/PageState.js';
 import {
+  indexCanServe,
   isCancelled,
   isIsoCalendarDate,
   stableFailure,
@@ -72,6 +73,8 @@ function validatePage(
 
 export function QueuePage() {
   const runtime = useConsoleRuntime();
+  const readUnavailable = runtime.health.status === 'failed'
+    || ('data' in runtime.health && runtime.health.data !== undefined && !indexCanServe(runtime.health.data));
   const [draft, setDraft] = useState<MaterialFilterDraft>(EMPTY_FILTERS);
   const [applied, setApplied] = useState<MaterialQuery>({ limit: PAGE_LIMIT });
   const [applyRevision, setApplyRevision] = useState(0);
@@ -137,6 +140,7 @@ export function QueuePage() {
   }, [runtime.api]);
 
   useEffect(() => {
+    if (readUnavailable) return;
     paginationFocusIntentRef.current = undefined;
     generationRef.current += 1;
     const generation = generationRef.current;
@@ -151,7 +155,7 @@ export function QueuePage() {
     setResource(prior === undefined ? { status: 'loading' } : { status: 'refreshing', data: prior });
     void requestPage(applied, undefined, false, generation, controller);
     return () => controller.abort();
-  }, [applied, applyRevision, requestPage, runtime.dataRevision]);
+  }, [applied, applyRevision, readUnavailable, requestPage, runtime.dataRevision]);
 
   useEffect(() => {
     const intent = paginationFocusIntentRef.current;
@@ -201,9 +205,11 @@ export function QueuePage() {
     <section className="instrument-panel workspace-panel live-list-page" aria-labelledby="queue-results-title">
       <MaterialFilters draft={draft} onChange={setDraft} onSubmit={applyFilters} />
       {localError !== undefined && <PageState state={{ status: 'validation-error', message: localError }} />}
-      {resource.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取待处理材料' }} />}
-      {resource.status === 'refreshing' && <PageState state={{ status: 'refreshing', message: '正在更新材料结果，旧结果仍可查看' }} />}
-      {resource.status === 'failed' && <PageState state={resource.state} />}
+      {runtime.health.status === 'failed' ? <PageState state={runtime.health.state} /> : <>
+        {resource.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取待处理材料' }} />}
+        {resource.status === 'refreshing' && <PageState state={{ status: 'refreshing', message: '正在更新材料结果，旧结果仍可查看' }} />}
+        {resource.status === 'failed' && <PageState state={resource.state} />}
+      </>}
 
       <header className="results-heading">
         <div><p>READ-ONLY QUEUE</p><h2 id="queue-results-title" ref={resultsHeadingRef} tabIndex={-1}>材料结果</h2></div>

@@ -2,7 +2,7 @@ import type { SchemaIssue } from '../../shared/domain/records.js';
 import { createHash } from 'node:crypto';
 import { parseKnowledgeNote } from '../rules/knowledge-schema.js';
 import { parseLibraryNote } from '../rules/library-schema.js';
-import type { VaultGateway, VersionedBytes } from '../vault/VaultGateway.js';
+import type { ReadVaultGateway, VersionedBytes } from '../vault/VaultGateway.js';
 import { sha256Bytes } from '../vault/raw-bytes.js';
 import { canonicalJson, type IndexedFile, type IndexRepository } from './index-repository.js';
 
@@ -85,12 +85,12 @@ export class SearchIndexer {
   private committedManifestSha256: string | undefined;
   private activeRefreshGeneration: number | undefined;
   private nextRefreshGeneration = 0;
-  private readonly gateway: VaultGateway;
+  private readonly gateway: ReadVaultGateway;
   private readonly repository: IndexRepository;
   private readonly maxRawReadsPerPoll: number;
 
   constructor(input: {
-    gateway: VaultGateway;
+    gateway: ReadVaultGateway;
     repository: IndexRepository;
     maxRawReadsPerPoll: number;
   }) {

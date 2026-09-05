@@ -4,6 +4,7 @@ import { sha256Bytes } from '../vault/raw-bytes.js';
 import { FrontmatterError, parseFrontmatter } from './frontmatter.js';
 import { normalizeWikiLinkList } from './wikilinks.js';
 import { isIsoCalendarDate } from '../../shared/domain/iso-date.js';
+import { knowledgeRecordSchema } from '../../shared/api/schemas.js';
 
 export const USAGE_STATUSES = ['AI总结', '已优化', '定论', '过时'] as const;
 export const KNOWLEDGE_TYPES = [
@@ -120,5 +121,10 @@ export function parseKnowledgeNote(
     sourceMaterials: normalizeWikiLinkList(validated.data.来源资料)
   };
 
+  const projection = knowledgeRecordSchema.safeParse(record);
+  if (!projection.success) {
+    const field = projection.error.issues[0]?.path.join('.');
+    return invalidResult(bytes, path, 'INVALID_FIELD', '知识字段超出可展示范围，请检查该笔记的元数据。', field, parsed.bodyBytes);
+  }
   return { record, issues: [], bodyBytes: parsed.bodyBytes };
 }

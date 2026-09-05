@@ -151,16 +151,15 @@ export const indexJobSchema = z.object({
 
 export const healthSnapshotSchema = z.object({
   status: z.enum(['ready', 'recovery-only']),
-  plugin: z.discriminatedUnion('status', [
+  vaultSource: z.discriminatedUnion('status', [
     z.object({
-      status: z.literal('connected'),
-      pluginId: z.string().min(1).max(128).regex(/^[a-z0-9._-]+$/iu),
-      pluginVersion: z.string().min(1).max(64).regex(/^[a-z0-9.+_-]+$/iu),
-      obsidianVersion: z.string().min(1).max(64).regex(/^[a-z0-9.+_-]+$/iu)
+      status: z.literal('ready'),
+      adapter: z.enum(['filesystem', 'local-rest']),
+      displayName: z.string().min(1).max(128).regex(/^[^/\\\u0000-\u001f\u007f]+$/u)
     }).strict(),
     z.object({
       status: z.literal('unavailable'),
-      reason: z.literal('PLUGIN_UNAVAILABLE')
+      reason: z.enum(['VAULT_UNAVAILABLE', 'VAULT_RULES_MISSING'])
     }).strict()
   ]),
   index: z.discriminatedUnion('status', [
@@ -209,7 +208,8 @@ export const healthSnapshotSchema = z.object({
   writeGate: z.object({
     status: z.enum(['blocked', 'enabled']),
     missing: z.array(z.string().max(128)),
-    fingerprintMatches: z.boolean()
+    fingerprintMatches: z.boolean(),
+    reasonCode: z.literal('RULE_BUNDLE_UNAPPROVED').optional()
   }).strict(),
   schemaIssues: z.discriminatedUnion('status', [
     z.object({

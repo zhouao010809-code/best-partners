@@ -12,6 +12,7 @@ import { PageState } from '../components/PageState.js';
 import type { UsageStatus } from '../../shared/domain/records.js';
 import {
   isCancelled,
+  indexCanServe,
   stableFailure,
   trimOrUndefined,
   validationState,
@@ -90,6 +91,8 @@ function validatePage(
 
 export function KnowledgePage() {
   const runtime = useConsoleRuntime();
+  const readUnavailable = runtime.health.status === 'failed'
+    || ('data' in runtime.health && runtime.health.data !== undefined && !indexCanServe(runtime.health.data));
   const [draft, setDraft] = useState<KnowledgeFilterDraft>(EMPTY_FILTERS);
   const [applied, setApplied] = useState<KnowledgeQuery>({ limit: PAGE_LIMIT });
   const [applyRevision, setApplyRevision] = useState(0);
@@ -179,6 +182,7 @@ export function KnowledgePage() {
   }, [closeDetail, runtime.api]);
 
   useEffect(() => {
+    if (readUnavailable) return;
     paginationFocusIntentRef.current = undefined;
     generationRef.current += 1;
     const generation = generationRef.current;
@@ -193,7 +197,7 @@ export function KnowledgePage() {
     setResource(prior === undefined ? { status: 'loading' } : { status: 'refreshing', data: prior });
     void requestPage(applied, undefined, false, generation, controller);
     return () => controller.abort();
-  }, [applied, applyRevision, requestPage, runtime.dataRevision]);
+  }, [applied, applyRevision, readUnavailable, requestPage, runtime.dataRevision]);
 
   useEffect(() => {
     const intent = paginationFocusIntentRef.current;
@@ -320,9 +324,11 @@ export function KnowledgePage() {
           <button className="primary-filter-button" type="submit"><Filter aria-hidden="true" />应用筛选</button>
         </form>
         <p className="search-disclosure">仅搜索标题与 YAML 召回字段</p>
-        {resource.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取知识索引' }} />}
-        {resource.status === 'refreshing' && <PageState state={{ status: 'refreshing', message: '正在更新知识结果，旧结果仍可查看' }} />}
-        {resource.status === 'failed' && <PageState state={resource.state} />}
+        {runtime.health.status === 'failed' ? <PageState state={runtime.health.state} /> : <>
+          {resource.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取知识索引' }} />}
+          {resource.status === 'refreshing' && <PageState state={{ status: 'refreshing', message: '正在更新知识结果，旧结果仍可查看' }} />}
+          {resource.status === 'failed' && <PageState state={resource.state} />}
+        </>}
         <header className="results-heading">
           <div><p>INDEXED KNOWLEDGE</p><h2 id="knowledge-results-title" ref={resultsHeadingRef} tabIndex={-1}>知识结果</h2></div>
           <span>已加载 {data?.items.length ?? 0} 条</span>

@@ -7,8 +7,9 @@ import {
   type ContractFingerprint,
   type StoredContractProfile
 } from '../vault/contract-profile-store.js';
-import type { VaultGateway } from '../vault/VaultGateway.js';
+import type { VaultGateway, VaultReadiness } from '../vault/VaultGateway.js';
 import type { IndexState } from '../index/index-state.js';
+import { DenyRuleCompatibilityGate } from '../rules/rule-compatibility-gate.js';
 
 const REQUIRED_CAPABILITIES = [
   'safeRead',
@@ -25,16 +26,21 @@ type RequiredCapability = typeof REQUIRED_CAPABILITIES[number];
 
 export interface HealthSnapshot {
   readonly status: 'ready' | 'recovery-only';
-  readonly plugin: HealthPluginSnapshot;
+  readonly vaultSource: HealthVaultSourceSnapshot;
   readonly index: HealthIndexSnapshot;
   readonly model: HealthModelSnapshot;
   readonly writeGate: {
     readonly status: 'blocked' | 'enabled';
     readonly missing: readonly string[];
     readonly fingerprintMatches: boolean;
+    readonly reasonCode?: 'RULE_BUNDLE_UNAPPROVED';
   };
   readonly schemaIssues: HealthSchemaIssuesSnapshot;
 }
+
+export type HealthVaultSourceSnapshot =
+  | { readonly status: 'ready'; readonly adapter: 'filesystem' | 'local-rest'; readonly displayName: string }
+  | { readonly status: 'unavailable'; readonly reason: 'VAULT_UNAVAILABLE' | 'VAULT_RULES_MISSING' };
 
 export type HealthPluginSnapshot =
   | {
@@ -295,7 +301,9 @@ export function createHealthService(input: {
       const schemaIssuesUnavailable = index.status !== 'ready' && index.status !== 'stale';
       return {
         status: blocker === undefined ? 'ready' : 'recovery-only',
-        plugin: connection.plugin,
+        vaultSource: connection.plugin.status === 'connected'
+          ? { status: 'ready', adapter: 'local-rest', displayName: 'Obsidian Local REST' }
+          : { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' },
         index,
         model: modelSnapshot(input.model),
         writeGate: {
@@ -305,6 +313,73 @@ export function createHealthService(input: {
         },
         schemaIssues: schemaIssuesSnapshot({
           unavailable: schemaIssuesUnavailable,
+          ...(input.schemaIssues === undefined ? {} : { source: input.schemaIssues })
+        })
+      };
+    }
+  };
+}
+
+export function createDirectReadHealthService(input: {
+  readonly stateKernel: StateKernel;
+  readonly indexState: HealthIndexStateSource;
+  readonly displayName: string;
+  readonly probeReadiness?: (signal: AbortSignal) => Promise<VaultReadiness>;
+  readonly model?: { readonly baseUrl: string; readonly name?: string };
+  readonly schemaIssues?: { count(): number };
+}): HealthService {
+  const gate = new DenyRuleCompatibilityGate();
+  const displayName = /^[^/\\\u0000-\u001f\u007f]{1,128}$/u.test(input.displayName)
+    ? input.displayName
+    : '本地大脑';
+  const unavailable: VaultReadiness = { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' };
+  let cached: { at: number; value: VaultReadiness } | undefined;
+  let pending: Promise<VaultReadiness> | undefined;
+  function probe(): Promise<VaultReadiness> {
+    if (pending !== undefined) return pending;
+    if (cached !== undefined && Date.now() - cached.at < 1_000) return Promise.resolve(cached.value);
+    const controller = new AbortController();
+    let settled = false;
+    let complete!: (value: VaultReadiness) => void;
+    pending = new Promise((resolve) => { complete = resolve; });
+    const finish = (value: VaultReadiness) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cached = { at: Date.now(), value };
+      complete(value);
+    };
+    const timer = setTimeout(() => { controller.abort(); finish(unavailable); }, 2_000);
+    timer.unref();
+    void Promise.resolve().then(() => input.probeReadiness?.(controller.signal) ?? unavailable).then(
+      (value) => finish(value?.status === 'ready' ? { status: 'ready' }
+        : value?.status === 'unavailable' && value.reason === 'VAULT_RULES_MISSING'
+          ? { status: 'unavailable', reason: 'VAULT_RULES_MISSING' } : unavailable),
+      () => finish(unavailable)
+    ).finally(() => { pending = undefined; });
+    return pending;
+  }
+  return {
+    async getSnapshot() {
+      const [blocker, readiness] = await Promise.all([databaseBlocker(input.stateKernel), probe()]);
+      const index: HealthIndexSnapshot = blocker === undefined
+        ? publicIndexSnapshot(input.indexState.snapshot())
+        : { status: 'unavailable', reason: 'RECOVERY_ONLY' };
+      return {
+        status: blocker === undefined && readiness.status === 'ready' ? 'ready' : 'recovery-only',
+        vaultSource: readiness.status === 'ready'
+          ? { status: 'ready', adapter: 'filesystem', displayName }
+          : readiness,
+        index,
+        model: modelSnapshot(input.model),
+        writeGate: {
+          ...gate.status(),
+          missing: ['ruleApproval', 'nativeWritePrimitives', 'capabilityProfile', 'recoveryKernel',
+            ...(blocker === undefined ? [] : [blocker])],
+          fingerprintMatches: false
+        },
+        schemaIssues: schemaIssuesSnapshot({
+          unavailable: index.status !== 'ready' && index.status !== 'stale',
           ...(input.schemaIssues === undefined ? {} : { source: input.schemaIssues })
         })
       };

@@ -125,11 +125,10 @@ function createReadServer(input: {
     healthService: {
       getSnapshot: async () => ({
         status: 'ready',
-        plugin: {
-          status: 'connected',
-          pluginId: 'obsidian-local-rest-api',
-          pluginVersion: '5.1.0',
-          obsidianVersion: '1.13.7'
+        vaultSource: {
+          status: 'ready',
+          adapter: 'local-rest',
+          displayName: 'Obsidian Local REST'
         },
         writeGate: {
           status: 'blocked',

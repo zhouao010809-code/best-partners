@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import {
   Bot,
   Database,
@@ -26,7 +27,11 @@ const KNOWN_MISSING: Readonly<Record<string, string>> = {
   safeDelete: '安全删除能力未验证',
   rereadVerified: '回读验证能力未验证',
   externalMutationObservation: '外部变更观测能力未验证',
-  restartPersistence: '重启持久化能力未验证'
+  restartPersistence: '重启持久化能力未验证',
+  ruleApproval: '大脑规则写入许可未批准',
+  nativeWritePrimitives: '本地安全写入尚未启用',
+  capabilityProfile: '本地写入能力尚未验证',
+  recoveryKernel: '恢复功能尚未启用'
 };
 
 type Diagnostic = {
@@ -38,14 +43,17 @@ type Diagnostic = {
   readonly testId?: string;
 };
 
-function pluginDiagnostic(snapshot: HealthSnapshot): Diagnostic {
-  if (snapshot.plugin.status === 'connected') {
+function vaultDiagnostic(snapshot: HealthSnapshot): Diagnostic {
+  if (snapshot.vaultSource.status === 'ready') {
     return {
-      title: 'Obsidian Local REST', state: '已连接', tone: 'green', icon: ServerCog,
-      details: [`Obsidian ${snapshot.plugin.obsidianVersion}`, `插件 ${snapshot.plugin.pluginVersion}`]
+      title: '大脑文件夹', state: '已连接', tone: 'green', icon: ServerCog,
+      details: [`${snapshot.vaultSource.adapter === 'filesystem' ? '本地文件' : 'Local REST'} · ${snapshot.vaultSource.displayName}`]
     };
   }
-  return { title: 'Obsidian Local REST', state: '不可用', tone: 'red', icon: ServerCog, details: ['本地插件未提供可用连接'] };
+  return {
+    title: '大脑文件夹', state: '不可用', tone: 'red', icon: ServerCog,
+    details: [snapshot.vaultSource.reason === 'VAULT_RULES_MISSING' ? '缺少大脑规则，请选择完整的大脑文件夹' : '无法读取大脑文件夹，请重新选择']
+  };
 }
 
 function indexDiagnostic(snapshot: HealthSnapshot): Diagnostic {
@@ -76,7 +84,8 @@ function writeGateDiagnostic(snapshot: HealthSnapshot): Diagnostic {
     ...new Set(known),
     ...(unknownCount === 0 ? [] : [`其他阻断项 ${unknownCount} 项`]),
     snapshot.writeGate.fingerprintMatches ? '契约指纹一致' : '契约指纹不一致',
-    'Phase 1 始终只读'
+    ...(snapshot.writeGate.reasonCode === 'RULE_BUNDLE_UNAPPROVED' ? ['当前大脑规则尚未批准写入'] : []),
+    '当前阶段严格只读'
   ];
   return {
     title: '形式写入门',
@@ -98,26 +107,70 @@ function schemaDiagnostic(snapshot: HealthSnapshot): Diagnostic {
   return { title: '结构检查', state: '不可用', tone: 'silver', icon: Database, details: ['—'], testId: 'schema-issue-count' };
 }
 
-export function ConnectionsPage() {
+export function SettingsPage() {
   const runtime = useConsoleRuntime();
   const snapshot = dataFromResource(runtime.health);
+  const desktop = window.xiaozhaoDesktop;
+  const mountedRef = useRef(false);
+  const [choosing, setChoosing] = useState(false);
+  const [selectionMessage, setSelectionMessage] = useState('');
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const chooseVault = async (): Promise<void> => {
+    if (desktop === undefined || choosing) return;
+    setChoosing(true);
+    setSelectionMessage('');
+    try {
+      const result = await desktop.chooseVaultDirectory();
+      if (!mountedRef.current) return;
+      setSelectionMessage(result.selected
+        ? `已选择「${result.displayName ?? '大脑文件夹'}」，正在重新打开应用`
+        : '已取消，继续使用当前大脑文件夹');
+    } catch {
+      if (mountedRef.current) setSelectionMessage('未能更换大脑文件夹，请重试');
+    } finally {
+      if (mountedRef.current) setChoosing(false);
+    }
+  };
+
   const diagnostics = snapshot === undefined ? [] : [
-    pluginDiagnostic(snapshot),
+    vaultDiagnostic(snapshot),
     indexDiagnostic(snapshot),
     modelDiagnostic(snapshot),
     writeGateDiagnostic(snapshot),
     schemaDiagnostic(snapshot)
   ];
 
-  if (snapshot === undefined) {
-    if (runtime.health.status === 'failed') return <PageState state={runtime.health.state} />;
-    return <PageState state={{ status: runtime.health.status === 'loading' ? 'loading' : 'refreshing', message: '正在读取本地连接快照' }} />;
-  }
-
   return (
-    <div className="connections-stack">
+    <div className="settings-stack">
+      <section className="settings-actions" aria-label="应用设置">
+        <div className="settings-action">
+          <div>
+            <strong>大脑文件夹</strong>
+            {desktop === undefined && <small>请在桌面 App 中更换大脑文件夹</small>}
+          </div>
+          <button className="quiet-button" type="button" disabled={desktop === undefined || choosing} onClick={() => void chooseVault()}>
+            {choosing ? '正在选择…' : '更换大脑文件夹'}
+          </button>
+          {selectionMessage !== '' && <p className="settings-action__message" role="status">{selectionMessage}</p>}
+        </div>
+        <div className="settings-action">
+          <div><strong>DeepSeek</strong><small>DeepSeek 设置将在后续阶段启用</small></div>
+          <button className="quiet-button" type="button" disabled>配置 DeepSeek</button>
+        </div>
+      </section>
+      {runtime.health.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取本地连接快照' }} />}
       {runtime.health.status === 'refreshing' && <PageState state={{ status: 'refreshing', message: '正在刷新诊断，上一份快照仍可查看' }} />}
       {runtime.health.status === 'failed' && <PageState state={runtime.health.state} />}
+      {(runtime.health.status === 'failed' || runtime.health.status === 'refreshing') && (
+        <button className="quiet-button settings-retry" type="button" disabled={runtime.health.status === 'refreshing'} onClick={() => void runtime.refreshHealth()}>
+          {runtime.health.status === 'refreshing' ? '正在重新连接…' : '重新连接'}
+        </button>
+      )}
       <section className="diagnostic-grid" aria-label="系统连接诊断">
         {diagnostics.map(({ title, state, details, tone, icon: Icon, testId }) => (
           <article className={`diagnostic-row diagnostic-row--${tone}`} key={title}>

@@ -1,13 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { VaultGateway } from '../vault/VaultGateway.js';
+import type { ReadVaultGateway } from '../vault/VaultGateway.js';
 import { sha256Bytes } from '../vault/raw-bytes.js';
 
-export const RULE_BUNDLE_SOURCE_PATHS = [
-  '00大脑规则/00_大脑规范.md',
-  '00大脑规则/01_总路由规则.md',
-  '00大脑规则/03_知识库提炼与入库规则.md',
-  '00大脑规则/05_链接命名与治理规则.md'
-] as const;
+import { RULE_APPROVAL_SOURCE_PATHS } from '../../shared/domain/rule-approval.js';
+
+export const RULE_BUNDLE_SOURCE_PATHS = RULE_APPROVAL_SOURCE_PATHS;
 
 export type RuleBundle = {
   readonly fingerprint: string;
@@ -18,7 +15,7 @@ export type RuleBundle = {
   }>;
 };
 
-export async function loadRuleBundle(gateway: VaultGateway): Promise<RuleBundle> {
+export async function loadRuleBundle(gateway: ReadVaultGateway): Promise<RuleBundle> {
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const sources: Array<{ path: string; text: string; rawSha256: string }> = [];
 
@@ -43,12 +40,12 @@ export async function loadRuleBundle(gateway: VaultGateway): Promise<RuleBundle>
 export class RuleBundleGuard {
   private constructor(private readonly startupFingerprint: string) {}
 
-  static async start(gateway: VaultGateway): Promise<RuleBundleGuard> {
+  static async start(gateway: ReadVaultGateway): Promise<RuleBundleGuard> {
     const bundle = await loadRuleBundle(gateway);
     return new RuleBundleGuard(bundle.fingerprint);
   }
 
-  async check(gateway: VaultGateway): Promise<{
+  async check(gateway: ReadVaultGateway): Promise<{
     status: 'current' | 'stale';
     startupFingerprint: string;
     currentFingerprint: string;

@@ -18,7 +18,7 @@ const PORT = 4317;
 const FIXED_INSTANT = '2026-09-01T08:00:00.000Z';
 const FIXED_DATE = new Date(FIXED_INSTANT);
 const CURSOR_SECRET = new TextEncoder().encode('xiaozhao-e2e-cursor-secret-v1');
-const ROUTES = ['/', '/queue', '/knowledge', '/operations', '/connections'] as const;
+const ROUTES = ['/', '/queue', '/knowledge', '/operations', '/settings', '/connections'] as const;
 
 function materialNote(input: {
   readonly title: string;

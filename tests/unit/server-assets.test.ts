@@ -17,7 +17,11 @@ describe('server migration assets', () => {
     const published = (await readdir(resolve('src/server/db/migrations')))
       .filter((name) => /^\d{3}_[A-Za-z0-9_-]+\.sql$/.test(name));
     const plansRoot = resolve('docs/superpowers/plans');
-    const planFiles = (await readdir(plansRoot)).filter((name) => name.endsWith('.md'));
+    // Historical Local REST plans are superseded by the desktop roadmap.
+    const roadmap = await readFile(join(plansRoot, '2026-09-01-personal-desktop-v1-roadmap.md'), 'utf8');
+    const planFiles = [...roadmap.matchAll(/\]\(\.\/(2026-09-01-phase-\d-[^)]+\.md)\)/g)]
+      .map((match) => match[1]!);
+    expect(new Set(planFiles).size).toBe(7);
     const planned = (await Promise.all(
       planFiles.map((name) => readFile(join(plansRoot, name), 'utf8'))
     )).flatMap((contents) =>

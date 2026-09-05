@@ -79,7 +79,7 @@ describe('read-console shared schemas', () => {
   it('requires safe index versions even while health is building or failed', () => {
     const base = {
       status: 'ready',
-      plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
+      vaultSource: { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' },
       model: { status: 'unavailable', reason: 'CONFIG_UNAVAILABLE' },
       writeGate: { status: 'blocked', missing: [], fingerprintMatches: false },
       schemaIssues: { status: 'unavailable', count: 0, reason: 'INDEX_UNAVAILABLE' }

@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.server.json",
+  "compilerOptions": { "types": ["node", "electron"] },
+  "include": ["src/electron/**/*.ts", "src/shared/desktop/bridge.ts"]
+}

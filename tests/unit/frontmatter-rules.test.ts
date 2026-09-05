@@ -240,6 +240,7 @@ describe('rule bundle compatibility', () => {
     expect(RULE_BUNDLE_SOURCE_PATHS).toEqual([
       '00大脑规则/00_大脑规范.md',
       '00大脑规则/01_总路由规则.md',
+      '00大脑规则/02_图书馆入馆规则.md',
       '00大脑规则/03_知识库提炼与入库规则.md',
       '00大脑规则/05_链接命名与治理规则.md'
     ]);
@@ -262,5 +263,12 @@ describe('rule bundle compatibility', () => {
       candidateGenerationAvailable: false,
       writePlanningAvailable: false
     });
+  });
+
+  it.each(RULE_BUNDLE_SOURCE_PATHS)('changes the bundle fingerprint when %s changes', async (path) => {
+    const gateway = makeGateway();
+    const before = await loadRuleBundle(gateway);
+    gateway.set(path, 'changed rule bytes');
+    expect((await loadRuleBundle(gateway)).fingerprint).not.toBe(before.fingerprint);
   });
 });

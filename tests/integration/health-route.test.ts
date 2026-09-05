@@ -20,9 +20,9 @@ describe('GET /api/v1/health', () => {
     expect(response.json()).toEqual({
       data: {
         status: 'recovery-only',
-        plugin: {
+        vaultSource: {
           status: 'unavailable',
-          reason: 'PLUGIN_UNAVAILABLE'
+          reason: 'VAULT_UNAVAILABLE'
         },
         index: {
           status: 'unavailable',
@@ -63,7 +63,7 @@ describe('GET /api/v1/health', () => {
       healthService: {
         getSnapshot: async () => ({
           status,
-          plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
+          vaultSource: { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' },
           writeGate: {
             status: 'blocked',
             missing: ['database'],

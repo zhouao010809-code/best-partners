@@ -71,11 +71,10 @@ describe('GET /api/v1/health Connections contract', () => {
     expect(response.json()).toEqual({
       data: {
         status: 'ready',
-        plugin: {
-          status: 'connected',
-          pluginId: 'obsidian-local-rest-api',
-          pluginVersion: '5.1.0',
-          obsidianVersion: '1.13.7'
+        vaultSource: {
+          status: 'ready',
+          adapter: 'local-rest',
+          displayName: 'Obsidian Local REST'
         },
         index: {
           status: 'ready',
@@ -115,7 +114,7 @@ describe('GET /api/v1/health Connections contract', () => {
     expect(response.json()).toEqual({
       data: {
         status: 'recovery-only',
-        plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
+        vaultSource: { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' },
         index: { status: 'unavailable', reason: 'READ_API_UNAVAILABLE' },
         model: { status: 'unavailable', reason: 'CONFIG_UNAVAILABLE' },
         writeGate: {
@@ -165,7 +164,7 @@ describe('GET /api/v1/health Connections contract', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
-      data: { plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' } }
+      data: { vaultSource: { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' } }
     });
     expect(response.body).not.toContain(secret);
     expect(response.body).not.toContain('apiKey');

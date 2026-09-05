@@ -15,6 +15,7 @@ import type {
   ReadConsoleApi
 } from '../../src/client/api/client.js';
 import { AppShell } from '../../src/client/app/AppShell.js';
+import { AppRouter } from '../../src/client/app/router.js';
 import { useConsoleRuntime } from '../../src/client/app/ConsoleRuntime.js';
 import { PageState } from '../../src/client/components/PageState.js';
 
@@ -22,8 +23,8 @@ const MAIN_NAVIGATION_NAMES = [
   '大脑总览',
   '提炼队列',
   '知识库',
-  '操作记录',
-  '系统连接'
+  '操作与恢复',
+  '设置'
 ] as const;
 
 function setPath(path: string): void {
@@ -44,11 +45,10 @@ function failure<T>(
 function readyHealth(version = 7): HealthSnapshot {
   return {
     status: 'ready',
-    plugin: {
-      status: 'connected',
-      pluginId: 'local-rest-api',
-      pluginVersion: '5.1.0',
-      obsidianVersion: '1.9.12'
+    vaultSource: {
+      status: 'ready',
+      adapter: 'filesystem',
+      displayName: '我的大脑'
     },
     index: {
       status: 'ready',
@@ -143,7 +143,7 @@ describe('black-glass application shell', () => {
       '/queue',
       '/knowledge',
       '/operations',
-      '/connections'
+      '/settings'
     ]);
   });
 
@@ -157,7 +157,7 @@ describe('black-glass application shell', () => {
     );
     const connection = screen.getByRole('status', { name: '本地连接状态' });
     expect(await within(connection).findByText('已连接')).toBeVisible();
-    expect(connection).toHaveTextContent('Obsidian 1.9.12 · 插件 5.1.0');
+    expect(connection).toHaveTextContent('本地文件 · 我的大脑');
     expect(connection).not.toHaveTextContent('待检查');
     expect(connection).toHaveClass('connection-badge--connected');
     expect(connection.closest('a')).toBeNull();
@@ -167,8 +167,9 @@ describe('black-glass application shell', () => {
     ['/', '大脑总览'],
     ['/queue/', '提炼队列'],
     ['/knowledge/', '知识库'],
-    ['/operations/', '操作记录'],
-    ['/connections/', '系统连接']
+    ['/operations/', '操作与恢复'],
+    ['/settings/', '设置'],
+    ['/connections/', '设置']
   ])('normalizes the canonical page identity for %s', (path, heading) => {
     setPath(path);
     render(<App />);
@@ -615,6 +616,146 @@ describe('live console runtime', () => {
 
     expect(pollSignal?.aborted).toBe(true);
     expect(getIndexJob).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('passive desktop refresh', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const nonce = document.createElement('meta');
+    nonce.name = 'csp-nonce';
+    nonce.content = 'component-test-nonce';
+    document.head.append(nonce);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    document.querySelector('meta[name="csp-nonce"]')?.remove();
+  });
+
+  it('reloads visible dashboard data only after a newly published index version', async () => {
+    let version = 7;
+    const api = createApi({ getHealth: vi.fn(async () => ok(readyHealth(version))) });
+    render(<MemoryRouter><AppRouter api={api} /></MemoryRouter>);
+    await act(async () => {});
+    expect(api.listMaterials).toHaveBeenCalledTimes(1);
+
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(api.listMaterials).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('索引 v7 已就绪')).toBeVisible();
+
+    version = 8;
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(api.listMaterials).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+    expect(api.rebuildIndex).not.toHaveBeenCalled();
+  });
+
+  it('recovers from a transient backend failure without a focus event', async () => {
+    const api = createApi({ getHealth: vi.fn()
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockResolvedValueOnce(failure<HealthSnapshot>('disconnected', 'private backend path'))
+      .mockResolvedValue(ok(readyHealth(8))) });
+    renderShell(api);
+    await act(async () => {});
+
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(screen.getByLabelText('运行时快照')).toHaveTextContent('failed');
+    expect(document.body).not.toHaveTextContent('private backend path');
+
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+    expect(screen.getByTestId('revision')).toHaveTextContent('1');
+    expect(api.rebuildIndex).not.toHaveBeenCalled();
+  });
+
+  it('suspends passive reads while hidden and resumes after becoming visible', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    const api = createApi();
+    renderShell(api);
+    await act(async () => {});
+    await act(async () => vi.advanceTimersByTimeAsync(6_000));
+    expect(api.getHealth).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue('visible');
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(api.getHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not overlap passive health requests and aborts the pending read on unmount', async () => {
+    let pendingSignal: AbortSignal | undefined;
+    const api = createApi({ getHealth: vi.fn()
+      .mockResolvedValueOnce(ok(readyHealth(7)))
+      .mockImplementation((signal?: AbortSignal) => new Promise((resolve) => {
+        pendingSignal = signal;
+        signal?.addEventListener('abort', () => resolve({ ok: false, cancelled: true }), { once: true });
+      })) });
+    const view = renderShell(api);
+    await act(async () => {});
+    await act(async () => vi.advanceTimersByTimeAsync(9_000));
+    expect(api.getHealth).toHaveBeenCalledTimes(2);
+    expect(pendingSignal?.aborted).toBe(false);
+    view.unmount();
+    expect(pendingSignal?.aborted).toBe(true);
+    await act(async () => vi.advanceTimersByTimeAsync(6_000));
+    expect(api.getHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not republish an unchanged version after a successful focus rebuild', async () => {
+    const api = createApi();
+    renderShell(api);
+    await act(async () => {});
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(api.rebuildIndex).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('revision')).toHaveTextContent('0');
+  });
+
+  it.each([
+    ['/queue', 'listMaterials', '当前筛选范围内没有待处理材料'],
+    ['/knowledge', 'listKnowledge', '当前筛选范围内没有知识记录'],
+    ['/operations', 'listOperations', '当前尚无提炼/写入工作流操作']
+  ] as const)('recovers %s after an initial disconnect even when no new index version exists', async (path, method, emptyMessage) => {
+    let available = false;
+    const api = createApi({
+      getHealth: vi.fn(async () => available ? ok(readyHealth(7)) : failure<HealthSnapshot>('disconnected', 'offline')),
+      [method]: vi.fn(async () => available ? ok({ items: [] }) : failure('disconnected', 'offline'))
+    });
+    render(<MemoryRouter initialEntries={[path]}><AppRouter api={api} /></MemoryRouter>);
+    await act(async () => {});
+    expect(screen.getByText('无法连接本地服务。')).toBeVisible();
+
+    available = true;
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(screen.queryByText('无法连接本地服务。')).not.toBeInTheDocument();
+    expect(screen.getByText(emptyMessage)).toBeVisible();
+    expect(api[method]).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(api[method]).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['/queue', 'listMaterials', '当前筛选范围内没有待处理材料'],
+    ['/knowledge', 'listKnowledge', '当前筛选范围内没有知识记录'],
+    ['/operations', 'listOperations', '当前尚无提炼/写入工作流操作']
+  ] as const)('loads %s after the initial index finishes building', async (path, method, emptyMessage) => {
+    let building = true;
+    const api = createApi({
+      getHealth: vi.fn(async () => ok<HealthSnapshot>({
+        ...readyHealth(7),
+        ...(building ? { index: { status: 'building', version: 7, startedAt: '2026-09-01T00:00:00.000Z' } } : {})
+      })),
+      [method]: vi.fn(async () => building ? failure('busy', 'building') : ok({ items: [] }))
+    });
+    render(<MemoryRouter initialEntries={[path]}><AppRouter api={api} /></MemoryRouter>);
+    await act(async () => {});
+    expect(screen.queryByText(emptyMessage)).not.toBeInTheDocument();
+
+    building = false;
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(screen.getByText(emptyMessage)).toBeVisible();
+    expect(api[method]).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
+    expect(api[method]).toHaveBeenCalledTimes(2);
   });
 });
 

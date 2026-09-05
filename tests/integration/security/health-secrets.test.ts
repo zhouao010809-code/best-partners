@@ -63,7 +63,7 @@ describe('health secret containment', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       data: {
-        plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
+        vaultSource: { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' },
         index: {
           status: 'stale',
           version: 4,

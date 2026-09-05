@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createCsrfProtector } from './security/csrf.js';
 import { registerHtmlCsp } from './security/csp.js';
 import { isAllowedHost, isAllowedOrigin } from './security/origin-host.js';
+import type { HttpPolicy } from './security/loopback-policy.js';
 import { createSessionManager } from './security/session.js';
 import type { HealthService, HealthSnapshot } from './services/health-service.js';
 import type { IndexRepository } from './index/index-repository.js';
@@ -77,9 +78,9 @@ function errorStatusCode(error: unknown): number {
 
 const DEFAULT_HEALTH_SNAPSHOT: HealthSnapshot = {
   status: 'recovery-only',
-  plugin: {
+  vaultSource: {
     status: 'unavailable',
-    reason: 'PLUGIN_UNAVAILABLE'
+    reason: 'VAULT_UNAVAILABLE'
   },
   index: {
     status: 'unavailable',
@@ -118,6 +119,7 @@ export interface ReadApiDependencies {
 }
 
 export interface BuildServerOptions {
+  readonly httpPolicy?: HttpPolicy;
   readonly healthService?: HealthService;
   readonly operationIdFactory?: () => string;
   readonly readApi?: ReadApiDependencies;
@@ -188,7 +190,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     .send(safeError('NOT_FOUND', 'Resource not found', operationId())));
 
   app.addHook('onRequest', async (request, reply) => {
-    if (!isAllowedHost(request.headers.host)) {
+    if (!(options.httpPolicy?.isAllowedHost(request.headers.host) ?? isAllowedHost(request.headers.host))) {
       return reply.code(421).send(safeError(
         'MISDIRECTED_REQUEST',
         'Request authority rejected',
@@ -196,7 +198,9 @@ export function buildServer(options: BuildServerOptions = {}) {
       ));
     }
     const isMutation = MUTATION_METHODS.has(request.method);
-    if (!isAllowedOrigin(request.headers.origin, nodeEnv, isMutation)) {
+    const originRequired = request.method !== 'GET' && request.method !== 'HEAD';
+    if (!(options.httpPolicy?.isAllowedOrigin(request.headers.origin, originRequired)
+      ?? isAllowedOrigin(request.headers.origin, nodeEnv, originRequired))) {
       return reply.code(403).send(safeError('ORIGIN_FORBIDDEN', 'Origin rejected', operationId()));
     }
     if (!isMutation) {
@@ -233,8 +237,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
   if (indexJobs !== undefined || options.onClose !== undefined) {
     app.addHook('onClose', async () => {
-      await indexJobs?.close();
-      await options.onClose?.();
+      try { await indexJobs?.close(); } finally { await options.onClose?.(); }
     });
   }
   return app;

@@ -22,11 +22,10 @@ test('serves deterministic indexed APIs and completes a real rebuild job', async
   await expect(healthResponse.json()).resolves.toMatchObject({
     data: {
       status: 'ready',
-      plugin: {
-        status: 'connected',
-        pluginId: 'fake-local-rest-api',
-        pluginVersion: '5.1.0',
-        obsidianVersion: '1.8.10'
+      vaultSource: {
+        status: 'ready',
+        adapter: 'local-rest',
+        displayName: 'Obsidian Local REST'
       },
       index: { status: 'ready', version: 1, refreshedAt: '2026-09-01T08:00:00.000Z' },
       model: {
@@ -108,6 +107,8 @@ test('serves deterministic indexed APIs and completes a real rebuild job', async
 
 for (const viewport of [
   { width: 390, height: 844 },
+  { width: 720, height: 900 },
+  { width: 800, height: 900 },
   { width: 1280, height: 900 },
   { width: 1440, height: 1000 }
 ] as const) {
@@ -124,6 +125,27 @@ for (const viewport of [
     await expect(deck.getByRole('button', { name: /部分入库：证据链/u })).toHaveCount(0);
 
     await expectNoRootOverflow(page);
+    const sidebar = await page.locator('aside.sidebar').boundingBox();
+    const workspace = await page.locator('.workspace').boundingBox();
+    expect(sidebar).not.toBeNull();
+    expect(workspace).not.toBeNull();
+    expect(sidebar!.x).toBe(0);
+    expect(sidebar!.y).toBe(0);
+    expect(Math.abs(sidebar!.height - viewport.height)).toBeLessThanOrEqual(2);
+    expect(workspace!.x).toBeGreaterThanOrEqual(sidebar!.width);
+    if (viewport.width <= 800) {
+      expect(sidebar!.width).toBe(72);
+      const links = page.getByRole('navigation', { name: '主导航' }).getByRole('link');
+      const positions = await links.evaluateAll((items) => items.map((item) => ({
+        x: item.getBoundingClientRect().x,
+        y: item.getBoundingClientRect().y,
+        label: item.getAttribute('aria-label'),
+        title: item.getAttribute('title')
+      })));
+      expect(new Set(positions.map(({ x }) => x)).size).toBe(1);
+      expect(positions.every((item, index) => index === 0 || item.y > positions[index - 1]!.y)).toBe(true);
+      expect(positions.every(({ label, title }) => label !== null && label === title)).toBe(true);
+    }
   });
 }
 
@@ -133,7 +155,7 @@ test('keeps every secondary read page within the 390px viewport', async ({ page 
     { path: '/queue', readyText: '已加载 3 条' },
     { path: '/knowledge', readyText: '已加载 3 条' },
     { path: '/operations', readyText: '当前尚无提炼/写入工作流操作' },
-    { path: '/connections', readyText: '3 个结构问题' }
+    { path: '/settings', readyText: '3 个结构问题' }
   ] as const;
 
   for (const route of routes) {
@@ -259,12 +281,15 @@ test('keeps the deck usable under reduced motion', async ({ page }) => {
 test('renders safe connection diagnostics without leaking server secrets', async ({ page }) => {
   const consoleMessages: string[] = [];
   page.on('console', (message) => consoleMessages.push(message.text()));
-  await openPage(page, '/connections');
+  await openPage(page, '/settings');
 
   await expect(page.getByText('models.fixture.example')).toBeVisible();
   await expect(page.getByText('fixture-brain-model')).toBeVisible();
   await expect(page.getByText('3 个结构问题')).toBeVisible();
-  await expect(page.getByText('Phase 1 始终只读')).toBeVisible();
+  await expect(page.getByText('当前阶段严格只读')).toBeVisible();
+  await expect(page.getByRole('button', { name: '更换大脑文件夹' })).toBeDisabled();
+  await expect(page.getByText('请在桌面 App 中更换大脑文件夹')).toBeVisible();
+  await expect(page.getByText('DeepSeek 设置将在后续阶段启用')).toBeVisible();
 
   const dom = await page.locator('html').evaluate((element) => element.outerHTML);
   expect(dom).not.toContain(SERVER_SECRET);

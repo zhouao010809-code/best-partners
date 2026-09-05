@@ -1,7 +1,7 @@
 import { ArrowRight, Boxes, CheckCircle2 } from 'lucide-react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import type { ReadConsoleApi } from '../api/client.js';
-import { ConnectionsPage } from '../pages/ConnectionsPage.js';
+import { SettingsPage } from '../pages/SettingsPage.js';
 import { DashboardPage } from '../pages/DashboardPage.js';
 import { KnowledgePage } from '../pages/KnowledgePage.js';
 import { OperationsPage } from '../pages/OperationsPage.js';
@@ -53,7 +53,8 @@ export function AppRouter({ api }: AppRouterProps = {}) {
         <Route path="queue" element={<QueuePage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
         <Route path="operations" element={<OperationsPage />} />
-        <Route path="connections" element={<ConnectionsPage />} />
+        <Route path="settings" element={<SettingsPage />} />
+        <Route path="connections" element={<Navigate to="/settings" replace />} />
         <Route path="extractions/:id" element={<ExtractionPlaceholder />} />
         <Route path="write-plans/:id" element={<WritePlanPlaceholder />} />
         <Route path="not-found" element={<NotFoundPlaceholder />} />

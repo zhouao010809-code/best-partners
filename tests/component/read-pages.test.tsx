@@ -28,11 +28,10 @@ function ok<T>(value: T): ApiClientResult<T> {
 function readyHealth(version = 7): HealthSnapshot {
   return {
     status: 'ready',
-    plugin: {
-      status: 'connected',
-      pluginId: 'local-rest-api',
-      pluginVersion: '5.1.0',
-      obsidianVersion: '1.9.12'
+    vaultSource: {
+      status: 'ready',
+      adapter: 'filesystem',
+      displayName: '我的大脑'
     },
     index: {
       status: 'ready',
@@ -207,6 +206,7 @@ describe('Phase 1 read pages', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     document.body.removeAttribute('tabindex');
     document.head.querySelector('meta[name="csp-nonce"]')?.remove();
   });
@@ -824,7 +824,14 @@ describe('Phase 1 read pages', () => {
         path: recordV2.path, title: recordV2.title, markdown: '新版正文', internalKnowledgeLinks: [],
         versionMarker: { rawSha256: recordV2.rawSha256, upstreamVersion: 'v2' }
       }));
-    const api = createApi({ listKnowledge, getKnowledgeDetail });
+    const api = createApi({
+      listKnowledge,
+      getKnowledgeDetail,
+      getHealth: vi.fn()
+        .mockResolvedValueOnce(ok(readyHealth(7)))
+        .mockResolvedValueOnce(ok(readyHealth(7)))
+        .mockResolvedValue(ok(readyHealth(8)))
+    });
     renderRoute('/knowledge', api);
 
     await user.click(await screen.findByRole('button', { name: /查看 版本知识 详情/u }));
@@ -859,13 +866,57 @@ describe('Phase 1 read pages', () => {
     expect(screen.queryByText('SECRET_SERVER_MESSAGE')).not.toBeInTheDocument();
   });
 
+  it('offers app-only folder selection and the future DeepSeek setup from settings', async () => {
+    renderRoute('/settings');
+    expect(await screen.findByRole('button', { name: '更换大脑文件夹' })).toBeDisabled();
+    expect(screen.getByText('请在桌面 App 中更换大脑文件夹')).toBeVisible();
+    expect(screen.getByRole('button', { name: '配置 DeepSeek' })).toBeDisabled();
+    expect(screen.getByText('DeepSeek 设置将在后续阶段启用')).toBeVisible();
+  });
+
+  it('handles pending, cancelled, failed, and successful desktop folder selection', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<{ selected: boolean; displayName?: string }>();
+    const chooseVaultDirectory = vi.fn()
+      .mockImplementationOnce(() => pending.promise)
+      .mockRejectedValueOnce(new Error('/private/SECRET_FOLDER'))
+      .mockResolvedValueOnce({ selected: true, displayName: '新大脑' });
+    vi.stubGlobal('xiaozhaoDesktop', {
+      getAppVersion: vi.fn(async () => '0.1.0'),
+      chooseVaultDirectory
+    });
+    renderRoute('/settings');
+    await user.click(await screen.findByRole('button', { name: '更换大脑文件夹' }));
+    expect(screen.getByRole('button', { name: '正在选择…' })).toBeDisabled();
+    await act(async () => pending.resolve({ selected: false }));
+    expect(screen.getByText('已取消，继续使用当前大脑文件夹')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: '更换大脑文件夹' }));
+    expect(screen.getByText('未能更换大脑文件夹，请重试')).toBeVisible();
+    expect(document.body).not.toHaveTextContent('SECRET_FOLDER');
+    await user.click(screen.getByRole('button', { name: '更换大脑文件夹' }));
+    expect(screen.getByText('已选择「新大脑」，正在重新打开应用')).toBeVisible();
+    expect(chooseVaultDirectory).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries a failed health read from settings without navigating away', async () => {
+    const user = userEvent.setup();
+    const getHealth = vi.fn()
+      .mockResolvedValueOnce(failure<HealthSnapshot>('disconnected'))
+      .mockResolvedValueOnce(ok(readyHealth()));
+    renderRoute('/settings', createApi({ getHealth }));
+    await user.click(await screen.findByRole('button', { name: '重新连接' }));
+    expect(await screen.findByText('3 个结构问题')).toBeVisible();
+    expect(screen.getByRole('heading', { name: '设置', level: 1 })).toBeVisible();
+    expect(getHealth).toHaveBeenCalledTimes(2);
+  });
+
   it('renders connection diagnostics from the runtime snapshot without extra reads', async () => {
     renderRoute('/connections');
 
     expect(await screen.findByText('models.example')).toBeVisible();
     expect(screen.getByText('deepseek-v3')).toBeVisible();
     expect(screen.getByText('3 个结构问题')).toBeVisible();
-    expect(screen.getByText('Phase 1 始终只读')).toBeVisible();
+    expect(screen.getByText('当前阶段严格只读')).toBeVisible();
     expect(browserReadConsoleApi.listMaterials).not.toHaveBeenCalled();
     expect(browserReadConsoleApi.listKnowledge).not.toHaveBeenCalled();
     expect(browserReadConsoleApi.listOperations).not.toHaveBeenCalled();
@@ -875,7 +926,7 @@ describe('Phase 1 read pages', () => {
     const api = createApi({
       getHealth: vi.fn(async () => ok<HealthSnapshot>({
         ...readyHealth(),
-        plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
+        vaultSource: { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' },
         index: { status: 'unavailable', reason: 'READ_API_UNAVAILABLE' },
         model: { status: 'unavailable', reason: 'CONFIG_UNAVAILABLE' },
         writeGate: {
@@ -888,7 +939,7 @@ describe('Phase 1 read pages', () => {
     });
     renderRoute('/connections', api);
 
-    expect(await screen.findByText('插件不可用')).toBeVisible();
+    expect(await screen.findByText('大脑文件夹不可用')).toBeVisible();
     expect(screen.getByText('未配置写入开关')).toBeVisible();
     expect(screen.getByText('缺少契约画像')).toBeVisible();
     expect(screen.getByText('其他阻断项 1 项')).toBeVisible();
@@ -920,6 +971,24 @@ describe('Phase 1 read pages', () => {
     expect(screen.queryByText(/其他阻断项/u)).not.toBeInTheDocument();
   });
 
+  it('explains why direct filesystem mode still blocks formal writing', async () => {
+    const api = createApi({ getHealth: vi.fn(async () => ok<HealthSnapshot>({
+      ...readyHealth(),
+      writeGate: {
+        status: 'blocked',
+        missing: ['ruleApproval', 'nativeWritePrimitives', 'capabilityProfile', 'recoveryKernel'],
+        fingerprintMatches: false,
+        reasonCode: 'RULE_BUNDLE_UNAPPROVED'
+      }
+    })) });
+    renderRoute('/settings', api);
+    expect(await screen.findByText('本地安全写入尚未启用')).toBeVisible();
+    expect(screen.getByText('恢复功能尚未启用')).toBeVisible();
+    expect(screen.getByText('当前大脑规则尚未批准写入')).toBeVisible();
+    expect(screen.queryByText(/其他阻断项/u)).not.toBeInTheDocument();
+    expect(screen.getByText('当前阶段严格只读')).toBeVisible();
+  });
+
   it('reports an enabled write gate truthfully while keeping the Phase 1 interface read-only', async () => {
     const api = createApi({
       getHealth: vi.fn(async () => ok<HealthSnapshot>({
@@ -930,7 +999,7 @@ describe('Phase 1 read pages', () => {
     renderRoute('/connections', api);
 
     expect(await screen.findByText('写入门已通过')).toBeVisible();
-    expect(screen.getByText('Phase 1 始终只读')).toBeVisible();
+    expect(screen.getByText('当前阶段严格只读')).toBeVisible();
     expect(screen.queryByText('能力已验证但未启用')).not.toBeInTheDocument();
   });
 

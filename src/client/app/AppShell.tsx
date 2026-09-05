@@ -8,7 +8,7 @@ import {
   GitPullRequestArrow,
   LayoutDashboard,
   ListFilter,
-  RadioTower
+  Settings
 } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
@@ -25,12 +25,13 @@ const NAVIGATION = [
   { to: '/', label: '大脑总览', icon: LayoutDashboard, end: true },
   { to: '/queue', label: '提炼队列', icon: ListFilter, end: false },
   { to: '/knowledge', label: '知识库', icon: BookOpenText, end: false },
-  { to: '/operations', label: '操作记录', icon: GitPullRequestArrow, end: false },
-  { to: '/connections', label: '系统连接', icon: RadioTower, end: false }
+  { to: '/operations', label: '操作与恢复', icon: GitPullRequestArrow, end: false },
+  { to: '/settings', label: '设置', icon: Settings, end: false }
 ] as const;
 
 const ACTIVE_INDEX_JOB_STATUSES = new Set<IndexJob['status']>(['queued', 'running']);
 const POLL_INTERVAL_MS = 250;
+const HEALTH_POLL_INTERVAL_MS = 3_000;
 let focusCycleSequence = 0;
 
 function isCancelled<T>(
@@ -107,17 +108,17 @@ function connectionPresentation(resource: Resource<HealthSnapshot>): {
       detail: '本地服务无可用实时快照'
     };
   }
-  if (snapshot?.plugin.status === 'connected') {
+  if (snapshot?.vaultSource.status === 'ready') {
     return {
       className: 'connection-badge--connected',
       title: '已连接',
-      detail: `Obsidian ${snapshot.plugin.obsidianVersion} · 插件 ${snapshot.plugin.pluginVersion}`
+      detail: `${snapshot.vaultSource.adapter === 'filesystem' ? '本地文件' : 'Local REST'} · ${snapshot.vaultSource.displayName}`
     };
   }
   if (snapshot !== undefined) {
     return {
       className: 'connection-badge--unavailable',
-      title: '插件不可用',
+      title: '大脑文件夹不可用',
       detail: '本地服务已响应'
     };
   }
@@ -204,14 +205,15 @@ function pageIdentity(pathname: string): PageIdentity {
     case '/operations':
       return {
         eyebrow: 'SYSTEM / LEDGER',
-        title: '操作记录',
-        description: '查看可追溯的本地任务与安全结果。'
+        title: '操作与恢复',
+        description: '查看本地操作记录；恢复功能将在后续阶段启用。'
       };
     case '/connections':
+    case '/settings':
       return {
         eyebrow: 'SYSTEM / DIAGNOSTICS',
-        title: '系统连接',
-        description: '检查 Obsidian、索引、模型与写入门的实时状态。'
+        title: '设置',
+        description: '管理大脑文件夹，查看索引、模型与只读状态。'
       };
     default:
       return {
@@ -238,11 +240,23 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   const healthOwnerSequenceRef = useRef(0);
   const activeFocusOwnerRef = useRef<number | undefined>(undefined);
   const controllersRef = useRef(new Set<AbortController>());
+  const publishedIndexVersionRef = useRef<number | undefined>(undefined);
   const [health, setHealth] = useState<Resource<HealthSnapshot>>({ status: 'loading' });
   const [dataRevision, setDataRevision] = useState(0);
   const identity = pageIdentity(location.pathname);
 
   healthRef.current = health;
+
+  const publishHealth = useCallback((snapshot: HealthSnapshot): void => {
+    if (snapshot.index.status === 'ready' || snapshot.index.status === 'stale') {
+      const previousVersion = publishedIndexVersionRef.current;
+      publishedIndexVersionRef.current = snapshot.index.version;
+      if (previousVersion !== undefined && previousVersion !== snapshot.index.version) {
+        setDataRevision((revision) => revision + 1);
+      }
+    }
+    setHealth({ status: 'ready', data: snapshot });
+  }, []);
 
   const readHealth = useCallback((forceFresh = false): Promise<ApiClientResult<HealthSnapshot>> => {
     if (!forceFresh && healthRequestRef.current !== undefined) return healthRequestRef.current;
@@ -258,16 +272,16 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
     return request;
   }, [api]);
 
-  const refreshHealth = useCallback(async (): Promise<void> => {
+  const refreshHealth = useCallback(async (passive = false): Promise<void> => {
     if (activeFocusOwnerRef.current !== undefined) {
-      await readHealth();
+      if (!passive) await readHealth();
       return;
     }
 
     healthOwnerSequenceRef.current += 1;
     const refreshOwner = healthOwnerSequenceRef.current;
     const currentData = resourceData(healthRef.current);
-    setHealth(refreshingResource(currentData));
+    if (!passive) setHealth(refreshingResource(currentData));
     const request = readHealth();
     const result = await request;
     if (
@@ -278,11 +292,11 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
       || isCancelled(result)
     ) return;
     if (result.ok) {
-      setHealth({ status: 'ready', data: result.value });
+      publishHealth(result.value);
       return;
     }
     setHealth(failedResource(stableRuntimeFailure(result.state.status), currentData));
-  }, [readHealth]);
+  }, [publishHealth, readHealth]);
 
   const executeFocusCycle = useCallback(async (focusOwner: number): Promise<void> => {
     const ownsFocusState = (): boolean => (
@@ -303,7 +317,7 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
     const authoritative = authoritativeResult.value;
     setHealth({ status: 'refreshing', data: authoritative });
     if (authoritative.index.status === 'unavailable') {
-      setHealth({ status: 'ready', data: authoritative });
+      publishHealth(authoritative);
       return;
     }
 
@@ -358,15 +372,14 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
     }
 
     if (job.status === 'completed') {
-      setHealth({ status: 'ready', data: finalHealth.value });
-      setDataRevision((revision) => revision + 1);
+      publishHealth(finalHealth.value);
       return;
     }
     setHealth(failedResource(
       stableRuntimeFailure('operation-error'),
       finalHealth.value
     ));
-  }, [api, readHealth]);
+  }, [api, publishHealth, readHealth]);
 
   const runFocusCycle = useCallback((): Promise<void> => {
     if (focusCycleRef.current !== undefined) return focusCycleRef.current;
@@ -385,15 +398,18 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
 
   useEffect(() => {
     mountedRef.current = true;
+    const initialOwner = healthOwnerSequenceRef.current;
     const request = readHealth();
     void request.then((result) => {
       if (
         !mountedRef.current
+        || healthOwnerSequenceRef.current !== initialOwner
+        || activeFocusOwnerRef.current !== undefined
         || latestHealthRequestRef.current !== request
         || isCancelled(result)
       ) return;
       if (result.ok) {
-        setHealth({ status: 'ready', data: result.value });
+        publishHealth(result.value);
       } else {
         setHealth(failedResource(stableRuntimeFailure(result.state.status)));
       }
@@ -408,7 +424,24 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
       latestHealthRequestRef.current = undefined;
       focusCycleRef.current = undefined;
     };
-  }, [readHealth]);
+  }, [publishHealth, readHealth]);
+
+  useEffect(() => {
+    let disposed = false;
+    let timer: number;
+    const poll = async (): Promise<void> => {
+      try {
+        if (document.visibilityState !== 'hidden') await refreshHealth(true);
+      } finally {
+        if (!disposed) timer = window.setTimeout(() => void poll(), HEALTH_POLL_INTERVAL_MS);
+      }
+    };
+    timer = window.setTimeout(() => void poll(), HEALTH_POLL_INTERVAL_MS);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [refreshHealth]);
 
   useEffect(() => {
     const handleFocus = (): void => {
@@ -433,6 +466,7 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   }), [api, dataRevision, health, refreshHealth]);
   const connection = connectionPresentation(health);
   const indexStatus = indexPresentation(health);
+  const vaultSource = resourceData(health)?.vaultSource;
 
   return (
     <div className="app-frame">
@@ -456,6 +490,8 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
               key={to}
               to={to}
               end={end}
+              aria-label={label}
+              title={label}
               className={({ isActive }) => `nav-item${isActive ? ' nav-item--active' : ''}`}
             >
               <Icon aria-hidden="true" strokeWidth={1.65} />
@@ -481,7 +517,9 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
             <DatabaseZap aria-hidden="true" />
             <span>
               <small>ACTIVE VAULT</small>
-              <strong>我的大脑</strong>
+              <strong>{vaultSource?.status === 'ready'
+                ? vaultSource.displayName
+                : '未连接'}</strong>
             </span>
           </div>
         </div>

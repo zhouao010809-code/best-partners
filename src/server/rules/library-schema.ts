@@ -4,6 +4,7 @@ import { sha256Bytes } from '../vault/raw-bytes.js';
 import { FrontmatterError, parseFrontmatter } from './frontmatter.js';
 import { normalizeWikiLinkList } from './wikilinks.js';
 import { isIsoCalendarDate } from '../../shared/domain/iso-date.js';
+import { materialRecordSchema } from '../../shared/api/schemas.js';
 
 export const SOURCE_PLATFORMS = [
   'B站', 'YouTube', '抖音', '小红书', '公众号', '飞书', 'X推特',
@@ -110,5 +111,10 @@ export function parseLibraryNote(
     generatedKnowledge: normalizeWikiLinkList(validated.data.生成知识)
   };
 
+  const projection = materialRecordSchema.safeParse(record);
+  if (!projection.success) {
+    const field = projection.error.issues[0]?.path.join('.');
+    return invalidResult(bytes, path, 'INVALID_FIELD', '资料字段超出可展示范围，请检查该资料的元数据。', field, parsed.bodyBytes);
+  }
   return { record, issues: [], bodyBytes: parsed.bodyBytes };
 }

@@ -19,13 +19,23 @@ export type VaultCapabilityProfile = {
   readonly evidence: ReadonlyArray<string>;
 };
 
-export interface VaultGateway {
-  fingerprint(): Promise<Pick<VaultCapabilityProfile, 'pluginId' | 'pluginVersion' | 'obsidianVersion'>>;
+export interface ReadVaultGateway {
   listDirectory(path: string, signal?: AbortSignal): Promise<ReadonlyArray<string>>;
   readRaw(path: string, signal?: AbortSignal): Promise<VersionedBytes>;
+}
+
+export interface OpenableVaultGateway extends ReadVaultGateway {
+  openInObsidian(path: string, signal?: AbortSignal): Promise<void>;
+  probeReadiness?(signal?: AbortSignal): Promise<VaultReadiness>;
+}
+
+export type VaultReadiness =
+  | { readonly status: 'ready' }
+  | { readonly status: 'unavailable'; readonly reason: 'VAULT_UNAVAILABLE' | 'VAULT_RULES_MISSING' };
+
+export interface LocalRestContractGateway extends ReadVaultGateway {
+  fingerprint(): Promise<Pick<VaultCapabilityProfile, 'pluginId' | 'pluginVersion' | 'obsidianVersion'>>;
   readOpenApi(): Promise<string>;
 }
 
-export interface OpenableVaultGateway extends VaultGateway {
-  openInObsidian(path: string, signal?: AbortSignal): Promise<void>;
-}
+export type VaultGateway = LocalRestContractGateway;

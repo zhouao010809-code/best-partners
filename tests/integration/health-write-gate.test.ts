@@ -24,8 +24,9 @@ const FINGERPRINT = {
   obsidianVersion: '1.13.7'
 } as const;
 const CONNECTED_PLUGIN = {
-  status: 'connected' as const,
-  ...FINGERPRINT
+  status: 'ready' as const,
+  adapter: 'local-rest' as const,
+  displayName: 'Obsidian Local REST'
 };
 const UNAVAILABLE_MODEL = {
   status: 'unavailable' as const,
@@ -185,7 +186,7 @@ describe('GET /api/v1/health write gate', () => {
     })).resolves.toEqual({
       data: {
         status: 'ready',
-        plugin: CONNECTED_PLUGIN,
+        vaultSource: CONNECTED_PLUGIN,
         index: READY_INDEX,
         model: UNAVAILABLE_MODEL,
         writeGate: {
@@ -263,7 +264,7 @@ describe('GET /api/v1/health write gate', () => {
     document = `${OPEN_API}paths: {}\n`;
     await expect(service.getSnapshot()).resolves.toEqual({
       status: 'ready',
-      plugin: CONNECTED_PLUGIN,
+      vaultSource: CONNECTED_PLUGIN,
       index: READY_INDEX,
       model: UNAVAILABLE_MODEL,
       writeGate: { status: 'blocked', missing: ['profile'], fingerprintMatches: false },
@@ -286,7 +287,7 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'ready',
-      plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
+      vaultSource: { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' },
       index: READY_INDEX,
       model: UNAVAILABLE_MODEL,
       writeGate: { status: 'blocked', missing: ['profile'], fingerprintMatches: false },
@@ -313,7 +314,7 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'recovery-only',
-      plugin: CONNECTED_PLUGIN,
+      vaultSource: CONNECTED_PLUGIN,
       index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
       model: UNAVAILABLE_MODEL,
       writeGate: { status: 'blocked', missing: ['database'], fingerprintMatches: true },
@@ -337,7 +338,7 @@ describe('GET /api/v1/health write gate', () => {
 
     expect(snapshot).toEqual({
       status: 'recovery-only',
-      plugin: CONNECTED_PLUGIN,
+      vaultSource: CONNECTED_PLUGIN,
       index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
       model: UNAVAILABLE_MODEL,
       writeGate: { status: 'blocked', missing: ['recovery'], fingerprintMatches: true },
@@ -358,7 +359,7 @@ describe('GET /api/v1/health write gate', () => {
       stateKernel: normalKernel(missingRecoveryDir)
     }).getSnapshot()).resolves.toEqual({
       status: 'recovery-only',
-      plugin: CONNECTED_PLUGIN,
+      vaultSource: CONNECTED_PLUGIN,
       index: { status: 'unavailable', reason: 'RECOVERY_ONLY' },
       model: UNAVAILABLE_MODEL,
       writeGate: { status: 'blocked', missing: ['recovery'], fingerprintMatches: true },
@@ -378,7 +379,7 @@ describe('GET /api/v1/health write gate', () => {
     expect(response.json()).toEqual({
       data: {
         status: 'recovery-only',
-        plugin: { status: 'unavailable', reason: 'PLUGIN_UNAVAILABLE' },
+        vaultSource: { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' },
         index: { status: 'unavailable', reason: 'READ_API_UNAVAILABLE' },
         model: UNAVAILABLE_MODEL,
         writeGate: {

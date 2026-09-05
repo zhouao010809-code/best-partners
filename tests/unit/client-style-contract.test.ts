@@ -36,6 +36,28 @@ function token(css: string, name: string): string {
 }
 
 describe('client style accessibility contract', () => {
+  it('keeps the narrow shell as a full-height left rail with a separate workspace column', async () => {
+    const css = await readFile(SHELL_PATH, 'utf8');
+    const narrow = css.split('@media (max-width: 800px)')[1]?.split('@media')[0] ?? '';
+    const sidebar = narrow.match(/\.sidebar\s*\{([^}]+)\}/u)?.[1] ?? '';
+    const navigation = narrow.match(/\.main-navigation\s*\{([^}]+)\}/u)?.[1] ?? '';
+    const frame = narrow.match(/\.app-frame\s*\{([^}]+)\}/u)?.[1] ?? '';
+    const workspace = narrow.match(/\.workspace\s*\{([^}]+)\}/u)?.[1] ?? '';
+
+    expect(sidebar).toMatch(/position:\s*fixed/u);
+    expect(sidebar).toMatch(/top:\s*0/u);
+    expect(sidebar).toMatch(/left:\s*0/u);
+    expect(sidebar).toMatch(/bottom:\s*0/u);
+    expect(sidebar).toMatch(/width:\s*72px/u);
+    expect(sidebar).toMatch(/height:\s*100dvh/u);
+    expect(sidebar).not.toMatch(/right:\s*0|width:\s*100%/u);
+    expect(navigation).toMatch(/flex-direction:\s*column/u);
+    expect(navigation).not.toMatch(/repeat\(5/u);
+    expect(frame).toMatch(/grid-template-columns:\s*72px\s+minmax\(0,\s*1fr\)/u);
+    expect(workspace).toMatch(/grid-column:\s*2/u);
+    expect(narrow).not.toMatch(/padding:\s*24px\s+16px\s+98px/u);
+  });
+
   it('keeps muted and faint text readable on control surfaces', async () => {
     const css = await readFile(TOKENS_PATH, 'utf8');
     const control = token(css, 'surface-control');

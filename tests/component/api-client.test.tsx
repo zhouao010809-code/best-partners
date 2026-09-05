@@ -36,11 +36,10 @@ function completedJob(id = 'job-1') {
 function readyHealth() {
   return {
     status: 'ready' as const,
-    plugin: {
-      status: 'connected' as const,
-      pluginId: 'local-rest-api',
-      pluginVersion: '5.1.0',
-      obsidianVersion: '1.9.12'
+    vaultSource: {
+      status: 'ready' as const,
+      adapter: 'filesystem' as const,
+      displayName: '我的大脑'
     },
     index: {
       status: 'ready' as const,
