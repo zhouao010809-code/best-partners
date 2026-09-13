@@ -46,7 +46,7 @@ npx vitest run --config vitest.archive.config.ts
 
 ## 修改与交付范围
 
-- 工作目录：`/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read`。
+- 工作目录：`PROJECT_ROOT`。
 - 保留进入本轮前已有的工作区修改；未创建 Git 提交。
 - 同步更新与现有 UI、迁移表不符的测试约定，保留原有业务与边界断言。
 - 详细日志保存在 `.local/code-audit-2026-09-10/`。

@@ -10,7 +10,7 @@
 
 修复采用服务端标题及关联资料路径搜索、稳定的 `updated_at + id` 游标分页，每次最多 100 条；返回元数据而不携带消息正文。面板搜索防抖并取消旧请求，加载更多失败保留已取得的列表并允许重试。空查询仍支持最近历史和进行中任务恢复。
 
-定位：[history.ts:18](</Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/assistant/history.ts:18>)、[Panel 历史加载:145](</Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/client/components/assistant/AssistantPanel.tsx:145>)。对应文件：`src/server/assistant/history.ts`、`src/server/assistant/service.ts` 的 `list`、`src/server/api/routes/assistant.ts`、`src/shared/api/assistant.ts`、`src/client/api/client.ts`、`src/client/components/assistant/AssistantPanel.tsx` 的 `loadHistory`。
+定位：[history.ts:18](<PROJECT_ROOT/src/server/assistant/history.ts:18>)、[Panel 历史加载:145](<PROJECT_ROOT/src/client/components/assistant/AssistantPanel.tsx:145>)。对应文件：`src/server/assistant/history.ts`、`src/server/assistant/service.ts` 的 `list`、`src/server/api/routes/assistant.ts`、`src/shared/api/assistant.ts`、`src/client/api/client.ts`、`src/client/components/assistant/AssistantPanel.tsx` 的 `loadHistory`。
 
 回归：`tests/integration/assistant-history.test.ts` 覆盖 101 条、相同时间戳、字面特殊字符、跨查询及损坏游标；`tests/component/assistant-panel.test.tsx` 覆盖搜索竞态和更多加载失败恢复。
 
@@ -18,7 +18,7 @@
 
 修复前，轮询失败的 `pollError` 只有新一轮运行时才清空。任务停止成功后新建空对话，仍显示“进度连接中断，任务可能仍在运行”，错误归属与实际任务不符。隔离组件用例复现了“发送运行中任务 → GET 失败 → stop 成功 → 新对话”。
 
-修复将错误绑定到 conversation ID，只有对应任务仍运行时显示；已确认的停止/完成及新建会清空错误，迟到轮询还须通过当前 ID、状态与 AbortSignal 检查。定位：[AssistantPanel.tsx:232](</Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/client/components/assistant/AssistantPanel.tsx:232>)；修复涉及 `receive`、轮询 effect、`startNewConversation`。新回归包含真实可见文字入口与停止后的错误清理。
+修复将错误绑定到 conversation ID，只有对应任务仍运行时显示；已确认的停止/完成及新建会清空错误，迟到轮询还须通过当前 ID、状态与 AbortSignal 检查。定位：[AssistantPanel.tsx:232](<PROJECT_ROOT/src/client/components/assistant/AssistantPanel.tsx:232>)；修复涉及 `receive`、轮询 effect、`startNewConversation`。新回归包含真实可见文字入口与停止后的错误清理。
 
 ### 原有能力边界：问问未发送草稿无法跨重启恢复（本轮已补持久链路）
 

@@ -1553,7 +1553,7 @@ For each test, create a fresh sentinel-protected temporary vault with valid `AI�
 const fixture = await createAtomicTestVault();
 await fixture.writeKnowledge('02知识库/方法/example.md', goldenAiSummaryBytes);
 const before = await fixture.readAndHash('02知识库/方法/example.md');
-expect(fixture.vaultRoot).not.toBe('/Users/ao/我的大脑');
+expect(fixture.vaultRoot).not.toBe('~/我的大脑');
 ```
 
 - [ ] **Step 2: Prove normal and protected edits**

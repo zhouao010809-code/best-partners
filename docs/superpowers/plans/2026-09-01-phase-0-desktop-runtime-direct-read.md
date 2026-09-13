@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a locally launchable Electron runtime that starts Fastify and SQLite itself, binds an unpredictable loopback port, serves the existing React client from that same origin, and reads `/Users/ao/我的大脑` directly without Obsidian while every formal-write path remains blocked.
+**Goal:** Build a locally launchable Electron runtime that starts Fastify and SQLite itself, binds an unpredictable loopback port, serves the existing React client from that same origin, and reads `~/我的大脑` directly without Obsidian while every formal-write path remains blocked.
 
 **Architecture:** Keep the existing React, Fastify, SQLite, Zod, and indexing layers, but split the read-only vault contract from the legacy Local REST contract and add a descriptor-anchored `FileSystemVaultGateway`. A small read-only C helper starts at `/`, walks every root and relative component with held `openat(...O_NOFOLLOW)` directory descriptors, and streams bounded bytes/list metadata back to Node; pathname prechecks remain defense in depth, not read authority. Move server side effects behind `startServer()`, inject a one-time-bound loopback authority policy, and let the Electron main process own startup and shutdown. This phase deliberately stops before native write primitives, write journals, final app packaging, DMG creation, signing, or notarization.
 
@@ -325,7 +325,7 @@ export async function createFilesystemReadFixture(): Promise<{
   cleanup(): Promise<void>;
 }> {
   const root = await mkdtemp(join(tmpdir(), 'xiaozhao-read-vault-'));
-  const formal = resolve('/Users/ao/我的大脑');
+  const formal = resolve('~/我的大脑');
   if (resolve(root) === formal) throw new Error('FORMAL_VAULT_FORBIDDEN');
   await Promise.all([
     mkdir(join(root, '00大脑规则'), { recursive: true }),
@@ -1058,7 +1058,7 @@ it('permits only obsidian and https as explicit external protocols', () => {
   expect(policy.allowExternal('obsidian://open?vault=x&file=y')).toBe(true);
   expect(policy.allowExternal('https://help.example.test/')).toBe(true);
   expect(policy.allowExternal('javascript:alert(1)')).toBe(false);
-  expect(policy.allowExternal('file:///Users/ao/secret')).toBe(false);
+  expect(policy.allowExternal('file:///Users/example/secret')).toBe(false);
 });
 ```
 
@@ -1337,7 +1337,7 @@ XIAOZHAO_TEST_VAULT_ROOT
 XIAOZHAO_TEST_USER_DATA
 ```
 
-Before calling `app.setPath('userData', ...)`, canonicalize and `lstat` both supplied directories without creating anything. Require both to be already-created, real, non-symlink directories with mode `0700`, owned by the current uid, and direct children of the canonical `tmpdir()` whose basenames match the fixture prefixes `xiaozhao-vault-` and `xiaozhao-user-data-`. Require distinct dev/ino identities and bidirectional non-overlap after realpath. Then require the vault sentinel `.xiaozhao-read-test-vault.json` with exact bytes. Reject `/Users/ao/我的大脑`, the configured formal root, every ancestor/descendant of either, and every symlink/realpath alias before constructing settings, cache/session storage, server, SQLite, watcher, helper, or BrowserWindow. Production and development ignore both variables.
+Before calling `app.setPath('userData', ...)`, canonicalize and `lstat` both supplied directories without creating anything. Require both to be already-created, real, non-symlink directories with mode `0700`, owned by the current uid, and direct children of the canonical `tmpdir()` whose basenames match the fixture prefixes `xiaozhao-vault-` and `xiaozhao-user-data-`. Require distinct dev/ino identities and bidirectional non-overlap after realpath. Then require the vault sentinel `.xiaozhao-read-test-vault.json` with exact bytes. Reject `~/我的大脑`, the configured formal root, every ancestor/descendant of either, and every symlink/realpath alias before constructing settings, cache/session storage, server, SQLite, watcher, helper, or BrowserWindow. Production and development ignore both variables.
 
 Add cases where `XIAOZHAO_TEST_USER_DATA` is the formal root, its child, its parent, the test vault, a symlink alias to any of them, wrong mode, wrong owner fixture (where supported), a non-direct tmp descendant, and an unexpected basename. Snapshot the formal namespace before process launch and after rejection and require exact equality. This seam prevents Playwright/Electron itself from writing cache or configuration into the formal vault before application guards run.
 
@@ -1400,11 +1400,11 @@ First record a read-only inventory without writing it inside the vault:
 
 ```bash
 XIAOZHAO_PHASE0_AUDIT_DIR="$(mktemp -d "${TMPDIR%/}/xiaozhao-phase0-audit.XXXXXX")"
-find /Users/ao/我的大脑/00大脑规则 /Users/ao/我的大脑/01图书馆 /Users/ao/我的大脑/02知识库 -type f -exec stat -f '%N|%m|%z' {} \; | sort > "$XIAOZHAO_PHASE0_AUDIT_DIR/before-stat.txt"
-find /Users/ao/我的大脑/00大脑规则 /Users/ao/我的大脑/01图书馆 /Users/ao/我的大脑/02知识库 -type f -exec shasum -a 256 {} \; | sort > "$XIAOZHAO_PHASE0_AUDIT_DIR/before-sha256.txt"
+find ~/我的大脑/00大脑规则 ~/我的大脑/01图书馆 ~/我的大脑/02知识库 -type f -exec stat -f '%N|%m|%z' {} \; | sort > "$XIAOZHAO_PHASE0_AUDIT_DIR/before-stat.txt"
+find ~/我的大脑/00大脑规则 ~/我的大脑/01图书馆 ~/我的大脑/02知识库 -type f -exec shasum -a 256 {} \; | sort > "$XIAOZHAO_PHASE0_AUDIT_DIR/before-sha256.txt"
 npm run electron
-find /Users/ao/我的大脑/00大脑规则 /Users/ao/我的大脑/01图书馆 /Users/ao/我的大脑/02知识库 -type f -exec stat -f '%N|%m|%z' {} \; | sort > "$XIAOZHAO_PHASE0_AUDIT_DIR/after-stat.txt"
-find /Users/ao/我的大脑/00大脑规则 /Users/ao/我的大脑/01图书馆 /Users/ao/我的大脑/02知识库 -type f -exec shasum -a 256 {} \; | sort > "$XIAOZHAO_PHASE0_AUDIT_DIR/after-sha256.txt"
+find ~/我的大脑/00大脑规则 ~/我的大脑/01图书馆 ~/我的大脑/02知识库 -type f -exec stat -f '%N|%m|%z' {} \; | sort > "$XIAOZHAO_PHASE0_AUDIT_DIR/after-stat.txt"
+find ~/我的大脑/00大脑规则 ~/我的大脑/01图书馆 ~/我的大脑/02知识库 -type f -exec shasum -a 256 {} \; | sort > "$XIAOZHAO_PHASE0_AUDIT_DIR/after-sha256.txt"
 diff -u "$XIAOZHAO_PHASE0_AUDIT_DIR/before-stat.txt" "$XIAOZHAO_PHASE0_AUDIT_DIR/after-stat.txt"
 diff -u "$XIAOZHAO_PHASE0_AUDIT_DIR/before-sha256.txt" "$XIAOZHAO_PHASE0_AUDIT_DIR/after-sha256.txt"
 ```

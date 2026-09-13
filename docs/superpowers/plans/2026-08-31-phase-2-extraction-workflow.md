@@ -183,7 +183,7 @@ Input must remove:
 - URL query values named token, key, api_key, signature, access_token;
 - Authorization and Cookie header values;
 - explicit sk-style API keys;
-- /Users/ao absolute paths.
+- /Users/example absolute paths.
 
 Assert ordinary Chinese content, source URLs without sensitive query values, headings, and paragraph order remain. Redaction output returns stable paragraph block ids, original block byte ranges, redacted block text, count, byte length, and SHA-256.
 

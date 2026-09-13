@@ -12,14 +12,14 @@
 
 ## Fixed locations
 
-- Source repository: /Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console
-- Approved design specification: /Users/ao/我的大脑/.superpowers/specs/2026-08-31-xiaozhao-brain-local-web-mvp-design.md
-- Internal deck source kit: /Users/ao/Desktop/production-deck-source-kit-2026-08-31 2
-- Formal vault: /Users/ao/我的大脑
-- Runtime state: /Users/ao/Library/Application Support/xiaozhao-brain-console
+- Source repository: PROJECT_ROOT
+- Approved design specification: ~/我的大脑/.superpowers/specs/2026-08-31-xiaozhao-brain-local-web-mvp-design.md
+- Internal deck source kit: INTERNAL_SOURCE_KIT
+- Formal vault: ~/我的大脑
+- Runtime state: ~/Library/Application Support/best-partners
 - Local REST test-vault sentinel: __XIAOZHAO_TEST_VAULT__
 
-Do not put node_modules, build output, SQLite, recovery manifests, API keys, contract sandboxes, or application source inside /Users/ao/我的大脑.
+Do not put node_modules, build output, SQLite, recovery manifests, API keys, contract sandboxes, or application source inside ~/我的大脑.
 
 ## Why the work is split
 
@@ -56,7 +56,7 @@ This evidence is not permission to test writes in the formal vault. It predicts 
 
 | Gate | Required evidence | Failure behavior |
 |---|---|---|
-| G0 Isolation | Test-vault sentinel exists and every resolved root differs from /Users/ao/我的大脑 | Contract writes refuse to start |
+| G0 Isolation | Test-vault sentinel exists and every resolved root differs from ~/我的大脑 | Contract writes refuse to start |
 | G1 REST read | Plugin/version/auth/list/raw bytes/Chinese path pass | Stop REST integration |
 | G2 REST write CAS | Conditional create, stale replace, competing writer, conditional restore, conditional delete, and reread pass | Keep formal writes disabled |
 | G3 Local security | Host, Origin, session, CSRF, CSP, path, symlink, body-size tests pass | Do not expose real-vault server |
@@ -182,8 +182,8 @@ Do not convert this into a monorepo. Shared contracts are source files in src/sh
 
 ## Commit and verification policy
 
-- Initialize Git only in /Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console.
-- Never initialize Git in /Users/ao/我的大脑.
+- Initialize Git only in PROJECT_ROOT.
+- Never initialize Git in ~/我的大脑.
 - Use one focused commit per task.
 - Every behavior change follows red, green, refactor.
 - Ordinary verification never targets the formal vault for writes.

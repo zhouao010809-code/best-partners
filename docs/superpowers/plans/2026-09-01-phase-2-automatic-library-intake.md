@@ -73,7 +73,7 @@
 - Phase 0 的全局规则 bundle 按 `00_ / 01_ / 02_图书馆入馆规则 / 03_ / 05_` 的固定顺序计算指纹；入馆不得构造一个排除 `02_图书馆入馆规则.md` 的局部指纹。
 - 所有 reconcile、plan 和 execute 依赖 Phase 0 定义并注入的 `RuleCompatibilityGate` port/record；默认 deny，只有测试 fixture 可显式批准测试指纹，Phase 6 才实现 Electron production 审批。只有 `currentRuleBundleSha256 === approvedRuleBundleSha256` 才是 `approved`；首次无批准值或 App 关闭期间规则变化都返回 `RULE_BUNDLE_UNAPPROVED`，读取、搜索和诊断继续可用，但不得因重新分类而自动批准新规则。本阶段不另建 gate 实现。
 - 自动化写入只接受 Phase 1 `tests/helpers/atomic-test-vault.ts` 创建、包含精确 `.xiaozhao-atomic-test-vault.json` 哨兵且与正式 vault/source/appData 相互隔离的 `mkdtemp` 临时 vault。
-- `/Users/ao/我的大脑`、配置中的正式 vault、符号链接别名和缺少哨兵的目录必须在任何 mutation 前被拒绝。
+- `~/我的大脑`、配置中的正式 vault、符号链接别名和缺少哨兵的目录必须在任何 mutation 前被拒绝。
 - 本计划执行期间不得向正式 vault 写入；正式入馆只在 Phase 6 的用户监督验收中开启。
 - 本阶段在 sentinel test vault 中完整实现自动执行。正式 root 的无人值守执行仍保持关闭，直到 Phase 6 由 Electron 主进程持有的 production mutation authority 通过验收后启用。
 - 该 authority 最终只能授权 `plan.intent.kind === 'intake'`，且所有 move 的 `from` 必须位于 `01图书馆/小兆clipper` 或同一入馆计划刚创建的精确包目录，`to` 必须位于预先存在且非 symlink 的 `01图书馆/来自<允许平台>` 下。它仅允许排他创建分类结果确定的单个 `YYYY-MM` 目录，以及 `single_file` 形态确定的单个规范包目录；禁止创建平台根、额外月份或任意目录。`extraction_batch`、`knowledge_edit`、restore/reverse intent 永远不能复用 intake authority。

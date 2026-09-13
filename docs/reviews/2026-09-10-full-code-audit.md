@@ -10,7 +10,7 @@
 
 ## 范围与方法
 
-- 实际运行项目：`/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read`。
+- 实际运行项目：`PROJECT_ROOT`。
 - 基准提交：`920709934624fb2148190915d2186d47117db043`；审查包含当前工作区修改及未跟踪的新代码，并非只审查该提交的 diff。
 - 覆盖客户端页面与 API、提炼/候选/AI 服务、索引与查询、文件归档/入库/回收/恢复、SQLite、原生文件模块、Electron 启停/凭据/IPC、安全策略及构建脚本。
 - 四个审查工作流分别追踪存储、AI 后端、前端、运行环境，并对候选问题复核调用链、隔离复现和现有测试。
@@ -20,7 +20,7 @@
 
 ### 1. [P1] 候选阻止退出时，窗口留下但本地服务已关闭
 
-位置：[main.ts:142](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/electron/main.ts:142)，关联 [CandidateReview.tsx:124](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/client/pages/queue/CandidateReview.tsx:124)。
+位置：[main.ts:142](PROJECT_ROOT/src/electron/main.ts:142)，关联 [CandidateReview.tsx:124](PROJECT_ROOT/src/client/pages/queue/CandidateReview.tsx:124)。
 
 触发：编辑候选，在草稿尚未保存或保存失败时使用 Cmd+Q / 应用退出。
 
@@ -36,7 +36,7 @@
 
 ### 2. [P2] 同一候选的多个窗口会互相删除未同步草稿
 
-位置：[CandidateReview.tsx:49](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/client/pages/queue/CandidateReview.tsx:49)、[CandidateReview.tsx:52](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/client/pages/queue/CandidateReview.tsx:52)。
+位置：[CandidateReview.tsx:49](PROJECT_ROOT/src/client/pages/queue/CandidateReview.tsx:49)、[CandidateReview.tsx:52](PROJECT_ROOT/src/client/pages/queue/CandidateReview.tsx:52)。
 
 触发：两个浏览器窗口打开同一候选；B 修改后保存失败，临时草稿写入 localStorage；A 随后成功保存自己的版本；B 切走再打开。
 
@@ -48,7 +48,7 @@
 
 ### 3. [P2] 彻底删除后重新导入同路径资料，旧候选污染新资料入库状态
 
-位置：[review-store.ts:45](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/ingestion/review-store.ts:45)，关联 [ingestion-service.ts:178](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/ingestion/ingestion-service.ts:178)。
+位置：[review-store.ts:45](PROJECT_ROOT/src/server/ingestion/review-store.ts:45)，关联 [ingestion-service.ts:178](PROJECT_ROOT/src/server/ingestion/ingestion-service.ts:178)。
 
 触发：资料 A 有提炼历史，随后被彻底删除；用户在同一路径放入新的不同内容并重新提炼、处理候选。
 
@@ -63,7 +63,7 @@
 
 ### 4. [P2] AI 回答失败后没有取消底层任务，迟到候选仍会落库
 
-位置：[assistant/service.ts:123](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/assistant/service.ts:123)，关联 [deepseek-adapter.ts:113](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/assistant/deepseek-adapter.ts:113)。
+位置：[assistant/service.ts:123](PROJECT_ROOT/src/server/assistant/service.ts:123)，关联 [deepseek-adapter.ts:113](PROJECT_ROOT/src/server/assistant/deepseek-adapter.ts:113)。
 
 触发：AI 回复超过服务层 160,000 字符上限，同时工具链仍有正在重验/提交的候选操作。
 
@@ -80,7 +80,7 @@
 
 ### 5. [P2] 第二个浏览器工作台使第一个页面的写入请求持续失效
 
-位置：[app.ts:265](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/app.ts:265)，关联 [client.ts:316](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/client/api/client.ts:316)。
+位置：[app.ts:265](PROJECT_ROOT/src/server/app.ts:265)，关联 [client.ts:316](PROJECT_ROOT/src/client/api/client.ts:316)。
 
 触发：同一浏览器、同一工作台服务，A 页面先执行一次操作，B 页面随后首次执行操作，再回 A 保存或重试。
 
@@ -92,7 +92,7 @@
 
 ### 6. [P2] 操作记录首次加载失败后，连接恢复不会自动重读
 
-位置：[OperationsPage.tsx:44](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/client/pages/OperationsPage.tsx:44)，关联 [AppShell.tsx:288](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/client/app/AppShell.tsx:288)。
+位置：[OperationsPage.tsx:44](PROJECT_ROOT/src/client/pages/OperationsPage.tsx:44)，关联 [AppShell.tsx:288](PROJECT_ROOT/src/client/app/AppShell.tsx:288)。
 
 触发：直接进入操作与恢复页，首次请求时本地服务暂时断开，随后健康检查恢复且没有发布新的索引版本。
 
@@ -104,7 +104,7 @@
 
 ### 7. [P2] 原生模块构建依赖本机某个固定版本的 Node 头文件缓存
 
-位置：[build-sandbox-archive.ts:10](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/scripts/build-sandbox-archive.ts:10)。
+位置：[build-sandbox-archive.ts:10](PROJECT_ROOT/scripts/build-sandbox-archive.ts:10)。
 
 代码固定读取 `~/Library/Caches/node-gyp/22.22.3/include/node`，并立刻 `access(node_api.h)`。README 只要求 Node 22.12+、macOS arm64 和 Xcode；`npm ci` 不保证创建这个精确版本的缓存。
 
@@ -127,7 +127,7 @@
 
 另有本报告中的隔离缺陷复现，不计入上表。
 
-审查日志和可再次运行的后端复现脚本已保存在本机 [证据目录](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/.local/code-audit-2026-09-10)。其中 [同路径历史复现](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/.local/code-audit-2026-09-10/storage-history-repro.mts) 在当前缺陷下预期两个断言失败；[AI 迟到候选复现](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/.local/code-audit-2026-09-10/assistant-late-candidates-repro.mts) 断言当前异常确实发生。主审已重新执行这两个脚本并确认结果。脚本的断言方向不同，修复后应相应改为期望正确行为的正式回归测试。
+审查日志和可再次运行的后端复现脚本已保存在本机 [证据目录](PROJECT_ROOT/.local/code-audit-2026-09-10)。其中 [同路径历史复现](PROJECT_ROOT/.local/code-audit-2026-09-10/storage-history-repro.mts) 在当前缺陷下预期两个断言失败；[AI 迟到候选复现](PROJECT_ROOT/.local/code-audit-2026-09-10/assistant-late-candidates-repro.mts) 断言当前异常确实发生。主审已重新执行这两个脚本并确认结果。脚本的断言方向不同，修复后应相应改为期望正确行为的正式回归测试。
 
 现有失败集中在五个测试文件：
 

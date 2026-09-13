@@ -402,7 +402,7 @@ Use canonical JSON and base64 bytes. Never reference SQLite row ids without also
 Write to:
 
 ~~~text
-/Users/ao/Library/Application Support/xiaozhao-brain-console/recovery/{batchId}/manifest.json
+~/Library/Application Support/best-partners/recovery/{batchId}/manifest.json
 ~~~
 
 Keep a second manifest.previous only while replacing current progress, and delete it after the new checksum verifies.
@@ -694,7 +694,7 @@ git commit -m "feat: add formal write confirmation and recovery UI"
 
 - [ ] **Step 1: Guard the E2E suite**
 
-Reuse assertContractTestVault. Require WRITE_ENABLED=true, G2 passed for the exact fingerprint, ALLOW_OBSIDIAN_CONTRACT_WRITE=1, and a random sandbox prefix. Refuse /Users/ao/我的大脑 by realpath and sentinel.
+Reuse assertContractTestVault. Require WRITE_ENABLED=true, G2 passed for the exact fingerprint, ALLOW_OBSIDIAN_CONTRACT_WRITE=1, and a random sandbox prefix. Refuse ~/我的大脑 by realpath and sentinel.
 
 - [ ] **Step 2: Test new, merge, and zero-accept batches**
 

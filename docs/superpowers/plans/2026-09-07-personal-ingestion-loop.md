@@ -12,7 +12,7 @@
 
 ## 共享接口与责任
 
-所有路径相对于活动工作树 `/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read`。
+所有路径相对于活动工作树 `PROJECT_ROOT`。
 
 - `src/shared/api/knowledge-content.ts`：知识召回字段与可复用表达；编辑草稿可暂空，正式内容必须完整。
 - `src/shared/api/ingestion.ts`：Review、CandidateDraft、Match、Preview、Batch 的输入输出契约。

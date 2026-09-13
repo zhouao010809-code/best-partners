@@ -81,9 +81,9 @@ scan-artifacts.ts recursively scans dist, client source maps when present, gener
 
 - the actual Obsidian API key or model API key loaded from environment;
 - Authorization: Bearer followed by a non-redacted value;
-- /Users/ao/我的大脑 note body excerpts;
+- ~/我的大脑 note body excerpts;
 - query parameters named token, key, signature, or access_token with non-redacted values;
-- runtime references to /Users/ao/Desktop/production-deck-source-kit-2026-08-31 2.
+- runtime references to INTERNAL_SOURCE_KIT.
 
 It must never print the secret value it is searching for; report only file and rule id.
 

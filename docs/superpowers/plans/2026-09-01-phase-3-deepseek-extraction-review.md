@@ -332,7 +332,7 @@ The implementation must reuse exact field ranges from Phase 2 `source-frontmatte
 
 - [ ] **Step 2: Write failing redaction tests**
 
-Assert removal of query values named `token`, `key`, `api_key`, `signature`, `access_token`, Authorization/Cookie values, `sk-` keys and `/Users/ao` paths. Preserve Chinese paragraphs, headings and safe URL origins. Verify stable block IDs `p0001`, `p0002`, source byte ranges, redacted offsets, byte count and hash.
+Assert removal of query values named `token`, `key`, `api_key`, `signature`, `access_token`, Authorization/Cookie values, `sk-` keys and `/Users/example` paths. Preserve Chinese paragraphs, headings and safe URL origins. Verify stable block IDs `p0001`, `p0002`, source byte ranges, redacted offsets, byte count and hash.
 
 Use exact input and assert that neither returned text nor serialized output contains a secret:
 
@@ -342,7 +342,7 @@ const paragraphs = [
   '正文一，来源 https://example.com/article?token=secret&safe=1',
   'Authorization: Bearer sk-secret',
   'Cookie: session=secret',
-  '本地路径 /Users/ao/private/source.md',
+  '本地路径 /Users/example/private/source.md',
   '正文二'
 ];
 const sourceText = paragraphs.join('\n\n');

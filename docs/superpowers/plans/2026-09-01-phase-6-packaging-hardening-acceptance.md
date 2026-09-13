@@ -609,12 +609,12 @@ Add a separate subprocess case with a fresh temporary user-data path and:
 env: {
   ...process.env,
   NODE_ENV: 'test',
-  XIAOZHAO_TEST_VAULT_ROOT: '/Users/ao/我的大脑',
+  XIAOZHAO_TEST_VAULT_ROOT: '~/我的大脑',
   XIAOZHAO_TEST_USER_DATA: userData
 }
 ```
 
-Require non-zero exit, stderr ending in `FORMAL_VAULT_FORBIDDEN_IN_TEST`, no `XIAOZHAO_RUNTIME_READY` marker, no listener port, and no `state.sqlite3`, `recovery`, or `backups` under that temporary user data. In the pure `test-seam.test.ts`, inject path/identity adapters and test the formal root, a child, an ancestor, and a symlink alias independently in both environment slots; assert rejection occurs before the injected `setUserDataPath`, filesystem creator, or runtime factory. Also reject vault/userData overlap in either direction, a non-direct tmp child, wrong prefix, non-empty userData, wrong owner/mode, and replacement of either directory between validation, `app.setPath`, and runtime construction. Never launch a packaged subprocess whose test userData points at the real formal vault; the packaged suite uses safe temporary aliases and proves the same branded seam is the only route to `app.setPath`. Repeat the existing formal-vault-root subprocess with `WRITE_ENABLED=true` and `VAULT_REAL_ROOT=/Users/ao/我的大脑`, but keep `NODE_ENV=test`, the temporary sentinel root, and the temporary userData unchanged.
+Require non-zero exit, stderr ending in `FORMAL_VAULT_FORBIDDEN_IN_TEST`, no `XIAOZHAO_RUNTIME_READY` marker, no listener port, and no `state.sqlite3`, `recovery`, or `backups` under that temporary user data. In the pure `test-seam.test.ts`, inject path/identity adapters and test the formal root, a child, an ancestor, and a symlink alias independently in both environment slots; assert rejection occurs before the injected `setUserDataPath`, filesystem creator, or runtime factory. Also reject vault/userData overlap in either direction, a non-direct tmp child, wrong prefix, non-empty userData, wrong owner/mode, and replacement of either directory between validation, `app.setPath`, and runtime construction. Never launch a packaged subprocess whose test userData points at the real formal vault; the packaged suite uses safe temporary aliases and proves the same branded seam is the only route to `app.setPath`. Repeat the existing formal-vault-root subprocess with `WRITE_ENABLED=true` and `VAULT_REAL_ROOT=~/我的大脑`, but keep `NODE_ENV=test`, the temporary sentinel root, and the temporary userData unchanged.
 
 Do not launch a subprocess with `NODE_ENV=production` plus `XIAOZHAO_TEST_*`: Phase 0 intentionally ignores the test seam outside test mode, so that combination could resolve normal userData. Instead create `tests/unit/electron/runtime.test.ts` and prove purely in process that environment strings cannot turn a source build into production authority:
 
@@ -786,7 +786,7 @@ expect(result).toEqual({
 });
 ```
 
-Also inject a working-directory path named `/Users/ao/我的大脑` and prove the diagnostic still calls `mkdtemp(join(tmpdir(), ...))`; inject a sentinel with a newline, wrong filename, wrong mode, symlink, or old Phase 6 value and require rejection before a helper call. Run exactly:
+Also inject a working-directory path named `~/我的大脑` and prove the diagnostic still calls `mkdtemp(join(tmpdir(), ...))`; inject a sentinel with a newline, wrong filename, wrong mode, symlink, or old Phase 6 value and require rejection before a helper call. Run exactly:
 
 ```bash
 npm run test:unit -- tests/unit/release/native-smoke.test.ts
@@ -827,7 +827,7 @@ try {
   if (integrity !== 'ok') throw new Error('PACKAGED_SQLITE_INTEGRITY_FAILED');
 
   const profile = await probeNativeCapabilityProfile({ vaultRoot, appDataRoot, helperPath });
-  const policy = new SentinelTestMutationPolicy({ formalRoot: '/Users/ao/我的大脑' });
+  const policy = new SentinelTestMutationPolicy({ formalRoot: '~/我的大脑' });
   const plan = createNativeSmokePlan(vaultRoot, profile.profileKey);
   const projectionCapsule = createKernelTestProjectionCapsule(plan);
   const policyInput: MutationPolicyInput = {
@@ -944,7 +944,7 @@ The bootstrap captures one stable descriptor snapshot before and another after e
 
 Inject and reject: unsigned or different helper bytes; x86_64 helper; OS build change; target filesystem/device change; recovery directory on another device; cache/probe path inside or above the formal vault; probe path inside appData; symlink cache/probe/sentinel; incomplete primitive evidence, including missing/failed `boundedRecoveryRetirement`; a retirement probe that can touch a raced foreign basename or exposes any delete opcode; one missing crash checkpoint; wrong crash-matrix hash; added/removed namespace path; changed symlink target; special file; regular-file byte change; and any attempt to persist a profile before all evidence passes. Include a same-path, same-size, restored-mtime fixture whose bytes differ and require `FORMAL_NAMESPACE_CHANGED_DURING_BOOTSTRAP`, proving metadata camouflage cannot pass. Assert failure leaves no active profile pointer and removes only the captured owned probe root. Also prove only a child holding a live, one-use `AppBootstrapHandshakeAuthority` from the normal packaged App may promote the active pointer; CLI arguments or environment values select diagnostic mode only and never construct that authority. The developer CLI can produce private acceptance evidence but cannot create or replace production authority.
 
-In `packaged-capability-bootstrap.spec.ts`, use `NODE_ENV=test`, a temporary configured sentinel target, and temporary userData in every spawned test process; never launch it against `/Users/ao/我的大脑` or change the subprocess to production/development mode. Prove `--capability-crash-worker` rejects a missing/wrong sentinel, the formal root via an injected filesystem adapter, a formal-root symlink alias, and a root not created by its parent bootstrap. Renderer/HTTP fields named `NODE_ENV`, `WRITE_ENABLED`, or `VAULT_REAL_ROOT`, model output, and omitted/wrong CLI modes cannot start or promote the bootstrap; Task 3's pure runtime unit test proves environment strings alone never select this launch mode. Run exactly:
+In `packaged-capability-bootstrap.spec.ts`, use `NODE_ENV=test`, a temporary configured sentinel target, and temporary userData in every spawned test process; never launch it against `~/我的大脑` or change the subprocess to production/development mode. Prove `--capability-crash-worker` rejects a missing/wrong sentinel, the formal root via an injected filesystem adapter, a formal-root symlink alias, and a root not created by its parent bootstrap. Renderer/HTTP fields named `NODE_ENV`, `WRITE_ENABLED`, or `VAULT_REAL_ROOT`, model output, and omitted/wrong CLI modes cannot start or promote the bootstrap; Task 3's pure runtime unit test proves environment strings alone never select this launch mode. Run exactly:
 
 ```bash
 npm run test:unit -- tests/unit/release/production-capability-bootstrap.test.ts tests/unit/native-read-helper-protocol.test.ts tests/unit/private-recovery-store.test.ts
@@ -1034,7 +1034,7 @@ The Phase 1 schema/hash remains valid for sentinel profiles. The production sche
 }
 ```
 
-`completeCapabilityEvidence` contains exactly one strict evidence item for every capability key, including crash recovery and bounded retirement; `primitiveEvidenceSha256` hashes the canonical ordered evidence entries for every key except `crashRecovery`; the exact crash-recovery entry is separately bound to `crashMatrixSha256`, and the production schema rejects any status/evidence/digest disagreement. The production `profileKey` hashes all base and production security fields except `checkedAt`, per-item observation times, and `profileKey` itself. In `finally`, remove only the nonce/dev/ino-bound bootstrap recovery subtree and cache probe root; do not remove the real recovery root or previous immutable profiles. At no point create a sentinel, temporary file, probe directory, journal, manifest, database, or app-data directory inside `/Users/ao/我的大脑`.
+`completeCapabilityEvidence` contains exactly one strict evidence item for every capability key, including crash recovery and bounded retirement; `primitiveEvidenceSha256` hashes the canonical ordered evidence entries for every key except `crashRecovery`; the exact crash-recovery entry is separately bound to `crashMatrixSha256`, and the production schema rejects any status/evidence/digest disagreement. The production `profileKey` hashes all base and production security fields except `checkedAt`, per-item observation times, and `profileKey` itself. In `finally`, remove only the nonce/dev/ino-bound bootstrap recovery subtree and cache probe root; do not remove the real recovery root or previous immutable profiles. At no point create a sentinel, temporary file, probe directory, journal, manifest, database, or app-data directory inside `~/我的大脑`.
 
 - [ ] **Step 8: Add the packaged branch, App-owned launch action, strict runner, and reload gate**
 
@@ -1222,7 +1222,7 @@ const ALLOWED_READ_ONLY_PRIVATE_STORE_FILES = [
 ] as const;
 ```
 
-The exception is file-exact, not directory-exact: each allowed file must itself have a transitive closure free of the exact full-store path `src/server/vault/PrivateRecoveryStore.ts`, `AtomicFileHelper`, `atomic-helper-protocol`, private create/append/move/swap/export/retire opcodes, write-capable `BoundPrivateDirectory`, coordinator, recovery mutation, database, settings, or normal runtime modules. `ReadOnlyPrivateRecoveryStore.ts` may depend only on the two other allowlisted read modules plus pure shared identity/record/hash schemas; it cannot import or re-export a full-store type or value. Reject the literal `/Users/ao/我的大脑`, `VAULT_REAL_ROOT`, `XIAOZHAO_TEST_VAULT_ROOT`, or `startServer` anywhere in the adapter closure. In `main.ts`, reject every static import that reaches a forbidden segment. Locate the `--deepseek-smoke` branch and require its dynamic adapter import to occur before the normal `start-server`/desktop-runtime dynamic import. Hash canonical sorted `{path,sha256,staticEdges,dynamicEdges}` records plus the built `dist/electron/main.js` SHA-256 and return:
+The exception is file-exact, not directory-exact: each allowed file must itself have a transitive closure free of the exact full-store path `src/server/vault/PrivateRecoveryStore.ts`, `AtomicFileHelper`, `atomic-helper-protocol`, private create/append/move/swap/export/retire opcodes, write-capable `BoundPrivateDirectory`, coordinator, recovery mutation, database, settings, or normal runtime modules. `ReadOnlyPrivateRecoveryStore.ts` may depend only on the two other allowlisted read modules plus pure shared identity/record/hash schemas; it cannot import or re-export a full-store type or value. Reject the literal `~/我的大脑`, `VAULT_REAL_ROOT`, `XIAOZHAO_TEST_VAULT_ROOT`, or `startServer` anywhere in the adapter closure. In `main.ts`, reject every static import that reaches a forbidden segment. Locate the `--deepseek-smoke` branch and require its dynamic adapter import to occur before the normal `start-server`/desktop-runtime dynamic import. Hash canonical sorted `{path,sha256,staticEdges,dynamicEdges}` records plus the built `dist/electron/main.js` SHA-256 and return:
 
 ```ts
 export type DeepSeekDependencyBoundary = {
@@ -1305,14 +1305,14 @@ const evidence = {
 
 - [ ] **Step 7: Parse, persist, and run the real smoke**
 
-The runner requires `--formal-vault /Users/ao/我的大脑`, spawns the fixed packaged executable with no vault/test/write environment variables, parses only the strict redacted pass/skip/fail stdout union and matching exit code, and requires a passing child endpoint origin/model to equal the values read from the two narrow stores. It adds only timestamps, packaged App digest, independently derived boundary, and zero-change fields, then writes `.local/acceptance/deepseek-smoke.json` atomically with directory `0700` and file `0600`. Skip/fail output never creates pass evidence. Require the normal App to be quit first so the single-instance lock cannot substitute a different process. A configured non-default compatible endpoint/model must appear exactly in evidence and the final report; never relabel it as DeepSeek defaults.
+The runner requires `--formal-vault ~/我的大脑`, spawns the fixed packaged executable with no vault/test/write environment variables, parses only the strict redacted pass/skip/fail stdout union and matching exit code, and requires a passing child endpoint origin/model to equal the values read from the two narrow stores. It adds only timestamps, packaged App digest, independently derived boundary, and zero-change fields, then writes `.local/acceptance/deepseek-smoke.json` atomically with directory `0700` and file `0600`. Skip/fail output never creates pass evidence. Require the normal App to be quit first so the single-instance lock cannot substitute a different process. A configured non-default compatible endpoint/model must appear exactly in evidence and the final report; never relabel it as DeepSeek defaults.
 
 Run:
 
 ```bash
 npm run test:unit -- tests/unit/release/deepseek-smoke.test.ts tests/unit/release/deepseek-dependency-boundary.test.ts tests/unit/release/model-settings-migration.test.ts
 npm run dist:mac
-npm run smoke:deepseek:real -- --formal-vault /Users/ao/我的大脑
+npm run smoke:deepseek:real -- --formal-vault ~/我的大脑
 ```
 
 Expected after the Key is configured in the App: output is `PASSED deepseek-smoke endpointOrigin=<actual configured HTTPS origin> model=<actual configured model> schemaValid=true appVaultRuntimeLoaded=false vaultNetChangesObserved=0 vaultSnapshotStability=two-identical-descriptor-scans dependencyBoundarySha256=<64 hex> latencyMs=<integer>`. The strict parser compares endpoint/model to the narrow stores; it does not require the defaults. No prompt, response, vault path, dependency path, or key appears in stdout, stderr, logs, or evidence.
@@ -1320,7 +1320,7 @@ Expected after the Key is configured in the App: output is `PASSED deepseek-smok
 - [ ] **Step 8: Scan and commit**
 
 ```bash
-if rg -n '/Users/ao/我的大脑|sk-[A-Za-z0-9]|这是合成测试材料|overview|candidates|src/server|node_modules' .local/acceptance/deepseek-smoke.json "$HOME/Library/Logs/小兆大脑"; then exit 1; fi
+if rg -n '~/我的大脑|sk-[A-Za-z0-9]|这是合成测试材料|overview|candidates|src/server|node_modules' .local/acceptance/deepseek-smoke.json "$HOME/Library/Logs/小兆大脑"; then exit 1; fi
 git add src/electron/diagnostics/deepseek-smoke.ts src/electron/diagnostics/packaged-deepseek-adapter.ts src/electron/main.ts src/electron/settings-store.ts src/electron/model-key-store.ts src/electron/model-endpoint-store.ts src/electron/model-settings-migration.ts src/shared/acceptance/read-only-vault-snapshot.ts scripts/release/dependency-closure.ts scripts/release/run-deepseek-smoke.ts scripts/release/verify-packaged-app.ts tests/unit/release/deepseek-smoke.test.ts tests/unit/release/deepseek-dependency-boundary.test.ts tests/unit/release/model-settings-migration.test.ts
 git commit -m "test: add vault-free DeepSeek smoke"
 ```
@@ -1400,7 +1400,7 @@ export const formalBaselineSchema = z.object({
 Using `createTempWriteVault` plus a private sentinel approval record under temporary appData, prove the two native scans have identical sorted identity/mode/path/size/time/hash records and namespace aggregates; output/appData inside or above the vault is rejected; `WRITE_ENABLED` unset/true is rejected; an allowed-root symlink/special file or file changing during read fails closed. Add native synchronization cases for root/ancestor replacement, hidden file/directory addition, symlink-target replacement, permission-only change, and same-path/same-size/restored-mtime different bytes; each must fail rather than yield a mixed snapshot. Add these exact negative cases:
 
 ```text
-NODE_ENV=test + /Users/ao/我的大脑 -> FORMAL_VAULT_FORBIDDEN_IN_TEST
+NODE_ENV=test + ~/我的大脑 -> FORMAL_VAULT_FORBIDDEN_IN_TEST
 root dev/ino changes between scans -> VAULT_ROOT_IDENTITY_CHANGED
 root .local/ -> RUNTIME_ARTIFACT_IN_VAULT
 root state.sqlite3 -> RUNTIME_ARTIFACT_IN_VAULT
@@ -1445,10 +1445,10 @@ const privateStore = await openReadOnlyPrivateRecoveryStore({
   nativePort: privateReadPort
 });
 const outputParent = await openBoundAcceptanceOutputParent(outputPath);
-if (process.env.NODE_ENV === 'test' && root.realPath === '/Users/ao/我的大脑') {
+if (process.env.NODE_ENV === 'test' && root.realPath === '~/我的大脑') {
   throw new Error('FORMAL_VAULT_FORBIDDEN_IN_TEST');
 }
-if (root.realPath !== '/Users/ao/我的大脑' && process.env.NODE_ENV !== 'test') {
+if (root.realPath !== '~/我的大脑' && process.env.NODE_ENV !== 'test') {
   throw new Error('FORMAL_BASELINE_ROOT_MISMATCH');
 }
 if (boundRootsOverlap(root, outputParent.identity)) {
@@ -1620,7 +1620,7 @@ The Settings page reads public status/change summaries through health: current h
 
 Inject the existing `RuleCompatibilityGate` port into intake reconciliation/application, `AIOrchestrator`, extraction start, formal-ingestion plan creation, knowledge-edit/restore plan creation, `WriteCoordinator`, and `ProductionMutationTargetPolicy`. Missing approval, validator-version mismatch, or current hash mismatch returns only `RULE_BUNDLE_UNAPPROVED`: browsing remains available, but automatic intake execution, model runs, every new/reused write plan, and formal mutation are blocked. Coordinator/policy recheck the approved hash under the write mutex; a plan's `ruleBundleSha256` must equal both current and approved hash. Environment, CLI, HTTP, model output, background reclassification, and a serialized record cannot approve.
 
-Unit tests cover missing/changed/reverted rule, changed one of each five files, validator-version bump, root/ancestor/entry replacement at native scan hooks, hidden rule-path collision, synthetic fixture failure, symlink/special file, cancel, stale renderer hash, wrong/child/stale `WebContents`/frame, record mode/symlink, and atomic crash boundaries. Integration tests prove every listed service is blocked before model/planner/manifest/helper effects and becomes enabled only through an injected valid gate. `rule-compatibility-approval.spec.ts` uses only the packaged sentinel fixture and temporary userData; its fake native response can approve that fixture hash but must reject `/Users/ao/我的大脑` and aliases before reading. No automated test creates a formal approval record.
+Unit tests cover missing/changed/reverted rule, changed one of each five files, validator-version bump, root/ancestor/entry replacement at native scan hooks, hidden rule-path collision, synthetic fixture failure, symlink/special file, cancel, stale renderer hash, wrong/child/stale `WebContents`/frame, record mode/symlink, and atomic crash boundaries. Integration tests prove every listed service is blocked before model/planner/manifest/helper effects and becomes enabled only through an injected valid gate. `rule-compatibility-approval.spec.ts` uses only the packaged sentinel fixture and temporary userData; its fake native response can approve that fixture hash but must reject `~/我的大脑` and aliases before reading. No automated test creates a formal approval record.
 
 Run:
 
@@ -1715,7 +1715,7 @@ The factory returns separate frozen `issuer` and `consumer` objects. Electron ma
 
 - [ ] **Step 4: Write the complete production-policy scope matrix**
 
-Create `production-mutation-target-policy.test.ts` against a temporary fake formal root and injected realpath/stat/profile/grant adapters. Do not open `/Users/ao/我的大脑`. Cover this matrix:
+Create `production-mutation-target-policy.test.ts` against a temporary fake formal root and injected realpath/stat/profile/grant adapters. Do not open `~/我的大脑`. Cover this matrix:
 
 | Plan/operation | Required authority | Allowed paths and steps |
 |---|---|---|
@@ -2506,7 +2506,7 @@ expect(deepseek).toMatchObject({
 
 Require automated Git/lock/App/DMG hashes to equal current values; production capability to carry `bootstrapInitiator:'app-settings'` plus a schema-valid `bootstrapHandshakeSha256`; production capability, DeepSeek snapshots, baseline, and formal verifier helper SHA/protocol to equal the currently signed packaged helper; DeepSeek App hash to equal automated/current App; dependency-boundary hash to equal a fresh analyzer result; baseline's approved-rule record to equal the current descriptor-read appData approval; formal evidence to reference the exact baseline evidence hash plus immutable manifest and journal-terminal hashes; and timestamps to satisfy `automated.completedAt <= rules.approvedAt <= capability.completedAt <= deepseek.completedAt <= baseline.capturedAt < authorization.confirmedAt <= terminal.completedAt <= formal.verifiedAt`. A time equality is allowed only where shown.
 
-Assert the public report contains neither `/Users/ao/我的大脑`, `Library/Application Support`, `sk-`, source text, model output, before/after bytes, vault-relative child paths, private index paths, tokens, Electron session IDs, nor raw manifest/journal content. Missing, running, failed, skipped, stale, hash-mismatched, out-of-order, or extra-key evidence must render only `最终状态：尚未达到最终可用标准` and list stable reason codes.
+Assert the public report contains neither `~/我的大脑`, `Library/Application Support`, `sk-`, source text, model output, before/after bytes, vault-relative child paths, private index paths, tokens, Electron session IDs, nor raw manifest/journal content. Missing, running, failed, skipped, stale, hash-mismatched, out-of-order, or extra-key evidence must render only `最终状态：尚未达到最终可用标准` and list stable reason codes.
 
 - [ ] **Step 4: Implement deterministic report rendering and revalidation**
 
@@ -2583,7 +2583,7 @@ With the App quit, export developer acceptance evidence for that already App-cre
 
 ```bash
 npm run bootstrap:capability:packaged -- --evidence-only
-npm run smoke:deepseek:real -- --formal-vault /Users/ao/我的大脑
+npm run smoke:deepseek:real -- --formal-vault ~/我的大脑
 ```
 
 Expected: evidence-only mode performs no bootstrap or promotion and binds the App-created current signed-helper/crash-matrix profile with `formalNetChangesObserved=0` and `formalSnapshotStability=two-identical-descriptor-scans`; DeepSeek reports `appVaultRuntimeLoaded=false`, `vaultNetChangesObserved=0`, `vaultSnapshotStability=two-identical-descriptor-scans`, and a dependency-boundary hash.
@@ -2591,7 +2591,7 @@ Expected: evidence-only mode performs no bootstrap or promotion and binds the Ap
 Quit Obsidian and every plugin/process that can edit the vault. Capture the baseline:
 
 ```bash
-WRITE_ENABLED=false npm run acceptance:formal:baseline -- --vault /Users/ao/我的大脑 --app-data "$HOME/Library/Application Support/小兆大脑" --helper release/mac-arm64/小兆大脑.app/Contents/Resources/native/atomic-file-helper --output .local/acceptance/formal-vault-before.json
+WRITE_ENABLED=false npm run acceptance:formal:baseline -- --vault ~/我的大脑 --app-data "$HOME/Library/Application Support/小兆大脑" --helper release/mac-arm64/小兆大脑.app/Contents/Resources/native/atomic-file-helper --output .local/acceptance/formal-vault-before.json
 ```
 
 Expected: the signed packaged helper produces two identical descriptor-anchored hidden-inclusive root/rule/allowed-file/whole-namespace snapshots, `netChangesObserved=0`, and `snapshotStability=two-identical-descriptor-scans`. This is an exact net-stability statement, not proof that no transient write occurred between observations. Do not run the baseline again after the App write; a fresh baseline restarts the supervised acceptance attempt.
@@ -2601,8 +2601,8 @@ Open exactly `release/mac-arm64/小兆大脑.app`, select one existing `未提�
 After the one App-native confirmed batch, generate and scan both reports:
 
 ```bash
-WRITE_ENABLED=false npm run acceptance:formal:verify -- --vault /Users/ao/我的大脑 --app-data "$HOME/Library/Application Support/小兆大脑" --helper release/mac-arm64/小兆大脑.app/Contents/Resources/native/atomic-file-helper --baseline .local/acceptance/formal-vault-before.json --latest-supervised --output .local/acceptance/formal-vault-after.json
-WRITE_ENABLED=false VAULT_REAL_ROOT=/Users/ao/我的大脑 npm run smoke:real-vault
+WRITE_ENABLED=false npm run acceptance:formal:verify -- --vault ~/我的大脑 --app-data "$HOME/Library/Application Support/小兆大脑" --helper release/mac-arm64/小兆大脑.app/Contents/Resources/native/atomic-file-helper --baseline .local/acceptance/formal-vault-before.json --latest-supervised --output .local/acceptance/formal-vault-after.json
+WRITE_ENABLED=false VAULT_REAL_ROOT=~/我的大脑 npm run smoke:real-vault
 npm run acceptance:report -- --kind personal-v1 --app-data "$HOME/Library/Application Support/小兆大脑" --automated .local/acceptance/automated.json --capability .local/acceptance/production-capability.json --deepseek .local/acceptance/deepseek-smoke.json --baseline .local/acceptance/formal-vault-before.json --formal .local/acceptance/formal-vault-after.json --output docs/acceptance/personal-v1-evidence.md
 npm run acceptance:report -- --kind test-vault --automated .local/acceptance/automated.json --output docs/acceptance/test-vault-report.md
 npm run test:unit -- tests/unit/release/public-evidence-scan.test.ts

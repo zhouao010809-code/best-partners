@@ -10,7 +10,7 @@
 
 ## 审查范围与验证
 
-- 工作区：`/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read`，包括进入本轮前的 dirty/untracked 实现。
+- 工作区：`PROJECT_ROOT`，包括进入本轮前的 dirty/untracked 实现。
 - 检查：intake service/plan/archive/snapshot、ingestion service/coordinator/review-store、两套 trash service/native port、文件网关与只读 helper、SQLite kernel、start-server、Electron main/preload/navigation，以及问问输入 schema/工具边界。
 - 没有改业务代码、访问或写入真实资料、调用真实模型、启动 Electron 或浏览器、重建/清理 dist，也没有 Git 提交。外部依赖说明仅查询公开官方文档。
 
@@ -24,7 +24,7 @@
 
 原生归档源码修改时间为 2026-09-07，所用个人原生模块构建时间为 2026-09-10；本轮未重新跑所有 native writer 合同或 Electron 退出合同。不能将前轮这些合同的通过数记作本轮重新验证。
 
-复现脚本：[files-probe.mts](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/.local/files-readiness-audit-2026-09-10/files-probe.mts)。运行：
+复现脚本：[files-probe.mts](PROJECT_ROOT/.local/files-readiness-audit-2026-09-10/files-probe.mts)。运行：
 
 ```sh
 node --import tsx .local/files-readiness-audit-2026-09-10/files-probe.mts
@@ -38,19 +38,19 @@ npx vitest run --config vitest.archive.config.ts tests/archive/intake-service.te
 
 | 输入/操作 | 当前行为 | 依据 |
 |---|---|---|
-| 在问问粘贴文字 | 支持，单条最多 16,000 字符；会话请求没有附件字段 | [assistant.ts:22](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/shared/api/assistant.ts:22) |
-| 向问问选文件、拖入 PDF/图片/DOCX | 不支持；没有上传路由/附件表/解析器；严格 schema 拒绝额外 `attachments` 字段 | 同上；[assistant routes:9](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/api/routes/assistant.ts:9)；`package.json` 无 PDF/OCR 依赖 |
-| Electron 选择本地文件 | 当前唯一选择对话框用于选择整个 Vault 目录，没有“上传附件”的 IPC | [main.ts:64](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/electron/main.ts:64)，[preload.ts:4](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/electron/preload.ts:4) |
-| clipper 顶层目录包，内有主 `.md` | 支持推断资料字段、预览、确认归档；主文档与包名规范化，原件留恢复记录 | [intake-service.ts:62](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/services/intake-service.ts:62) |
+| 在问问粘贴文字 | 支持，单条最多 16,000 字符；会话请求没有附件字段 | [assistant.ts:22](PROJECT_ROOT/src/shared/api/assistant.ts:22) |
+| 向问问选文件、拖入 PDF/图片/DOCX | 不支持；没有上传路由/附件表/解析器；严格 schema 拒绝额外 `attachments` 字段 | 同上；[assistant routes:9](PROJECT_ROOT/src/server/api/routes/assistant.ts:9)；`package.json` 无 PDF/OCR 依赖 |
+| Electron 选择本地文件 | 当前唯一选择对话框用于选择整个 Vault 目录，没有“上传附件”的 IPC | [main.ts:64](PROJECT_ROOT/src/electron/main.ts:64)，[preload.ts:4](PROJECT_ROOT/src/electron/preload.ts:4) |
+| clipper 顶层目录包，内有主 `.md` | 支持推断资料字段、预览、确认归档；主文档与包名规范化，原件留恢复记录 | [intake-service.ts:62](PROJECT_ROOT/src/server/services/intake-service.ts:62) |
 | clipper 顶层单个 `.md` / `.txt` / `.pdf` | 显示“这是单个文件，当前需按资料包归档”，不移动 | 同上第 65 行；PDF 探针实证 |
 | 仅有 PDF 的目录包 | 显示“没有找到主 Markdown”，不解析、不归档 | 同上第 68–69 行；PDF 探针实证 |
-| 主 Markdown + PDF/图片/任意普通二进制附件 | 可以一起移动并保留附件字节；PDF 内文不进入主 Markdown，也不会自动被提炼 | [archive-snapshot.ts:51](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/archive/archive-snapshot.ts:51)，PDF 探针实证 |
-| 在 Vault 放入合规的已归档 Markdown | 扫描后可检索、提炼；没有“从桌面导入”的用户入口；PDF 不入索引 | [SearchIndexer.ts:192](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/index/SearchIndexer.ts:192)（只收 `.md`） |
-| 问问要求“提炼当前资料” | 支持准备完整 Markdown 证据并提交待审候选；不正式入库 | [brain-tools.ts:139](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/assistant/brain-tools.ts:139) |
-| 问问要求“归档这个文件”“将候选正式入库” | 无对应工具；现有工具只有检索、读文档、准备提炼、提交候选 | [brain-tools.ts:96](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/assistant/brain-tools.ts:96) |
-| 正式知识入库 | 候选审阅页支持新增/合并/仅引用；预览后确认，支持未完成批次恢复 | [ingestion-service.ts:138](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/ingestion/ingestion-service.ts:138) |
-| 回收未归档资料包 | 整个包和附件一起回收、恢复；部分彻底删除需重新预览剩余内容 | [intake-trash-service.ts:352](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/trash/intake-trash-service.ts:352) |
-| 回收已归档资料/知识 | 只处理选中的 Markdown，附件与父目录仍留原处；不能把它当作“删除整个 PDF 资料包” | [trash-native.ts:3](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/trash/trash-native.ts:3) |
+| 主 Markdown + PDF/图片/任意普通二进制附件 | 可以一起移动并保留附件字节；PDF 内文不进入主 Markdown，也不会自动被提炼 | [archive-snapshot.ts:51](PROJECT_ROOT/src/server/archive/archive-snapshot.ts:51)，PDF 探针实证 |
+| 在 Vault 放入合规的已归档 Markdown | 扫描后可检索、提炼；没有“从桌面导入”的用户入口；PDF 不入索引 | [SearchIndexer.ts:192](PROJECT_ROOT/src/server/index/SearchIndexer.ts:192)（只收 `.md`） |
+| 问问要求“提炼当前资料” | 支持准备完整 Markdown 证据并提交待审候选；不正式入库 | [brain-tools.ts:139](PROJECT_ROOT/src/server/assistant/brain-tools.ts:139) |
+| 问问要求“归档这个文件”“将候选正式入库” | 无对应工具；现有工具只有检索、读文档、准备提炼、提交候选 | [brain-tools.ts:96](PROJECT_ROOT/src/server/assistant/brain-tools.ts:96) |
+| 正式知识入库 | 候选审阅页支持新增/合并/仅引用；预览后确认，支持未完成批次恢复 | [ingestion-service.ts:138](PROJECT_ROOT/src/server/ingestion/ingestion-service.ts:138) |
+| 回收未归档资料包 | 整个包和附件一起回收、恢复；部分彻底删除需重新预览剩余内容 | [intake-trash-service.ts:352](PROJECT_ROOT/src/server/trash/intake-trash-service.ts:352) |
+| 回收已归档资料/知识 | 只处理选中的 Markdown，附件与父目录仍留原处；不能把它当作“删除整个 PDF 资料包” | [trash-native.ts:3](PROJECT_ROOT/src/server/trash/trash-native.ts:3) |
 
 PDF 探针输出要点：`markdownPlusPdf=archived`、`pdfTextEnteredMarkdown=false`、`originalMarkdownBytesPreserved=true`；重复提交与重启后 resume 返回同一操作，没有新增 journal。附件 SHA-256 为 `b8d8fd799f12a7b9fcaa4714df6be44c9900d339e31971dabeee92bb6e2b74b1`。
 
@@ -58,7 +58,7 @@ PDF 探针输出要点：`markdownPlusPdf=archived`、`pdfTextEnteredMarkdown=fa
 
 ### 归档
 
-`intake.preview → planIntakeMain → captureArchiveTree → prepareIntakeArchive → executeIntakeArchive` 已经负责字段、命名、整包快照、旧主文档保留、主文件交换与目录移动。确认前重新检查完整包、规则与目标冲突；同 token 复用 operationId，重启后通过 operationId 继续。参见 [intake-service.ts:88](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/services/intake-service.ts:88)、[intake-archive.ts:150](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/archive/intake-archive.ts:150)、[intake-archive.ts:213](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/archive/intake-archive.ts:213)。
+`intake.preview → planIntakeMain → captureArchiveTree → prepareIntakeArchive → executeIntakeArchive` 已经负责字段、命名、整包快照、旧主文档保留、主文件交换与目录移动。确认前重新检查完整包、规则与目标冲突；同 token 复用 operationId，重启后通过 operationId 继续。参见 [intake-service.ts:88](PROJECT_ROOT/src/server/services/intake-service.ts:88)、[intake-archive.ts:150](PROJECT_ROOT/src/server/archive/intake-archive.ts:150)、[intake-archive.ts:213](PROJECT_ROOT/src/server/archive/intake-archive.ts:213)。
 
 限制必须在上传前后分层展示：单文件 10 MiB、包总量 16 MiB、最多 10,000 项、深度 64；journal 上限 32 MiB。归档预览截取最多 30,000 字符用于展示，但实际写入按完整字节验证。这些限制不能因新增上传入口而绕过。新增普通本地资料可使用已存在的平台“个人/其他”，不必增加来源枚举或改真实 Vault 规则。
 
@@ -66,19 +66,19 @@ PDF 探针输出要点：`markdownPlusPdf=archived`、`pdfTextEnteredMarkdown=fa
 
 ### 提炼与入库
 
-提炼入口目前要求：已归档、`未提炼`、索引与原文哈希一致、完整 Markdown ≤100,000 字节；超过就拒绝，不截断。普通提炼重复 start token 不重复请求；异常重启将 generating 标记 failed，不自动重新付费请求。参见 [extraction-service.ts:67](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/services/extraction-service.ts:67)、[extraction-service.ts:134](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/services/extraction-service.ts:134)、[extraction-service.ts:256](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/services/extraction-service.ts:256)。
+提炼入口目前要求：已归档、`未提炼`、索引与原文哈希一致、完整 Markdown ≤100,000 字节；超过就拒绝，不截断。普通提炼重复 start token 不重复请求；异常重启将 generating 标记 failed，不自动重新付费请求。参见 [extraction-service.ts:67](PROJECT_ROOT/src/server/services/extraction-service.ts:67)、[extraction-service.ts:134](PROJECT_ROOT/src/server/services/extraction-service.ts:134)、[extraction-service.ts:256](PROJECT_ROOT/src/server/services/extraction-service.ts:256)。
 
-正式入库先持久化确认批次和候选绑定，再按顺序执行知识文件和原资料回链。每份文件保留 before/after、原生独占创建或交换、逐步验证；这是可恢复批次，不是跨多文件原子事务。完整回执后重试只重建索引，不重写文件。启动恢复只推进已确认批次，外部改动转为 `needs-review`。参见 [ingestion-service.ts:235](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/ingestion/ingestion-service.ts:235)、[ingestion-coordinator.ts:102](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/ingestion/ingestion-coordinator.ts:102)、[start-server.ts:199](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/start-server.ts:199)。
+正式入库先持久化确认批次和候选绑定，再按顺序执行知识文件和原资料回链。每份文件保留 before/after、原生独占创建或交换、逐步验证；这是可恢复批次，不是跨多文件原子事务。完整回执后重试只重建索引，不重写文件。启动恢复只推进已确认批次，外部改动转为 `needs-review`。参见 [ingestion-service.ts:235](PROJECT_ROOT/src/server/ingestion/ingestion-service.ts:235)、[ingestion-coordinator.ts:102](PROJECT_ROOT/src/server/ingestion/ingestion-coordinator.ts:102)、[start-server.ts:199](PROJECT_ROOT/src/server/start-server.ts:199)。
 
-删除后的同路径新资料聚合已应用删除 cutoff，历史仍按 ID 可读：[review-store.ts:45](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/ingestion/review-store.ts:45)。新附件层应使用稳定 documentId/attachmentId，避免再把“同名文件”当成同一文档身份。
+删除后的同路径新资料聚合已应用删除 cutoff，历史仍按 ID 可读：[review-store.ts:45](PROJECT_ROOT/src/server/ingestion/review-store.ts:45)。新附件层应使用稳定 documentId/attachmentId，避免再把“同名文件”当成同一文档身份。
 
 ### 回收、重启和桌面边界
 
-已归档 Markdown 回收采用持久意图与 SQLite；启动只校验，不自动移动或删除。收件箱包回收采用独立目录与不可变意图；已使用的永久删除 token 只查询结果，不能继续删除剩余树。两者恢复均拒绝覆盖同名新文件。归档与收件箱回收共享应用互斥门；未完成入库会阻止关联资料回收。参见 [trash-service.ts:71](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/trash/trash-service.ts:71)、[trash-service.ts:296](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/trash/trash-service.ts:296)、[intake-trash-service.ts:488](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/trash/intake-trash-service.ts:488)。
+已归档 Markdown 回收采用持久意图与 SQLite；启动只校验，不自动移动或删除。收件箱包回收采用独立目录与不可变意图；已使用的永久删除 token 只查询结果，不能继续删除剩余树。两者恢复均拒绝覆盖同名新文件。归档与收件箱回收共享应用互斥门；未完成入库会阻止关联资料回收。参见 [trash-service.ts:71](PROJECT_ROOT/src/server/trash/trash-service.ts:71)、[trash-service.ts:296](PROJECT_ROOT/src/server/trash/trash-service.ts:296)、[intake-trash-service.ts:488](PROJECT_ROOT/src/server/trash/intake-trash-service.ts:488)。
 
-原生路径依靠目录描述符、root/dev/inode、同盘限制、无符号链接、独占锁与 rename 前后验证；没有开放任意写文件 IPC。Electron 窗口保持 sandbox/contextIsolation，主 IPC 验证当前主窗口和同源 mainFrame。退出实现为 `idle/closing/ready`，待窗口准许退出后才关闭服务。参见 [sandbox-archive.c:776](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/native/macos/sandbox-archive.c:776)、[sandbox-archive.c:1136](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/native/macos/sandbox-archive.c:1136)、[main.ts:21](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/electron/main.ts:21)、[main.ts:142](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/electron/main.ts:142)。这不等于允许未来上传接口让客户端传任意绝对路径。
+原生路径依靠目录描述符、root/dev/inode、同盘限制、无符号链接、独占锁与 rename 前后验证；没有开放任意写文件 IPC。Electron 窗口保持 sandbox/contextIsolation，主 IPC 验证当前主窗口和同源 mainFrame。退出实现为 `idle/closing/ready`，待窗口准许退出后才关闭服务。参见 [sandbox-archive.c:776](PROJECT_ROOT/native/macos/sandbox-archive.c:776)、[sandbox-archive.c:1136](PROJECT_ROOT/native/macos/sandbox-archive.c:1136)、[main.ts:21](PROJECT_ROOT/src/electron/main.ts:21)、[main.ts:142](PROJECT_ROOT/src/electron/main.ts:142)。这不等于允许未来上传接口让客户端传任意绝对路径。
 
-一个现存的明确恢复边界：归档 stage 已落盘但 intent 缺失/损坏时会保留文件并暂停后续归档，不能仅靠 App 的 resume 自动修复。当前代码和测试有意采用此行为，不能删除 stage 来“解除阻塞”。附件工作流应展示可定位的恢复项与原因，避免只显示收件箱整体不可用。参见 [intake-archive.ts:107](/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/src/server/archive/intake-archive.ts:107)。
+一个现存的明确恢复边界：归档 stage 已落盘但 intent 缺失/损坏时会保留文件并暂停后续归档，不能仅靠 App 的 resume 自动修复。当前代码和测试有意采用此行为，不能删除 stage 来“解除阻塞”。附件工作流应展示可定位的恢复项与原因，避免只显示收件箱整体不可用。参见 [intake-archive.ts:107](PROJECT_ROOT/src/server/archive/intake-archive.ts:107)。
 
 ## 附件 → 问问 → 归档 → 提炼：最小闭环
 

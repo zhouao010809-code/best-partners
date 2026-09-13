@@ -37,7 +37,7 @@
 
 更新当前运行包的 `Contents/Resources/app/dist/client`、`server`、`electron`，包括新增 IPC preload；native 与依赖保持。运行包位置：`dist/desktop/最佳拍档-darwin-arm64/最佳拍档.app`。
 
-本轮更新前完整运行目录备份：`/Users/ao/.Trash/settings-complete-runtime-backup-4flxvq37`（client/server/electron）。更早前端备份仍保留。部署后源构建与运行包逐文件比较一致。当前应用已打开设置页，启动端口按实例分配，不作为稳定契约。
+本轮更新前完整运行目录备份：`~/.Trash/settings-complete-runtime-backup-4flxvq37`（client/server/electron）。更早前端备份仍保留。部署后源构建与运行包逐文件比较一致。当前应用已打开设置页，启动端口按实例分配，不作为稳定契约。
 
 ## 独立发现：操作页首次断线/构建后的自动恢复
 

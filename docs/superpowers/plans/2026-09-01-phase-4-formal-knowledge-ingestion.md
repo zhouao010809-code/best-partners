@@ -87,7 +87,7 @@
 - `WritePlan.ruleBundleSha256` 使用 Phase 0 的全局五文件 bundle（`00_ / 01_ / 02_图书馆入馆规则 / 03_ / 05_`）；计划与执行前都重读比对。
 - `FormalIngestionPlanner`、batch execution 和 recovery mutation 都依赖 Phase 0 注入的 `RuleCompatibilityGate` port/record；默认 deny，测试 fixture 可批准测试指纹，Phase 6 才实现 Electron production 审批，本阶段不另建实现。当前指纹未被明确批准时返回 `RULE_BUNDLE_UNAPPROVED`；重启或重新生成 diff 不得自动批准规则，读取、已有候选审阅和 recovery 只读诊断仍可用。
 - 所有写测试必须先通过现有测试 vault guard，且 mutation root 必须是本测试用 `mkdtemp` 创建并带精确哨兵的目录。
-- 本阶段自动化不得写 `/Users/ao/我的大脑`；正式 vault 的首笔写入只属于最终人工监督验收。
+- 本阶段自动化不得写 `~/我的大脑`；正式 vault 的首笔写入只属于最终人工监督验收。
 - SQLite 可保存 plan JSON，但恢复所需的 before/after bytes 必须在第一次 mutation 前进入 Phase 1 自包含外部 manifest。
 - SQLite 也不能是 intent finalizer 所需业务投影的唯一副本。任何可能进入 recovery 的 intake/extraction manifest 都必须在第一次 mutation 前携带 strict、版本化、哈希绑定且不含秘密的 `domainProjectionCapsule`；SQLite 删除后必须能仅凭 manifest/journal/vault 重建原 intent 的必要 rows、binding、finalization 与索引投影。
 - 知识操作在前，来源操作唯一且永远最后；UI 只有 batch `committed` 才能显示成功。

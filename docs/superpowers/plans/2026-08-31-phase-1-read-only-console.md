@@ -384,7 +384,7 @@ git commit -m "feat: add the black-glass application shell"
 - Test: tests/component/material-deck/MaterialDeck.test.tsx
 - Test: tests/component/material-deck/MaterialDeck.csp.test.tsx
 - Test: tests/e2e/production-deck.spec.ts
-- Source reference: /Users/ao/Desktop/production-deck-source-kit-2026-08-31 2/portable/src
+- Source reference: INTERNAL_SOURCE_KIT/portable/src
 
 - [ ] **Step 1: Write layout tests before copying code**
 

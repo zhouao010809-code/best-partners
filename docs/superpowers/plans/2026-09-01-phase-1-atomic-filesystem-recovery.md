@@ -32,7 +32,7 @@
 - Start after Phase 0 direct-read Electron runtime is green.
 - Use a standalone C executable, never N-API or another Node addon.
 - Automated mutations require `.xiaozhao-atomic-test-vault.json` in an independent test vault.
-- Reject `/Users/ao/我的大脑`, the configured formal root, missing or symlinked sentinels, and nested app-data/vault paths before starting the helper.
+- Reject `~/我的大脑`, the configured formal root, missing or symlinked sentinels, and nested app-data/vault paths before starting the helper.
 - Never fall back to overwrite `rename`, `copyFile`, unlink-before-rename, or SQLite-only recovery.
 - macOS does not provide an expected-inode compare-and-swap rename. The proven invariant is therefore precise: preflight binds the expected entries; the native rename is atomic and non-overwriting; postflight rechecks both names; any external race is never reported as success, and all observed versions are preserved or the batch stops for manual recovery. Do not claim that an uncooperative process can never cause a transient exchange between the last precheck and `renameatx_np`.
 - A profile authorizes only the exact helper SHA, OS build, architecture, and target-volume identity it proves.
@@ -1936,7 +1936,7 @@ Run a hidden-inclusive, read-only filesystem inventory twice around the complete
 set -o pipefail
 XIAOZHAO_PHASE1_AUDIT_DIR="$(mktemp -d "${TMPDIR%/}/xiaozhao-phase1-audit.XXXXXX")"
 snapshot_formal_vault() {
-  /usr/bin/find /Users/ao/我的大脑 -xdev -print0 |
+  /usr/bin/find ~/我的大脑 -xdev -print0 |
     while IFS= read -r -d '' entry; do
       /usr/bin/stat -f 'entry|%HT|%Lp|%d|%i|%z|%m|%N' "$entry"
       if [[ -f "$entry" && ! -L "$entry" ]]; then

@@ -50,4 +50,4 @@
 - 首次使用 GUI：开发版与 arm64 打包版分别覆盖有待提炼资料和完全空大脑，共 4/4 通过。
 - 启动安全检查：开发版与打包版 4/4 通过；收件箱归档 2/2 通过；提炼隔离复跑 2/2 通过；候选入库/重启恢复 2/2 通过。
 - `npm run build:desktop-runtime` 与 `npm run package:mac` 均通过，运行包已包含首页、收件箱和整理单最小修正。
-- 详细阶段判断、验收条件、未验证项和后续复查规则写入 `docs/reviews/2026-09-11-first-run-walkthrough.md`；README 与 `/Users/ao/我的大脑/AGENTS.md` 已引用。
+- 详细阶段判断、验收条件、未验证项和后续复查规则写入 `docs/reviews/2026-09-11-first-run-walkthrough.md`；README 与 `~/我的大脑/AGENTS.md` 已引用。

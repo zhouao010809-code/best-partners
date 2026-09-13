@@ -12,9 +12,9 @@
 
 ## Fixed locations and authority
 
-- Source repository: `/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console`
+- Source repository: `PROJECT_ROOT`
 - Approved specification: `docs/superpowers/specs/2026-09-01-xiaozhao-brain-personal-desktop-v1-design.md`
-- Formal vault: `/Users/ao/我的大脑`
+- Formal vault: `~/我的大脑`
 - Runtime state: Electron `app.getPath('userData')`, never inside the formal vault
 - Intake source: `01图书馆/小兆clipper`
 - Native target: current `arm64` Mac running macOS 15.5
@@ -55,7 +55,7 @@ Each phase must leave the repository buildable and independently testable. A lat
 
 ## Permanent safety invariants
 
-1. Automated write tests reject `/Users/ao/我的大脑`, the configured formal vault, and any vault without the exact test sentinel.
+1. Automated write tests reject `~/我的大脑`, the configured formal vault, and any vault without the exact test sentinel.
 2. No test, CI command, fixture server, or model response can trigger the supervised formal-vault confirmation endpoint.
 3. The renderer never receives vault filesystem powers or a stored plaintext API key.
 4. Formal file changes require an immutable `WritePlan`, an fsynced journal intent, a currently valid rule bundle, and the exact expected file hashes.

@@ -10,7 +10,7 @@
 
 ---
 
-All paths below are relative to /Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console.
+All paths below are relative to PROJECT_ROOT.
 
 ### Task 1: Initialize the repository and prove both processes build
 
@@ -42,11 +42,11 @@ All paths below are relative to /Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-c
 Run:
 
 ~~~bash
-cd '/Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console'
+cd 'PROJECT_ROOT'
 git init -b main
 ~~~
 
-Expected: Initialized empty Git repository under xiaozhao-brain-console/.git. Confirm that git -C /Users/ao/我的大脑 rev-parse still fails.
+Expected: Initialized empty Git repository under xiaozhao-brain-console/.git. Confirm that git -C ~/我的大脑 rev-parse still fails.
 
 - [ ] **Step 2: Add package and tool configuration**
 
@@ -124,8 +124,8 @@ Write .nvmrc as 22.22.3. Write .gitignore with node_modules, dist, coverage, pla
 ~~~dotenv
 APP_HOST=127.0.0.1
 APP_PORT=4317
-APP_DATA_DIR=/Users/ao/Library/Application Support/xiaozhao-brain-console
-VAULT_REAL_ROOT=/Users/ao/我的大脑
+APP_DATA_DIR=~/Library/Application Support/best-partners
+VAULT_REAL_ROOT=~/我的大脑
 OBSIDIAN_API_URL=https://127.0.0.1:27124
 OBSIDIAN_API_KEY=
 MODEL_BASE_URL=https://api.deepseek.com

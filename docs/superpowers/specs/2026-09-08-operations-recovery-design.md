@@ -39,4 +39,4 @@
 
 2026-09-08 验收：118 项相关组件测试、80 项相关集成测试、4 项浏览器测试通过；类型检查及构建通过。浏览器覆盖 1440/1024/390 宽度、按需打开/关闭、隔离核验、筛选及键盘导航。真实记录只读核验：16 条记录、2 条待处理、0 条进行中，各来源读取完整；未执行真实资料的恢复、删除、归档或 AI 重试。
 
-运行包已同步 client/server，Electron 及 native 文件未改变。当前进程 52501，页面 `http://127.0.0.1:53753/operations`；旧运行包保留于 `/Users/ao/.Trash/operations-runtime-backup-xvPFKV`。页面截图位于 `.local/operations-live-selected.png`，隔离视觉验收位于 `test-results/operations/`。
+运行包已同步 client/server，Electron 及 native 文件未改变。当前进程 52501，页面 `http://127.0.0.1:53753/operations`；旧运行包保留于 `~/.Trash/operations-runtime-backup-xvPFKV`。页面截图位于 `.local/operations-live-selected.png`，隔离视觉验收位于 `test-results/operations/`。

@@ -6,7 +6,7 @@ authorize or execute formal-vault writes, document repairs, or DeepSeek calls.
 
 ## Real desktop read evidence
 
-The packaged arm64 `小兆大脑.app` independently read `/Users/ao/我的大脑`
+The packaged arm64 `小兆大脑.app` independently read `~/我的大脑`
 through `NativeReadVaultPort` / `FileSystemVaultGateway`. The embedded server
 reported a ready filesystem source and index V1. No Obsidian API was used.
 
