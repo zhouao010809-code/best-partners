@@ -14,6 +14,9 @@
     <h1>最佳拍档网页剪藏</h1>
     <p>扩展只把当前页面的标题、链接、可读正文和时间候选交给桌面 App 的本地 Native Messaging host。</p>
     <h2>首次连接</h2>
+    <label for="token">配对令牌</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false" style="display:block;width:100%;box-sizing:border-box;margin:.4rem 0 1rem;padding:.5rem">
+    <button id="save" type="button">保存令牌</button>
     <p>请先打开桌面 App 并完成“安装网页剪藏 host”，再点击测试。浏览器会要求确认一次，这是为了允许扩展连接本机 App；扩展不会静默安装或访问任意文件。</p>
     <button id="test" type="button">测试首次连接</button>
     <button id="retry" type="button">重试待发送收藏</button>

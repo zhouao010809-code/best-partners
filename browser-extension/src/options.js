@@ -1,4 +1,12 @@
 const status = document.querySelector('#status');
+const tokenInput = document.querySelector('#token');
+
+chrome.storage.local.get('clipperToken').then((stored) => { if (typeof stored?.clipperToken === 'string') tokenInput.value = stored.clipperToken; });
+document.querySelector('#save').addEventListener('click', async () => {
+  const token = tokenInput.value.trim();
+  if (token.length < 32) { show('配对令牌至少需要 32 个字符。'); return; }
+  await chrome.storage.local.set({ clipperToken: token }); show('配对令牌已保存。');
+});
 
 function show(message) { status.textContent = message; }
 

@@ -4,7 +4,17 @@ import { createPendingStore } from './pending-store.js';
 
 const HOST_NAME = 'local.bestpartners.clipper';
 
-function sendNative(payload) {
+async function pairingToken() {
+  const stored = await chrome.storage.local.get('clipperToken');
+  if (typeof stored?.clipperToken !== 'string' || stored.clipperToken.length < 32) throw new Error('请先在扩展设置中填写配对令牌');
+  return stored.clipperToken;
+}
+
+async function sendNative(payload) {
+  const token = await pairingToken();
+  const message = payload?.type === 'ping'
+    ? { extensionId: chrome.runtime.id, token, type: 'ping' }
+    : { extensionId: chrome.runtime.id, token, payload };
   return new Promise((resolve, reject) => {
     let settled = false;
     let port;
@@ -18,7 +28,7 @@ function sendNative(payload) {
       port = chrome.runtime.connectNative(HOST_NAME);
       port.onMessage.addListener((response) => finish(resolve, response));
       port.onDisconnect.addListener(() => finish(reject, new Error(chrome.runtime.lastError?.message || 'Native host disconnected')));
-      port.postMessage(payload);
+      port.postMessage(message);
       setTimeout(() => finish(reject, new Error('Native host timed out')), 8000);
     } catch (error) {
       finish(reject, error);
