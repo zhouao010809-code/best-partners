@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "files": [
+    { "path": "00大脑规则/00_大脑规范.md", "sha256": "3c41039c6983b41e89550b4c32f40da86365dab0d07dffe59c283d71c019015f" },
+    { "path": "00大脑规则/01_总路由规则.md", "sha256": "8cc5cab3a3763d9da8c7f396a4d92c87287e62bd3f69308651a39760f7eddddb" },
+    { "path": "00大脑规则/02_图书馆入馆规则.md", "sha256": "acd4b0eed40c7357177ef7d40b81f3e7082b576a0797ae795f4fdb0274d1e2cf" },
+    { "path": "00大脑规则/03_知识库提炼与入库规则.md", "sha256": "a3420a21ac82cb63799fcf340bf871c8667497f7edeece878a0c8ba57b5b769b" },
+    { "path": "00大脑规则/05_链接命名与治理规则.md", "sha256": "305851762288127a1a43a4e29a569f5a712ff0872e8e9868263f9d4701796c8b" },
+    { "path": "01图书馆/小兆clipper/.gitkeep", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+    { "path": "01图书馆/来自示例/2026-09/示例资料/示例资料.md", "sha256": "27f0dfe36ee2859470689f536ce55c1178d68aa952e610af03ac4ac04d8a379d" },
+    { "path": "02知识库/示例主题/示例知识.md", "sha256": "daf83b206c01b71bacd77124ff6972dcdd2cd1b50e517da2c2a16255bcaff67e" },
+    { "path": "03大讲堂/.gitkeep", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+    { "path": "最佳拍档入门说明.md", "sha256": "76eb7f1692ff15d2d1c3d2c75e2a9f5cd6ec2871a12cd8874e2c75b93cce61b5" }
+  ]
+}
