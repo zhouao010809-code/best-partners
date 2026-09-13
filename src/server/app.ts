@@ -46,6 +46,8 @@ import type { AttachmentService } from './attachments/service.js';
 import { registerAttachmentRoutes } from './api/routes/attachments.js';
 import { createAssistantDraftService } from './assistant/draft-service.js';
 import { registerAssistantDraftRoutes } from './api/routes/assistant-drafts.js';
+import { registerSkillRoutes } from './api/routes/skills.js';
+import type { SkillCatalogService } from './services/skill-catalog.js';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -149,6 +151,7 @@ export interface BuildServerOptions {
   readonly healthService?: HealthService;
   readonly operationIdFactory?: () => string;
   readonly readApi?: ReadApiDependencies;
+  readonly skillCatalog?: SkillCatalogService;
   readonly onClose?: () => void | Promise<void>;
 }
 
@@ -267,6 +270,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     ...(readService === undefined ? {} : { service: readService }),
     operationId
   });
+  registerSkillRoutes(app, options.skillCatalog);
   registerOperationRoutes(app, { database: options.readApi?.database,
     intakeHistory: options.intakeService?.history,
     trash: options.trashService ? () => options.trashService!.list() : undefined,

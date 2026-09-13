@@ -28,6 +28,7 @@ import { createIntakeMutationGate } from './services/intake-mutation-gate.js';
 import { listIntakeArchives } from './archive/intake-archive.js';
 import { createDeepSeekAssistantAdapter } from './assistant/deepseek-adapter.js';
 import { createAttachmentService, type AttachmentService } from './attachments/service.js';
+import { createSkillCatalogService, type SkillCatalogService } from './services/skill-catalog.js';
 
 export interface EmbeddedServerConfig {
   readonly host: '127.0.0.1';
@@ -77,6 +78,7 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
   let intakeTrashPort: PersonalIntakeTrashPort | undefined;
   let intakeTrashService: IntakeTrashService | undefined;
   let attachmentService: AttachmentService | undefined;
+  let skillCatalog: SkillCatalogService | undefined;
   const intakeMutation = createIntakeMutationGate();
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
@@ -272,6 +274,9 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
       }
     }
     const policy = createLoopbackPolicy();
+    if (config.adapter === 'filesystem') {
+      skillCatalog = createSkillCatalogService({ skillsRoot: join(config.vaultRealRoot, '.claude', 'skills') });
+    }
     app = buildServer({
       healthService,
       ...(attachmentService ? { attachmentService } : {}),
@@ -283,6 +288,7 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
       ...(extractionService ? { extractionService } : {}),
       ...(ingestionService ? { ingestionService } : {}),
       ...(trashService ? { trashService } : {}),
+      ...(skillCatalog ? { skillCatalog } : {}),
       httpPolicy: {
         isAllowedHost: policy.isAllowedHost,
         isAllowedOrigin: (origin, required) => policy.isAllowedOrigin(origin, required)
