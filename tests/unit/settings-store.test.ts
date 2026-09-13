@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -53,6 +53,29 @@ describe('default vault template distribution', () => {
     })).rejects.toThrow('INVALID_TEMPLATE_OUTPUT');
     await expect(readFile(join(parentRoot, '我的大脑', '最佳拍档入门说明.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await readdir(parentRoot)).filter((entry) => entry.startsWith('.我的大脑-'))).toEqual([]);
+  });
+
+  it.each([
+    ['incomplete manifest', (manifest: { files: Array<{ path: string; sha256: string }> }) => { manifest.files.pop(); }],
+    ['mismatched file hash', (manifest: { files: Array<{ path: string; sha256: string }> }) => { manifest.files[0]!.sha256 = '0'.repeat(64); }]
+  ])('rejects a %s without publishing a partial vault', async (_label, mutate) => {
+    const parentRoot = await realpath(await root());
+    const userDataDir = await root();
+    const templateParent = await root();
+    const templateRoot = join(templateParent, 'default-vault');
+    await cp(resolve('templates/default-vault'), templateRoot, { recursive: true });
+    const manifestPath = join(templateRoot, 'template-manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { files: Array<{ path: string; sha256: string }> };
+    mutate(manifest);
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await expect(copyDefaultVaultTemplate({
+      parentRoot,
+      userDataDir,
+      templateRoot,
+      validate: vi.fn()
+    })).rejects.toThrow();
+    expect((await readdir(parentRoot)).filter((entry) => entry.startsWith('.我的大脑-'))).toEqual([]);
+    await expect(readdir(join(parentRoot, '我的大脑'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rejects a colliding name and leaves the existing directory untouched', async () => {
