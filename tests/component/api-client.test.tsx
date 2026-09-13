@@ -53,6 +53,22 @@ function readyHealth() {
 }
 
 describe('read console API facade', () => {
+  it('requests library directories with bounded declared filters and validates their complete counts', async () => {
+    const page = { mode: 'source', path: '来自B站/2026-09', breadcrumbs: [{ path: '', label: '全部资料' }],
+      folders: [], items: [], total: 0, directTotal: 0, unclassifiedCount: 0, indexVersion: 7 };
+    const fetchMock = vi.fn().mockResolvedValueOnce(success(page)).mockResolvedValueOnce(success({ ...page, total: -1 }));
+    const api = createBrowserReadConsoleApi(fetchMock);
+    const controller = new AbortController();
+    expect(await api.listLibrary({ mode: 'source', path: '来自B站/2026-09', status: '已入库', title: '原文 & 附件', limit: 20,
+      ...({ secret: 'never-send' } as object) }, controller.signal)).toEqual({ ok: true, value: page });
+    const [path, init] = fetchMock.mock.calls[0]!;
+    const url = new URL(path, 'http://127.0.0.1');
+    expect(url.pathname).toBe('/api/v1/library');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ mode: 'source', path: '来自B站/2026-09', status: '已入库', title: '原文 & 附件', limit: '20' });
+    expect(init).toMatchObject({ method: 'GET', credentials: 'same-origin', signal: controller.signal });
+    expect(await api.listLibrary({})).toMatchObject({ ok: false, state: { status: 'validation-error' } });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -145,6 +161,16 @@ describe('read console API facade', () => {
       invoke: (api: ReadConsoleApi) => api.listKnowledge({})
     },
     {
+      name: 'document issues',
+      payload: { items: [], unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.listDocumentIssues({})
+    },
+    {
+      name: 'original document',
+      payload: { path: '01图书馆/旧文档.md', title: '旧文档', markdown: '# 原文', versionMarker: { rawSha256: SHA }, unexpected: true },
+      invoke: (api: ReadConsoleApi) => api.getDocumentDetail('01图书馆/旧文档.md')
+    },
+    {
       name: 'knowledge detail',
       payload: {
         path: '02知识库/alpha.md',
@@ -204,6 +230,29 @@ describe('read console API facade', () => {
       '/api/v1/bootstrap',
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' })
     );
+  });
+
+  it.each(['SESSION_REQUIRED', 'CSRF_INVALID'])('refreshes authentication once after a pre-handler %s rejection', async (code) => {
+    const freshToken = 'f'.repeat(43);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(success({ csrfToken: CSRF }))
+      .mockResolvedValueOnce(jsonResponse({ error: { code, message: 'Authentication rejected', operationId: 'auth-1' } }, code === 'SESSION_REQUIRED' ? 401 : 403))
+      .mockResolvedValueOnce(success({ csrfToken: freshToken }))
+      .mockResolvedValueOnce(success({ opened: true, path: '02知识库/alpha.md' }));
+    const api = createBrowserReadConsoleApi(fetchMock);
+    expect(await api.openKnowledge('02知识库/alpha.md')).toEqual({ ok: true, value: { opened: true, path: '02知识库/alpha.md' } });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[3]?.[1]?.headers['x-csrf-token']).toBe(freshToken);
+  });
+
+  it('does not replay a mutation after an uncertain failure or loop on an authentication failure', async () => {
+    for (const code of ['INTERNAL_ERROR', 'CSRF_INVALID']) {
+      const fetchMock = vi.fn((path: RequestInfo | URL) => Promise.resolve(path === '/api/v1/bootstrap'
+        ? success({ csrfToken: CSRF })
+        : jsonResponse({ error: { code, message: 'Rejected', operationId: 'failure-1' } }, code === 'CSRF_INVALID' ? 403 : 500)));
+      expect((await createBrowserReadConsoleApi(fetchMock).openKnowledge('02知识库/alpha.md')).ok).toBe(false);
+      expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/knowledge/open')).toHaveLength(code === 'CSRF_INVALID' ? 2 : 1);
+    }
   });
 
   it('coalesces the first bootstrap across commands and never persists or logs the CSRF token', async () => {
@@ -296,6 +345,8 @@ describe('read console API facade', () => {
 
   it.each([
     ['health', '/api/v1/health', (api: ReadConsoleApi, signal: AbortSignal) => api.getHealth(signal)],
+    ['document issues', '/api/v1/documents/issues', (api: ReadConsoleApi, signal: AbortSignal) => api.listDocumentIssues({}, signal)],
+    ['original document', '/api/v1/documents/file?path=alpha.md', (api: ReadConsoleApi, signal: AbortSignal) => api.getDocumentDetail('alpha.md', signal)],
     ['materials', '/api/v1/materials', (api: ReadConsoleApi, signal: AbortSignal) => api.listMaterials({}, signal)],
     ['knowledge', '/api/v1/knowledge', (api: ReadConsoleApi, signal: AbortSignal) => api.listKnowledge({}, signal)],
     ['knowledge detail', '/api/v1/knowledge/file?path=alpha.md', (api: ReadConsoleApi, signal: AbortSignal) => (

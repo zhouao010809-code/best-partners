@@ -27,6 +27,7 @@ export const materialRecordSchema = z.object({
   processingStatus: z.enum(['未归档', '已归档']),
   knowledgeStatus: knowledgeStatusSchema,
   collectedAt: isoDateSchema.optional(),
+  topics: z.array(z.string().max(512)).max(1000).optional(),
   generatedKnowledge: z.array(z.string().max(1024)).max(1000)
 }).strict();
 
@@ -91,6 +92,14 @@ export const knowledgeQuerySchema = z.object({
 }).strict();
 
 export const knowledgeFileQuerySchema = z.object({ path: vaultPathSchema }).strict();
+export const documentIssueQuerySchema = z.object({
+  cursor: opaqueCursorSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional()
+}).strict();
+export const documentIssuePageSchema = z.object({
+  items: z.array(schemaIssueSchema),
+  nextCursor: opaqueCursorSchema.optional()
+}).strict();
 export const knowledgeOpenBodySchema = z.object({ path: vaultPathSchema }).strict();
 export const rebuildBodySchema = z.object({ indexVersion: z.number().int().nonnegative() }).strict();
 export const rebuildHeadersSchema = z.object({
@@ -110,12 +119,31 @@ export const knowledgePageSchema = z.object({
   nextCursor: opaqueCursorSchema.optional()
 }).strict();
 
-export const operationPageSchema = z.object({
-  items: z.array(z.never()),
-  nextCursor: opaqueCursorSchema.optional()
+export const operationQuerySchema = z.object({
+  view: z.enum(['all', 'attention', 'running']).optional(),
+  cursor: z.string().regex(/^\d{1,9}$/u).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional()
 }).strict();
+export const operationRecordSchema = z.object({
+  id: z.string().min(1), sourceId: z.string().min(1), title: z.string().min(1),
+  kind: z.enum(['archive', 'extraction', 'ingestion', 'trash', 'restore', 'delete']),
+  bucket: z.enum(['attention', 'running', 'history']), statusLabel: z.string(),
+  occurredAt: z.iso.datetime().optional(), timeLabel: z.string().optional(),
+  summary: z.string(), preserved: z.string(), nextStep: z.string(), paths: z.array(z.string()),
+  action: z.object({ kind: z.enum(['navigate', 'resume-archive', 'resume-index', 'refresh']), label: z.string(),
+    href: z.string().regex(/^\/(?:trash|library|extractions|intake)(?:[/?#]|$)/u).optional() }).strict()
+}).strict();
+export const operationPageSchema = z.object({
+  items: z.array(operationRecordSchema),
+  nextCursor: z.string().regex(/^\d{1,9}$/u).optional(),
+  counts: z.object({ all: z.number().int().nonnegative(), attention: z.number().int().nonnegative(), running: z.number().int().nonnegative() }).strict().optional(),
+  issues: z.array(z.string()).optional()
+}).strict();
+export type OperationRecord = z.infer<typeof operationRecordSchema>;
+export type OperationQuery = z.infer<typeof operationQuerySchema>;
 
 export const liveKnowledgeDetailSchema = z.object({
+  record: knowledgeRecordSchema.optional(),
   path: vaultPathSchema,
   title: z.string().min(1).max(1000),
   markdown: z.string(),
@@ -133,6 +161,8 @@ export const openKnowledgeResultSchema = z.object({
   opened: z.literal(true),
   path: vaultPathSchema
 }).strict();
+
+export const liveDocumentDetailSchema = liveKnowledgeDetailSchema.omit({ internalKnowledgeLinks: true });
 
 export const indexJobSchema = z.object({
   id: z.string().min(1).max(128),
@@ -250,6 +280,8 @@ export const apiFailureSchema = z.object({
 export const materialPageResponseSchema = successEnvelopeSchema(materialPageSchema);
 export const knowledgePageResponseSchema = successEnvelopeSchema(knowledgePageSchema);
 export const liveKnowledgeDetailResponseSchema = successEnvelopeSchema(liveKnowledgeDetailSchema);
+export const documentIssuePageResponseSchema = successEnvelopeSchema(documentIssuePageSchema);
+export const liveDocumentDetailResponseSchema = successEnvelopeSchema(liveDocumentDetailSchema);
 export const openKnowledgeResponseSchema = successEnvelopeSchema(openKnowledgeResultSchema);
 export const operationPageResponseSchema = successEnvelopeSchema(operationPageSchema);
 export const indexJobResponseSchema = successEnvelopeSchema(indexJobSchema);

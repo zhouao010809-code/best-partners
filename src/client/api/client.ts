@@ -1,7 +1,19 @@
 import { z } from 'zod';
+import { attachmentResponseSchema, attachmentPagesResponseSchema, attachmentListResponseSchema, attachmentArchiveResponseSchema, type Attachment, type AttachmentPages, type AttachmentArchiveResult } from '../../shared/api/attachments.js';
+import { assistantDraftListResponseSchema, assistantDraftResponseSchema, assistantDraftDeleteResponseSchema, type AssistantDraft, type AssistantDraftList, type AssistantDraftSave } from '../../shared/api/assistant-drafts.js';
+import { assistantProvidersResponseSchema, assistantConversationResponseSchema, assistantHistoryResponseSchema, assistantLoginResponseSchema,
+  type AssistantProvider, type AssistantConversation, type AssistantSend, type AssistantHistoryPage, type AssistantHistoryQuery } from '../../shared/api/assistant.js';
+import { libraryPageResponseSchema, type LibraryQuery, type LibraryPage } from '../../shared/api/library.js';
+export type { LibraryQuery, LibraryPage } from '../../shared/api/library.js';
+import { knowledgeCatalogPageResponseSchema, type KnowledgeCatalogQuery, type KnowledgeCatalogPage } from '../../shared/api/knowledge-catalog.js';
+export type { KnowledgeCatalogQuery, KnowledgeCatalogPage, KnowledgeCatalogFolder } from '../../shared/api/knowledge-catalog.js';
 import {
   apiFailureSchema,
   bootstrapResponseSchema,
+  documentIssuePageResponseSchema,
+  documentIssuePageSchema,
+  liveDocumentDetailResponseSchema,
+  liveDocumentDetailSchema,
   healthResponseSchema,
   healthSnapshotSchema,
   indexJobResponseSchema,
@@ -19,6 +31,20 @@ import {
 } from '../../shared/api/schemas.js';
 import type { KnowledgeStatus, UsageStatus } from '../../shared/domain/records.js';
 import type { PageStateValue } from '../components/PageState.js';
+import { intakeListResponseSchema, intakePreviewResponseSchema, intakeOutcomeResponseSchema,
+  type IntakeList, type IntakePreview, type IntakePreviewRequest, type IntakeOutcome } from '../../shared/api/intake.js';
+import { deepSeekSettingsResponseSchema, extractionListResponseSchema, extractionPreviewResponseSchema, extractionRunResponseSchema,
+  type DeepSeekSettings, type ExtractionPreview, type ExtractionPreviewRequest, type ExtractionRun } from '../../shared/api/extraction.js';
+import { extractionQueueResponseSchema, extractionHistoryResponseSchema, extractionQueueSourceResponseSchema,
+  type ExtractionQueueQuery, type ExtractionQueuePage, type ExtractionHistoryQuery, type ExtractionHistoryPage, type ExtractionQueueSource } from '../../shared/api/extraction-queue.js';
+import { ingestionReviewResponseSchema, reviewCandidateResponseSchema, ingestionMatchesResponseSchema, ingestionPreviewResponseSchema,
+  ingestionBatchResponseSchema, ingestionRecoveryPreviewResponseSchema, type IngestionReview, type ReviewCandidate,
+  type SaveCandidateRequest, type IngestionMatches, type IngestionPreviewRequest, type IngestionPreview, type IngestionBatch,
+  type IngestionRecoveryPreview } from '../../shared/api/ingestion.js';
+import { trashPreviewResponseSchema, trashDeletePreviewResponseSchema, trashEntryResponseSchema, trashListResponseSchema,
+  type TrashPreview, type TrashDeletePreview, type TrashEntry, type TrashList } from '../../shared/api/trash.js';
+import { intakeTrashPreviewResponseSchema, intakeTrashDeletePreviewResponseSchema, intakeTrashEntryResponseSchema, intakeTrashListResponseSchema,
+  type IntakeTrashPreview, type IntakeTrashDeletePreview, type IntakeTrashEntry, type IntakeTrashList } from '../../shared/api/intake-trash.js';
 
 type ClientFailureStatus =
   | 'disconnected'
@@ -39,6 +65,7 @@ export type ApiClientResult<T> =
     readonly ok: false;
     readonly state: ClientFailureState;
     readonly operationId?: string;
+    readonly code?: string;
   }
   | { readonly ok: false; readonly cancelled: true };
 
@@ -49,6 +76,8 @@ export type OperationPage = z.infer<typeof operationPageSchema>;
 export type OpenKnowledgeResult = z.infer<typeof openKnowledgeResultSchema>;
 export type IndexJob = z.infer<typeof indexJobSchema>;
 export type HealthSnapshot = z.infer<typeof healthSnapshotSchema>;
+export type DocumentIssuePage = z.infer<typeof documentIssuePageSchema>;
+export type LiveDocumentDetail = z.infer<typeof liveDocumentDetailSchema>;
 
 export interface MaterialQuery {
   readonly status?: KnowledgeStatus;
@@ -71,6 +100,88 @@ export interface KnowledgeQuery {
 }
 
 export interface ReadConsoleApi {
+  attachments?: {
+    list(signal?: AbortSignal): Promise<ApiClientResult<{ attachments: Attachment[] }>>;
+    archive(id: string, fields?: Partial<IntakePreviewRequest['fields']>): Promise<ApiClientResult<{ result: AttachmentArchiveResult }>>;
+    upload(file: File, uploadId: string, groupId: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
+    get(id: string, signal?: AbortSignal): Promise<ApiClientResult<{ attachment: Attachment }>>;
+    pages(id: string, startPage?: number, endPage?: number, signal?: AbortSignal): Promise<ApiClientResult<AttachmentPages>>;
+    retry(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
+    cancel(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
+  };
+  assistantDrafts?: {
+    list(signal?: AbortSignal): Promise<ApiClientResult<AssistantDraftList>>;
+    save(id: string, input: AssistantDraftSave): Promise<ApiClientResult<{ draft: AssistantDraft }>>;
+    delete(id: string, revision: number): Promise<ApiClientResult<{ deleted: true }>>;
+  };
+  readonly assistant?: {
+    providers(signal?: AbortSignal): Promise<ApiClientResult<{ providers: AssistantProvider[] }>>;
+    history(signal?: AbortSignal, query?: AssistantHistoryQuery): Promise<ApiClientResult<AssistantHistoryPage>>;
+    get(id: string, signal?: AbortSignal): Promise<ApiClientResult<AssistantConversation>>;
+    send(input: AssistantSend): Promise<ApiClientResult<AssistantConversation>>;
+    stop(id: string): Promise<ApiClientResult<AssistantConversation>>;
+    login(providerId: string): Promise<ApiClientResult<{ authUrl?: string | undefined; message: string }>>;
+  };
+  listKnowledgeCatalog?(query: KnowledgeCatalogQuery, signal?: AbortSignal): Promise<ApiClientResult<KnowledgeCatalogPage>>;
+  listLibrary(query: LibraryQuery, signal?: AbortSignal): Promise<ApiClientResult<LibraryPage>>;
+  readonly trash?: {
+    list(signal?: AbortSignal): Promise<ApiClientResult<TrashList>>;
+    get(id: string, signal?: AbortSignal): Promise<ApiClientResult<TrashEntry>>;
+    preview(materialPath: string, origin?: 'library' | 'queue' | 'knowledge'): Promise<ApiClientResult<TrashPreview>>;
+    commit(id: string): Promise<ApiClientResult<TrashEntry>>;
+    restore(id: string): Promise<ApiClientResult<TrashEntry>>;
+    retry(id: string): Promise<ApiClientResult<TrashEntry>>;
+    previewDelete(id: string, signal?: AbortSignal): Promise<ApiClientResult<TrashDeletePreview>>;
+    delete(id: string, token: string): Promise<ApiClientResult<TrashEntry>>;
+  };
+  readonly ingestion?: {
+    review(runId: string, signal?: AbortSignal): Promise<ApiClientResult<IngestionReview>>;
+    save(runId: string, input: SaveCandidateRequest): Promise<ApiClientResult<ReviewCandidate>>;
+    matches(runId: string, candidateId: string, search?: string, signal?: AbortSignal): Promise<ApiClientResult<IngestionMatches>>;
+    preview(input: IngestionPreviewRequest): Promise<ApiClientResult<IngestionPreview>>;
+    commit(id: string): Promise<ApiClientResult<IngestionBatch>>;
+    batch(id: string, signal?: AbortSignal): Promise<ApiClientResult<IngestionBatch>>;
+    resume(id: string): Promise<ApiClientResult<IngestionBatch>>;
+    recoveryPreview(id: string, sourceChoice?: 'current' | 'preserved', newTargets?: Record<string, string>): Promise<ApiClientResult<IngestionRecoveryPreview>>;
+    resolve(id: string): Promise<ApiClientResult<IngestionBatch>>;
+  };
+  readonly extractionQueue?: {
+    setVisibility?(materialPath: string, removed: boolean): Promise<ApiClientResult<ExtractionQueueSource>>;
+    get(materialPath: string, signal?: AbortSignal): Promise<ApiClientResult<ExtractionQueueSource>>;
+    list(query: ExtractionQueueQuery, signal?: AbortSignal): Promise<ApiClientResult<ExtractionQueuePage>>;
+    history(query: ExtractionHistoryQuery, signal?: AbortSignal): Promise<ApiClientResult<ExtractionHistoryPage>>;
+  };
+  readonly deepSeek?: {
+    get(signal?: AbortSignal): Promise<ApiClientResult<DeepSeekSettings>>;
+    setKey(apiKey: string): Promise<ApiClientResult<DeepSeekSettings>>;
+    clearKey(): Promise<ApiClientResult<DeepSeekSettings>>;
+    verifyConnection?(): Promise<ApiClientResult<DeepSeekSettings>>;
+  };
+  readonly extraction?: {
+    list(materialPath?: string, signal?: AbortSignal): Promise<ApiClientResult<{ items: ExtractionRun[] }>>;
+    get(id: string, signal?: AbortSignal): Promise<ApiClientResult<ExtractionRun>>;
+    preview(input: ExtractionPreviewRequest): Promise<ApiClientResult<ExtractionPreview>>;
+    start(token: string): Promise<ApiClientResult<ExtractionRun>>;
+    cancel(id: string): Promise<ApiClientResult<ExtractionRun>>;
+  };
+  readonly intake?: {
+    list(signal?: AbortSignal): Promise<ApiClientResult<IntakeList>>;
+    preview(input: IntakePreviewRequest): Promise<ApiClientResult<IntakePreview>>;
+    commit(token: string): Promise<ApiClientResult<IntakeOutcome>>;
+    resume(id: string): Promise<ApiClientResult<IntakeOutcome>>;
+  };
+  readonly intakeTrash?: {
+    list(signal?: AbortSignal): Promise<ApiClientResult<IntakeTrashList>>;
+    get(id: string, signal?: AbortSignal): Promise<ApiClientResult<IntakeTrashEntry>>;
+    preview(name: string, signal?: AbortSignal): Promise<ApiClientResult<IntakeTrashPreview>>;
+    commit(id: string): Promise<ApiClientResult<IntakeTrashEntry>>;
+    restore(id: string): Promise<ApiClientResult<IntakeTrashEntry>>;
+    retry(id: string): Promise<ApiClientResult<IntakeTrashEntry>>;
+    previewDelete(id: string, signal?: AbortSignal): Promise<ApiClientResult<IntakeTrashDeletePreview>>;
+    delete(id: string, token: string): Promise<ApiClientResult<IntakeTrashEntry>>;
+  };
+  listDocumentIssues(query: { cursor?: string; limit?: number }, signal?: AbortSignal): Promise<ApiClientResult<DocumentIssuePage>>;
+  getDocumentDetail(path: string, signal?: AbortSignal): Promise<ApiClientResult<LiveDocumentDetail>>;
   getHealth(signal?: AbortSignal): Promise<ApiClientResult<HealthSnapshot>>;
   listMaterials(
     query: MaterialQuery,
@@ -84,7 +195,7 @@ export interface ReadConsoleApi {
     path: string,
     signal?: AbortSignal
   ): Promise<ApiClientResult<LiveKnowledgeDetail>>;
-  listOperations(signal?: AbortSignal): Promise<ApiClientResult<OperationPage>>;
+  listOperations(signal?: AbortSignal, query?: import('../../shared/api/schemas.js').OperationQuery): Promise<ApiClientResult<OperationPage>>;
   openKnowledge(path: string): Promise<ApiClientResult<OpenKnowledgeResult>>;
   rebuildIndex(indexVersion: number, idempotencyKey: string): Promise<ApiClientResult<IndexJob>>;
   getIndexJob(id: string, signal?: AbortSignal): Promise<ApiClientResult<IndexJob>>;
@@ -117,6 +228,7 @@ function failureStatus(code: string): ClientFailureStatus {
       return 'busy';
     case 'VERSION_CONFLICT':
     case 'IDEMPOTENCY_CONFLICT':
+    case 'ASSISTANT_DRAFT_CONFLICT':
       return 'conflict';
     default:
       return 'operation-error';
@@ -160,7 +272,8 @@ async function requestApi<T>(options: ApiRequestOptions<T>): Promise<ApiClientRe
     return {
       ok: false,
       state: { status: failureStatus(code), message },
-      operationId
+      operationId,
+      ...(options.path.startsWith('/api/v1/assistant/') || options.path.startsWith('/api/v1/ingestion/') || options.path.startsWith('/api/v1/trash') || options.path.startsWith('/api/v1/intake-trash') || options.path.startsWith('/api/v1/knowledge/') && ['KNOWLEDGE_IN_TRASH', 'KNOWLEDGE_DELETED'].includes(code) || ['SESSION_REQUIRED', 'CSRF_INVALID'].includes(code) ? { code } : {})
     };
   }
 
@@ -242,13 +355,16 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
     path: string,
     schema: S,
     body: Readonly<Record<string, unknown>>,
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    signal?: AbortSignal,
+    refreshedAuthentication = false
   ): Promise<ApiClientResult<z.output<S>['data']>> {
     const token = await getCsrfToken();
     if (!token.ok) return token;
-    return requestData(fetcher, path, schema, {
+    const result = await requestData(fetcher, path, schema, {
       method: 'POST',
       credentials: 'same-origin',
+      ...(signal === undefined ? {} : { signal }),
       headers: {
         'content-type': 'application/json',
         'x-csrf-token': token.value,
@@ -256,13 +372,131 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
       },
       body: JSON.stringify(body)
     });
+    // These two failures are produced before route handlers execute. Reconnect
+    // once without ever replaying a request whose mutation outcome is unknown.
+    if (!refreshedAuthentication && !result.ok && 'code' in result
+      && (result.code === 'SESSION_REQUIRED' || result.code === 'CSRF_INVALID')) {
+      if (csrfToken === token.value) csrfToken = undefined;
+      if (signal?.aborted) return { ok: false, cancelled: true };
+      return postWithCsrf(path, schema, body, idempotencyKey, signal, true);
+    }
+    return result;
+  }
+
+  async function writeWithCsrf<S extends z.ZodType<Envelope>>(path: string, schema: S, method: 'POST' | 'PUT' | 'DELETE', body?: BodyInit, contentType = 'application/json', refreshed = false): Promise<ApiClientResult<z.output<S>['data']>> {
+    const token = await getCsrfToken(); if (!token.ok) return token;
+    const result = await requestData(fetcher, path, schema, { method, credentials: 'same-origin', headers: { ...(body === undefined ? {} : { 'content-type': contentType }), 'x-csrf-token': token.value }, ...(body === undefined ? {} : { body }) });
+    if (!refreshed && !result.ok && 'code' in result && (result.code === 'SESSION_REQUIRED' || result.code === 'CSRF_INVALID')) {
+      if (csrfToken === token.value) csrfToken = undefined;
+      return writeWithCsrf(path, schema, method, body, contentType, true);
+    }
+    return result;
   }
 
   return {
+    attachments: {
+      list: signal => requestData(fetcher, '/api/v1/assistant/attachments', attachmentListResponseSchema, getInit(signal)),
+      archive: (id, fields) => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/archive`, attachmentArchiveResponseSchema, fields ? { fields } : {}),
+      upload: (file, uploadId, groupId) => writeWithCsrf(withQuery('/api/v1/assistant/attachments', parameters => { parameters.set('name', file.name); parameters.set('uploadId', uploadId); parameters.set('groupId', groupId); }), attachmentResponseSchema, 'POST', file, 'application/octet-stream'),
+      get: (id, signal) => requestData(fetcher, `/api/v1/assistant/attachments/${encodeURIComponent(id)}`, attachmentResponseSchema, getInit(signal)),
+      pages: (id, startPage, endPage, signal) => requestData(fetcher, withQuery(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/pages`, parameters => { appendQuery(parameters, 'startPage', startPage); appendQuery(parameters, 'endPage', endPage); }), attachmentPagesResponseSchema, getInit(signal)),
+      retry: id => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/retry`, attachmentResponseSchema, {}),
+      cancel: id => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/cancel`, attachmentResponseSchema, {})
+    },
+    assistantDrafts: {
+      list: signal => requestData(fetcher, '/api/v1/assistant/drafts', assistantDraftListResponseSchema, getInit(signal)),
+      save: (id, input) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}`, assistantDraftResponseSchema, 'PUT', JSON.stringify(input)),
+      delete: (id, revision) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}?revision=${revision}`, assistantDraftDeleteResponseSchema, 'DELETE')
+    },
+    assistant: {
+      providers: (signal) => requestData(fetcher, '/api/v1/assistant/providers', assistantProvidersResponseSchema, getInit(signal)),
+      history: (signal, query = {}) => requestData(fetcher, withQuery('/api/v1/assistant/conversations', parameters => {
+        appendQuery(parameters, 'search', query.search); appendQuery(parameters, 'cursor', query.cursor); appendQuery(parameters, 'limit', query.limit);
+      }), assistantHistoryResponseSchema, getInit(signal)),
+      get: (id, signal) => requestData(fetcher, `/api/v1/assistant/conversations/${encodeURIComponent(id)}`, assistantConversationResponseSchema, getInit(signal)),
+      send: (input) => postWithCsrf('/api/v1/assistant/messages', assistantConversationResponseSchema, input),
+      stop: (id) => postWithCsrf(`/api/v1/assistant/conversations/${encodeURIComponent(id)}/stop`, assistantConversationResponseSchema, {}),
+      login: (id) => postWithCsrf(`/api/v1/assistant/providers/${encodeURIComponent(id)}/login`, assistantLoginResponseSchema, {})
+    },
+    trash: {
+      list: (signal) => requestData(fetcher, '/api/v1/trash', trashListResponseSchema, getInit(signal)),
+      get: (id, signal) => requestData(fetcher, `/api/v1/trash/${encodeURIComponent(id)}`, trashEntryResponseSchema, getInit(signal)),
+      preview: (materialPath, origin) => postWithCsrf('/api/v1/trash/preview', trashPreviewResponseSchema, { materialPath, ...(origin ? { origin } : {}) }),
+      commit: (id) => postWithCsrf('/api/v1/trash/commit', trashEntryResponseSchema, { id }),
+      restore: (id) => postWithCsrf(`/api/v1/trash/${encodeURIComponent(id)}/restore`, trashEntryResponseSchema, {}),
+      retry: (id) => postWithCsrf(`/api/v1/trash/${encodeURIComponent(id)}/retry`, trashEntryResponseSchema, {}),
+      previewDelete: (id, signal) => postWithCsrf(`/api/v1/trash/${encodeURIComponent(id)}/delete-preview`, trashDeletePreviewResponseSchema, {}, undefined, signal),
+      delete: (id, token) => postWithCsrf(`/api/v1/trash/${encodeURIComponent(id)}/delete`, trashEntryResponseSchema, { token })
+    },
+    ingestion: {
+      review: (id, signal) => requestData(fetcher, `/api/v1/ingestion/reviews/${encodeURIComponent(id)}`, ingestionReviewResponseSchema, getInit(signal)),
+      save: (id, input) => postWithCsrf(`/api/v1/ingestion/reviews/${encodeURIComponent(id)}/candidates`, reviewCandidateResponseSchema, input),
+      matches: (id, candidateId, search, signal) => requestData(fetcher, withQuery(`/api/v1/ingestion/reviews/${encodeURIComponent(id)}/matches`, (parameters) => {
+        appendQuery(parameters, 'candidateId', candidateId); appendQuery(parameters, 'search', search);
+      }), ingestionMatchesResponseSchema, getInit(signal)),
+      preview: (input) => postWithCsrf('/api/v1/ingestion/previews', ingestionPreviewResponseSchema, input),
+      commit: (id) => postWithCsrf('/api/v1/ingestion/commit', ingestionBatchResponseSchema, { id }),
+      batch: (id, signal) => requestData(fetcher, `/api/v1/ingestion/batches/${encodeURIComponent(id)}`, ingestionBatchResponseSchema, getInit(signal)),
+      resume: (id) => postWithCsrf(`/api/v1/ingestion/batches/${encodeURIComponent(id)}/resume`, ingestionBatchResponseSchema, {}),
+      recoveryPreview: (id, sourceChoice, newTargets) => postWithCsrf(`/api/v1/ingestion/batches/${encodeURIComponent(id)}/recovery-preview`, ingestionRecoveryPreviewResponseSchema, { ...(sourceChoice ? { sourceChoice } : {}), ...(newTargets ? { newTargets } : {}) }),
+      resolve: (id) => postWithCsrf('/api/v1/ingestion/resolve', ingestionBatchResponseSchema, { id })
+    },
+    extractionQueue: {
+      setVisibility: (materialPath, removed) => postWithCsrf('/api/v1/extraction-queue/visibility', extractionQueueSourceResponseSchema, { materialPath, removed }),
+      get: (materialPath, signal) => requestData(fetcher, withQuery('/api/v1/extraction-queue/source', (parameters) => appendQuery(parameters, 'materialPath', materialPath)), extractionQueueSourceResponseSchema, getInit(signal)),
+      list: (query, signal) => requestData(fetcher, withQuery('/api/v1/extraction-queue', (parameters) => {
+        for (const [key, value] of Object.entries(query)) appendQuery(parameters, key, value);
+      }), extractionQueueResponseSchema, getInit(signal)),
+      history: (query, signal) => requestData(fetcher, withQuery('/api/v1/extraction-history', (parameters) => {
+        for (const [key, value] of Object.entries(query)) appendQuery(parameters, key, value);
+      }), extractionHistoryResponseSchema, getInit(signal))
+    },
+    deepSeek: {
+      get: (signal) => requestData(fetcher, '/api/v1/deepseek', deepSeekSettingsResponseSchema, getInit(signal)),
+      setKey: (apiKey) => postWithCsrf('/api/v1/deepseek/key', deepSeekSettingsResponseSchema, { apiKey }),
+      clearKey: () => postWithCsrf('/api/v1/deepseek/clear', deepSeekSettingsResponseSchema, {}),
+      verifyConnection: () => postWithCsrf('/api/v1/deepseek/verify', deepSeekSettingsResponseSchema, {})
+    },
+    extraction: {
+      list: (materialPath, signal) => requestData(fetcher, withQuery('/api/v1/extractions', (parameters) => appendQuery(parameters, 'materialPath', materialPath)), extractionListResponseSchema, getInit(signal)),
+      get: (id, signal) => requestData(fetcher, `/api/v1/extractions/${encodeURIComponent(id)}`, extractionRunResponseSchema, getInit(signal)),
+      preview: (input) => postWithCsrf('/api/v1/extractions/preview', extractionPreviewResponseSchema, input),
+      start: (token) => postWithCsrf('/api/v1/extractions/start', extractionRunResponseSchema, { token }),
+      cancel: (id) => postWithCsrf(`/api/v1/extractions/${encodeURIComponent(id)}/cancel`, extractionRunResponseSchema, {})
+    },
+    intakeTrash: {
+      list: signal => requestData(fetcher, '/api/v1/intake-trash', intakeTrashListResponseSchema, getInit(signal)),
+      get: (id, signal) => requestData(fetcher, `/api/v1/intake-trash/${encodeURIComponent(id)}`, intakeTrashEntryResponseSchema, getInit(signal)),
+      preview: (name, signal) => postWithCsrf('/api/v1/intake-trash/preview', intakeTrashPreviewResponseSchema, { name }, undefined, signal),
+      commit: id => postWithCsrf(`/api/v1/intake-trash/${encodeURIComponent(id)}/commit`, intakeTrashEntryResponseSchema, {}),
+      restore: id => postWithCsrf(`/api/v1/intake-trash/${encodeURIComponent(id)}/restore`, intakeTrashEntryResponseSchema, {}),
+      retry: id => postWithCsrf(`/api/v1/intake-trash/${encodeURIComponent(id)}/retry`, intakeTrashEntryResponseSchema, {}),
+      previewDelete: (id, signal) => postWithCsrf(`/api/v1/intake-trash/${encodeURIComponent(id)}/delete-preview`, intakeTrashDeletePreviewResponseSchema, {}, undefined, signal),
+      delete: (id, token) => postWithCsrf(`/api/v1/intake-trash/${encodeURIComponent(id)}/delete`, intakeTrashEntryResponseSchema, { token })
+    },
+    intake: {
+      list: (signal) => requestData(fetcher, '/api/v1/intake', intakeListResponseSchema, getInit(signal)),
+      preview: (input) => postWithCsrf('/api/v1/intake/preview', intakePreviewResponseSchema, input),
+      commit: (token) => postWithCsrf('/api/v1/intake/commit', intakeOutcomeResponseSchema, { token }),
+      resume: (id) => postWithCsrf('/api/v1/intake/resume', intakeOutcomeResponseSchema, { id })
+    },
     getHealth: (signal) => requestData(
       fetcher,
       '/api/v1/health',
       healthResponseSchema,
+      getInit(signal)
+    ),
+    listLibrary: (query, signal) => requestData(
+      fetcher,
+      withQuery('/api/v1/library', (parameters) => {
+        appendQuery(parameters, 'mode', query.mode);
+        appendQuery(parameters, 'path', query.path);
+        appendQuery(parameters, 'status', query.status);
+        appendQuery(parameters, 'title', query.title);
+        appendQuery(parameters, 'cursor', query.cursor);
+        appendQuery(parameters, 'limit', query.limit);
+      }),
+      libraryPageResponseSchema,
       getInit(signal)
     ),
     listMaterials: (query, signal) => requestData(
@@ -277,6 +511,21 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
         appendQuery(parameters, 'limit', query.limit);
       }),
       materialPageResponseSchema,
+      getInit(signal)
+    ),
+    listKnowledgeCatalog: (query, signal) => requestData(
+      fetcher,
+      withQuery('/api/v1/knowledge/catalog', (parameters) => {
+        appendQuery(parameters, 'path', query.path);
+        appendQuery(parameters, 'search', query.search);
+        appendQuery(parameters, 'includeObsolete', query.includeObsolete);
+        appendQuery(parameters, 'usageStatus', query.usageStatus);
+        appendQuery(parameters, 'knowledgeType', query.knowledgeType);
+        appendQuery(parameters, 'topic', query.topic);
+        appendQuery(parameters, 'cursor', query.cursor);
+        appendQuery(parameters, 'limit', query.limit);
+      }),
+      knowledgeCatalogPageResponseSchema,
       getInit(signal)
     ),
     listKnowledge: (query, signal) => requestData(
@@ -299,9 +548,28 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
       liveKnowledgeDetailResponseSchema,
       getInit(signal)
     ),
-    listOperations: (signal) => requestData(
+    listDocumentIssues: (query, signal) => requestData(
       fetcher,
-      '/api/v1/operations',
+      withQuery('/api/v1/documents/issues', (parameters) => {
+        appendQuery(parameters, 'cursor', query.cursor);
+        appendQuery(parameters, 'limit', query.limit);
+      }),
+      documentIssuePageResponseSchema,
+      getInit(signal)
+    ),
+    getDocumentDetail: (path, signal) => requestData(
+      fetcher,
+      withQuery('/api/v1/documents/file', (parameters) => parameters.set('path', path)),
+      liveDocumentDetailResponseSchema,
+      getInit(signal)
+    ),
+    listOperations: (signal, query = {}) => requestData(
+      fetcher,
+      withQuery('/api/v1/operations', (parameters) => {
+        appendQuery(parameters, 'view', query.view);
+        appendQuery(parameters, 'cursor', query.cursor);
+        appendQuery(parameters, 'limit', query.limit);
+      }),
       operationPageResponseSchema,
       getInit(signal)
     ),

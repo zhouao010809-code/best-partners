@@ -1,5 +1,22 @@
 # Phase 1 Atomic Filesystem and Recovery Kernel Implementation Plan
 
+> **Accepted personal-path amendment, 2026-09-05:** The user explicitly accepted
+> trusting the installed personal App/module at launch. For personal intake only,
+> the historical standalone-executable/never-N-API requirements below are
+> superseded by [the personal intake plan](2026-09-05-personal-intake-app.md).
+> This does not authorize knowledge writes or weaken no-overwrite, source-body,
+> attachment and interruption-recovery protections. The historical plan is not
+> otherwise declared implemented.
+
+> **Execution preflight, 2026-09-05:** The verified-descriptor execution contract
+> in Task 3 is blocked on the current macOS host. See
+> [read acceptance and preflight evidence](2026-09-05-real-vault-read-acceptance.md).
+> Review the native execution boundary before implementing this plan; do not
+> replace descriptor execution with an unapproved pathname fallback.
+> A bundled Node-API replacement has since passed isolated feasibility probes;
+> [replacement boundary and next work](2026-09-05-native-write-replacement-preflight.md)
+> records the required trust-model amendment. It is not production enablement.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Prove and implement fail-closed formal-file primitives for the current macOS filesystem using a standalone C helper, then build immutable plans, a hash-chained intent/result journal, an ordered coordinator, and SQLite-independent crash recovery that can mutate only a sentinel-marked independent test vault.

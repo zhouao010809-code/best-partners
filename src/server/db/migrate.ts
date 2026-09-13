@@ -15,7 +15,14 @@ function bundledMigrationPath(filename: string): URL {
 function initialMigrations(): readonly Migration[] {
   return [
     { version: 1, sql: readFileSync(bundledMigrationPath('001_initial.sql'), 'utf8') },
-    { version: 2, sql: readFileSync(bundledMigrationPath('002_read_api_jobs.sql'), 'utf8') }
+    { version: 2, sql: readFileSync(bundledMigrationPath('002_read_api_jobs.sql'), 'utf8') },
+    { version: 8, sql: readFileSync(bundledMigrationPath('008_personal_extraction.sql'), 'utf8') },
+    { version: 9, sql: readFileSync(bundledMigrationPath('009_personal_ingestion.sql'), 'utf8') },
+    { version: 10, sql: readFileSync(bundledMigrationPath('010_personal_material_management.sql'), 'utf8') },
+    { version: 11, sql: readFileSync(bundledMigrationPath('011_personal_trash_delete.sql'), 'utf8') },
+    { version: 12, sql: readFileSync(bundledMigrationPath('012_assistant_conversations.sql'), 'utf8') },
+    { version: 14, sql: readFileSync(bundledMigrationPath('014_assistant_drafts.sql'), 'utf8') },
+    { version: 15, sql: readFileSync(bundledMigrationPath('015_extraction_source_range.sql'), 'utf8') }
   ];
 }
 

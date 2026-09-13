@@ -1,0 +1,32 @@
+.global-search-trigger { display: flex; align-items: center; gap: 9px; margin: 14px 14px 0; width: calc(100% - 28px); border: 1px solid #383d42; border-radius: 7px; background: #1d2024; color: #bdc6cf; padding: 9px 11px; font: 13px var(--font-body); text-align: left; cursor: pointer; }
+.global-search-trigger kbd { margin-left: auto; color: #a1abb5; font-size: 11px; }
+.global-search { padding: 0; width: min(660px, calc(100vw - 32px)); max-height: min(720px, calc(100dvh - 64px)); border: 1px solid #48535d; border-radius: 16px; background: #1b2025; color: #e6ecf2; box-shadow: 0 30px 100px #0008; font: 14px/1.6 var(--font-body); }
+.global-search::backdrop { background: #080b0e99; }
+.global-search__body { display: flex; flex-direction: column; max-height: inherit; }
+.global-search button { font: inherit; cursor: pointer; }
+.global-search button:focus-visible, .global-search input:focus-visible { outline: 2px solid #95bddc; outline-offset: 2px; }
+.global-search__input { display: flex; align-items: center; gap: 12px; padding: 20px; border-bottom: 1px solid #3a4249; color: #b0c2d0; }
+.global-search__input input { width: 100%; min-width: 0; border: 0; background: transparent; color: #eff4f8; font: 16px var(--font-body); outline: none; }
+.global-search__input button { border: 0; background: transparent; color: #b4c1cc; padding: 5px; }
+.global-search__results { padding: 14px 18px; overflow: auto; min-height: 150px; }
+.global-search__row { display: flex; align-items: center; gap: 10px; padding: 12px 6px; border-bottom: 1px solid #ffffff0b; }
+.global-search__row > button { min-width: 0; flex: 1; display: flex; flex-direction: column; align-items: flex-start; border: 0; padding: 0; background: transparent; color: #e1eaf1; text-align: left; }
+.global-search__row strong { font-weight: 500; }
+.global-search__row small { color: #acb9c4; font-size: 12px; overflow-wrap: anywhere; }
+.global-search__row:hover, .global-search__recent:hover, .global-search__shortcuts button:hover { background: #2a333b; }
+.global-search__heading { display: flex; justify-content: space-between; color: #afbdc9; font-size: 12px; padding: 10px 4px; }
+.global-search__heading button { color: #a9c4da; border: 0; padding: 0; background: transparent; font-size: 12px; }
+.global-search__recent { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 5px; text-align: left; border: 0; background: transparent; color: #d8e3ec; }
+.global-search__recent svg:last-child { margin-left: auto; flex-shrink: 0; }
+.global-search__shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.global-search__shortcuts button { display: flex; justify-content: space-between; align-items: center; padding: 10px; border: 1px solid #39434c; border-radius: 6px; background: #232b32; color: #d5e2ec; }
+.global-search__muted, .global-search footer { color: #a7b6c2; font-size: 12px; }
+.global-search footer { padding: 11px 20px; border-top: 1px solid #35414a; }
+.global-search__reuse { padding: 12px 18px; border-top: 1px solid #4c6173; background: #273540; }
+.global-search__reuse > div { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: #c6d7e4; }
+.global-search__reuse > div button { margin-left: auto; border: 0; background: transparent; color: #abc3d8; font-size: 12px; }
+.global-search__reuse > button { display: flex; align-items: center; gap: 7px; border: 0; background: #dde9f2; color: #24323d; padding: 8px 12px; border-radius: 7px; }
+.selection-ask { position: fixed; z-index: 48; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; border: 1px solid #596e7e; border-radius: 22px; padding: 10px 16px; background: #243642; color: #dfedf7; box-shadow: 0 8px 32px #0006; font: 13px var(--font-body); cursor: pointer; }
+@media (max-width: 720px) { .global-search-trigger { font-size: 0; justify-content: center; margin: 10px auto; width: 40px; padding: 8px; } .global-search-trigger kbd { display: none; } }
+
+.global-search__results > [role='alert'] button { margin-left: 10px; padding: 3px 6px; background: transparent; border: 1px solid #5c768b; color: #cee3f4; border-radius: 4px; }

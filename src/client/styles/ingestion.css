@@ -1,0 +1,154 @@
+.ingestion-review { container: ingestion-review / inline-size; display: grid; gap: 18px; min-width: 0; color: var(--text-primary); }
+.ingestion-review-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 18px; }
+.ingestion-review-summary .ingestion-heading { padding: 0; }
+.ingestion-review-summary .ingestion-heading p, .ingestion-review-summary .ingestion-heading > svg { display: none; }
+.ingestion-review-summary .ingestion-heading h2 { font-size: 15px; margin: 0; }
+.ingestion-review-summary .ingestion-status-line { border: 0; padding: 0; gap: 6px 12px; font-size: 11px; }
+.ingestion-review-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); align-items: start; gap: 18px; min-width: 0; }
+.ingestion-candidates { display: grid; gap: 16px; min-width: 0; }
+.ingestion-review-layout .ingestion-directory { position: sticky; top: 58px; }
+.ingestion-review-layout .ingestion-directory ol { grid-template-columns: minmax(0, 1fr); }
+.ingestion-review-layout .ingestion-directory li { flex-wrap: wrap; }
+.ingestion-review-layout .ingestion-directory li > button { flex-basis: 100%; }
+.ingestion-review-layout .ingestion-compare-choice { padding: 0 12px 9px; margin-left: 22px; }
+.ingestion-row .ingestion-view-toggle { margin: 0; }
+.ingestion-row .ingestion-view-toggle .quiet-button { min-height: 32px; padding: 5px 8px; font-size: 11px; }
+.ingestion-review [hidden] { display: none !important; }
+.ingestion-directory { min-width: 0; }
+.ingestion-directory ol { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(235px, 100%), 1fr)); gap: 8px; padding: 0; margin: 0; list-style: none; }
+.ingestion-directory li { display: flex; min-width: 0; border: 1px solid #3b4340; border-radius: 8px; background: #1b201e; }
+.ingestion-directory li[data-current='true'] { border-color: #92afa0; background: #27312c; }
+.ingestion-directory li > button { display: flex; align-items: flex-start; flex: 1; gap: 10px; min-width: 0; padding: 13px 12px; border: 0; background: transparent; color: #e1e8e3; text-align: left; }
+.ingestion-directory strong { display: block; font-size: 13px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.ingestion-directory small { display: block; margin-top: 5px; color: #acbbb1; font-size: 11px; line-height: 1.6; }
+.ingestion-directory-number { flex-shrink: 0; padding-top: 1px; color: #acc7b7; font-size: 12px; }
+.ingestion-compare-choice { display: flex; align-items: center; align-self: end; gap: 4px; padding: 12px 10px 12px 0; font-size: 11px; color: #aebeb4; white-space: nowrap; cursor: pointer; }
+.ingestion-compare-choice input { accent-color: #8cb6a0; }
+.ingestion-view-toggle { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin: 18px 0; color: #adbbb2; font-size: 12px; }
+.ingestion-reading { color: #e0e7e2; }
+.ingestion-reading .safe-markdown { font-size: 16px; line-height: 1.85; }
+.ingestion-reading .safe-markdown p, .ingestion-reading .safe-markdown li { font-size: inherit; line-height: inherit; }
+.ingestion-reading-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 20px; color: #afbeb4; font-size: 12px; overflow-wrap: anywhere; }
+.ingestion-reading-value { margin-top: 24px; padding: 15px 17px; border-left: 2px solid #819d8c; background: #ffffff04; }
+.ingestion-reading-value strong { font-size: 12px; font-weight: 500; color: #b5c8bb; }
+.ingestion-reading-value p { margin: 6px 0 0; }
+.ingestion-reading-evidence { margin: 15px 0 0; color: #b9c9bd; font-size: 12px; line-height: 1.7; }
+.ingestion-reading-facts { display: grid; gap: 16px; font-size: 13px; line-height: 1.8; }
+.ingestion-reading-facts dt { color: #acbfb1; margin-bottom: 4px; }
+.ingestion-reading-facts dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ingestion-next-actions { display: flex; flex-wrap: wrap; gap: 12px; padding: 15px 0; }
+.ingestion-incomplete button { display: inline; padding: 3px 6px; margin: 2px 3px; border: 1px solid #ae975659; border-radius: 4px; background: transparent; color: #e3ca92; font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.ingestion-incomplete p { margin: 5px 0 0; }
+.ingestion-candidate h3 { scroll-margin-block: 90px; }
+.ingestion-candidate [data-review-field] { scroll-margin-block: 100px; }
+.ingestion-heading, .ingestion-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; min-width: 0; }
+.ingestion-heading { padding-top: 8px; }
+.ingestion-heading h2 { margin: 2px 0 6px; font-size: 21px; }
+.ingestion-heading p { margin: 0; }
+.ingestion-heading > svg { width: 26px; height: 26px; color: #91baa1; }
+.ingestion-status-line { display: flex; gap: 10px 22px; flex-wrap: wrap; padding-block: 12px; border-block: 1px solid #2b3931; color: #a8b6ad; font-size: 12px; }
+.ingestion-review h3 { font-size: 16px; line-height: 1.6; }
+.ingestion-review h4 { font-size: 13px; line-height: 1.7; }
+.ingestion-review p { font-size: 13px; line-height: 1.9; overflow-wrap: anywhere; }
+.ingestion-review a { color: #abd3b8; font-size: 13px; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.ingestion-review aside > a { display: block; margin-top: 8px; }
+.ingestion-candidate { min-width: 0; padding: 22px; border: 1px solid #314037; border-radius: 8px; background: #121a16; }
+.ingestion-candidate > header h3 { margin: 0; flex: 1 1 200px; overflow-wrap: anywhere; }
+.ingestion-candidate--settled { border-color: #293a30; background: #101914; }
+.ingestion-badge { display: inline-flex; padding: 3px 8px; border: 1px solid #425446; border-radius: 4px; background: #1d2d22; color: #b4d6bf; font-size: 11px; line-height: 1.6; white-space: nowrap; }
+.ingestion-badge--warning { background: #342b1d; color: #d7bc83; border-color: #665032; }
+.ingestion-decisions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 0; margin: 18px 0 10px; border: 0; }
+.ingestion-decisions legend { float: left; margin-right: 12px; padding: 9px 0; color: #a2aea6; font-size: 12px; }
+.ingestion-choice { display: flex; align-items: flex-start; gap: 8px; color: #b8c4bc; font-size: 12px; line-height: 1.8; cursor: pointer; }
+.ingestion-choice input { width: 14px; height: 14px; flex-shrink: 0; margin: 4px 0 0; accent-color: #75bf92; }
+.ingestion-decisions .ingestion-choice { padding: 6px 10px; border: 1px solid #354138; border-radius: 5px; }
+.ingestion-decisions .is-selected { border-color: #6a9e7c; color: #d1e8d9; background: #203528; }
+.ingestion-save-state { margin: 7px 0 18px; color: #93ad9c; font-size: 11px !important; }
+.ingestion-save-state--error, .ingestion-incomplete { color: #d1b782; }
+.ingestion-incomplete { margin: 12px 0; padding: 10px 12px; border-left: 2px solid #b19256; background: #2b261b; }
+.ingestion-fields { display: grid; gap: 14px; padding: 0; border: 0; margin: 0; min-width: 0; }
+.ingestion-field { display: grid; align-content: start; gap: 7px; min-width: 0; color: #afbdb4; font-size: 12px; line-height: 1.8; }
+.ingestion-field input, .ingestion-field textarea, .ingestion-field select { display: block; width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid #3a493e; border-radius: 5px; padding: 10px 12px; background: #0c130f; color: #d9e2dc; font: inherit; font-size: 13px; line-height: 1.8; }
+.ingestion-field textarea { resize: vertical; }
+.ingestion-field--body textarea { min-height: 180px; font-size: 14px; line-height: 1.95; }
+.ingestion-field select { height: 44px; text-overflow: ellipsis; }
+.ingestion-field input:focus-visible, .ingestion-field textarea:focus-visible, .ingestion-field select:focus-visible { outline: 2px solid #71b990; outline-offset: 2px; }
+.ingestion-field-row { display: flex; flex-wrap: wrap; gap: 14px; }
+.ingestion-field-row > .ingestion-field { flex: 1 1 130px; }
+.ingestion-field-row > .ingestion-field--wide { flex: 3 1 270px; }
+.ingestion-disclosure { min-width: 0; border-top: 1px solid #2e3b32; margin-top: 4px; }
+.ingestion-disclosure > summary { cursor: pointer; padding: 13px 0; color: #a5bfaf; font-size: 12px; line-height: 1.8; }
+.ingestion-disclosure[open] > summary { color: #d2e4d8; }
+.ingestion-metadata { display: grid; gap: 14px; padding-bottom: 16px; }
+.ingestion-target { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 12px; font-size: 12px; color: #a3b9ab; overflow-wrap: anywhere; }
+.ingestion-target > span { min-width: 0; flex: 1 1 200px; }
+.ingestion-target button[aria-pressed='true'] { border-color: #6a9e7c; background: #203528; }
+.ingestion-legacy-confirm { padding-top: 12px; }
+.ingestion-matches { display: grid; }
+.ingestion-match { min-width: 0; padding: 18px 0; border-top: 1px solid #303d33; }
+.ingestion-match h4, .ingestion-match p { margin: 0 0 8px; }
+.ingestion-match .extraction-actions { margin-top: 12px; gap: 8px; }
+.ingestion-match .quiet-button { font-size: 11px; }
+.ingestion-existing, .ingestion-source, .ingestion-attempt { min-width: 0; padding: 16px 0; border-block: 1px solid #48523b; }
+.ingestion-existing h4 { margin: 0 0 10px; }
+.ingestion-source-body { max-height: 460px; overflow: auto; margin: 16px 0; padding: 16px; background: #0c130f; border: 1px solid #354138; border-radius: 5px; }
+.ingestion-preview { min-width: 0; padding-top: 8px; border-top: 2px solid #79a68b; }
+.ingestion-preview > h3 { margin-bottom: 6px; }
+.ingestion-changes { display: grid; gap: 18px; min-width: 0; margin: 18px 0; }
+.ingestion-file { min-width: 0; }
+.ingestion-file > .ingestion-row { justify-content: flex-start; }
+.ingestion-file h4 { min-width: 0; margin: 4px 0; overflow-wrap: anywhere; font-size: 12px; }
+.ingestion-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-width: 0; margin-top: 10px; }
+.ingestion-comparison--new { grid-template-columns: minmax(0, 1fr); }
+.ingestion-comparison > section { min-width: 0; padding: 14px; background: #0c130f; border: 1px solid #324238; border-radius: 5px; overflow-wrap: anywhere; }
+.ingestion-comparison h5 { font-size: 11px; color: #98b6a3; margin: 0 0 14px; }
+.ingestion-review pre { min-width: 0; max-height: 460px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; background: #09100c; color: #adbeb2; border: 1px solid #2d3b31; border-radius: 4px; font-size: 11px; line-height: 1.9; }
+.ingestion-receipt { min-width: 0; padding: 18px 0; border-top: 2px solid #74af88; }
+.ingestion-receipt h3 { margin: 0; }
+.ingestion-receipt svg { width: 22px; color: #95c9a7; }
+.ingestion-result-links { display: flex; flex-direction: column; gap: 12px; margin-block: 16px; }
+.ingestion-recovery { margin-top: 20px; border-top: 1px solid #566145; }
+.ingestion-batch-bar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 16px 20px; border: 1px solid #475b4c; border-radius: 6px; background: #1a2a20; box-shadow: 0 -8px 24px #0003; }
+.ingestion-batch-bar strong { display: block; font-size: 13px; font-weight: 500; color: #d3e7db; }
+.ingestion-batch-bar span { display: block; margin-top: 5px; color: #a3b6aa; font-size: 11px; }
+.ingestion-batch-bar > p { flex-basis: 100%; margin: 0; color: #94a99c; font-size: 11px; }
+.ingestion-step-navigation { display: flex; align-items: center; gap: 8px; }
+.ingestion-step-navigation > span { min-width: 34px; margin: 0; text-align: center; font-variant-numeric: tabular-nums; }
+.ingestion-batch-bar { min-height: 68px; padding: 10px 14px; gap: 8px 14px; flex-wrap: nowrap; }
+.ingestion-batch-status { margin-right: auto; min-width: 0; }
+.ingestion-batch-bar .extraction-actions { margin: 0; flex-wrap: nowrap; gap: 8px; }
+.ingestion-batch-bar .quiet-button { min-height: 36px; padding: 7px 10px; white-space: nowrap; font-size: 12px; }
+.ingestion-batch-details { position: relative; flex-shrink: 0; color: #b6c3ba; font-size: 11px; }
+.ingestion-batch-details > summary { cursor: pointer; padding: 8px 0; white-space: nowrap; }
+.ingestion-batch-details > div { position: absolute; bottom: calc(100% + 14px); right: 0; width: min(320px, 75vw); padding: 12px 16px; background: #1c2420; border: 1px solid #59665f; border-radius: 6px; box-shadow: 0 -8px 30px #0006; }
+.ingestion-batch-details p { margin: 0; font-size: 12px; }
+.ingestion-batch-details p + p { margin-top: 8px; }
+@container ingestion-review (max-width: 680px) {
+  .ingestion-review-layout { display: block; }
+  .ingestion-review-layout .ingestion-directory { position: static; margin-bottom: 12px; }
+  .ingestion-review-layout .ingestion-directory ol { display: flex; overflow-x: auto; gap: 7px; scrollbar-width: thin; padding-bottom: 4px; }
+  .ingestion-review-layout .ingestion-directory li { flex: 0 0 180px; }
+  .ingestion-review-layout .ingestion-directory li > button { padding: 8px 10px; gap: 7px; }
+  .ingestion-review-layout .ingestion-directory strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+  .ingestion-review-layout .ingestion-directory small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 10px; }
+  .ingestion-review-layout .ingestion-directory li > button > span:last-child { min-width: 0; }
+  .ingestion-review-layout .ingestion-compare-choice { padding-bottom: 6px; font-size: 10px; }
+  .ingestion-batch-bar .ingestion-step-navigation { display: none; }
+  .ingestion-batch-bar { flex-wrap: wrap; }
+  .ingestion-batch-status { flex: 1 1 130px; }
+  .ingestion-batch-details { flex-basis: auto; }
+  .ingestion-batch-details > div { position: fixed; left: 16px; right: 16px; bottom: 90px; width: auto; }
+}
+.ingestion-review .quiet-button { min-height: 34px; white-space: normal; overflow-wrap: anywhere; }
+.ingestion-review .quiet-button:disabled, .ingestion-fields:disabled { opacity: .6; }
+.ingestion-review .safe-markdown { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 1000px) { .ingestion-comparison { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+  .ingestion-review { gap: 14px; }
+  .ingestion-candidate { padding: 16px; }
+  .ingestion-heading h2 { font-size: 18px; }
+  .ingestion-batch-bar { padding: 12px; gap: 12px; }
+  .ingestion-batch-bar > button { flex: 1 1 150px; }
+  .ingestion-decisions legend { width: 100%; padding: 0 0 6px; }
+  .ingestion-decisions .ingestion-choice { padding-inline: 7px; font-size: 11px; }
+}

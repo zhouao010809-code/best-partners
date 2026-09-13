@@ -13,6 +13,7 @@ import {
   type KnowledgeQuery,
   type KnowledgePage,
   type LiveKnowledgeDetail,
+  type LiveDocumentDetail,
   type MaterialQuery,
   type MaterialPage,
   type OperationPage,
@@ -20,6 +21,8 @@ import {
 } from '../../src/client/api/client.js';
 import { AppRouter } from '../../src/client/app/router.js';
 import type { KnowledgeRecord, MaterialRecord } from '../../src/shared/domain/records.js';
+afterEach(cleanup);
+beforeEach(() => sessionStorage.clear());
 
 function ok<T>(value: T): ApiClientResult<T> {
   return { ok: true, value };
@@ -89,7 +92,10 @@ function completedJob(): IndexJob {
 function createApi(overrides: Partial<ReadConsoleApi> = {}): ReadConsoleApi {
   return {
     getHealth: vi.fn(async () => ok(readyHealth())),
+    listDocumentIssues: vi.fn(async () => ok({ items: [] })),
+    getDocumentDetail: vi.fn(async () => failure<LiveDocumentDetail>('operation-error')),
     listMaterials: vi.fn(async () => ok({ items: [] })),
+    listLibrary: vi.fn(async () => ok({ mode: 'topic' as const, path: '', breadcrumbs: [{ path: '', label: '全部资料' }], folders: [], items: [], total: 0, directTotal: 0, unclassifiedCount: 0, indexVersion: 7 })),
     listKnowledge: vi.fn(async () => ok({ items: [] })),
     getKnowledgeDetail: vi.fn(async () => failure<LiveKnowledgeDetail>('operation-error')),
     listOperations: vi.fn(async () => ok({ items: [] })),
@@ -111,12 +117,84 @@ function deferred<T>(): {
 
 function renderRoute(path: string, api: ReadConsoleApi = browserReadConsoleApi): void {
   const InjectableRouter = AppRouter as ComponentType<{ readonly api: ReadConsoleApi }>;
+  // This suite exercises the read-only adapter contract; the extraction-capable
+  // workspace and its navigation are covered by extraction-workspace.test.tsx.
+  const { extractionQueue: _queue, ...readOnlyApi } = api;
   render(
     <MemoryRouter initialEntries={[path]}>
-      <InjectableRouter api={api} />
+      <InjectableRouter api={readOnlyApi} />
     </MemoryRouter>
   );
 }
+
+it('opens an exact linked knowledge outside the current list and follows its original source in the app', async () => {
+  const user = userEvent.setup(); const record = knowledge(); const source = record.sourceMaterials[0]!;
+  const api = createApi({
+    getKnowledgeDetail: vi.fn(async () => ok({ path: record.path, title: record.title, record, markdown: '精确知识正文', internalKnowledgeLinks: [], versionMarker: { rawSha256: record.rawSha256 } })),
+    getDocumentDetail: vi.fn(async () => ok({ path: source, title: '精确原资料', markdown: '完整来源证据', versionMarker: { rawSha256: 'c'.repeat(64) } }))
+  });
+  renderRoute(`/knowledge?${new URLSearchParams({ path: record.path })}`, api);
+  expect(await screen.findByText('精确知识正文')).toBeVisible();
+  expect(api.getKnowledgeDetail).toHaveBeenCalledExactlyOnceWith(record.path, expect.any(AbortSignal));
+  expect(api.listKnowledge).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole('link', { name: '查看原文 · 材料' }));
+  expect(await screen.findByText('完整来源证据', { selector: 'p' })).toBeVisible();
+  expect(api.getDocumentDetail).toHaveBeenCalledWith(source, expect.any(AbortSignal));
+  expect(await screen.findByRole('link', { name: '返回这份资料的提炼工作台' })).toHaveAttribute('href', `/queue?${new URLSearchParams({ view: 'ready', materialPath: source })}`);
+  expect(api.openKnowledge).not.toHaveBeenCalled();
+});
+
+it('never displays a linked knowledge response for a different exact path', async () => {
+  const record = knowledge();
+  const api = createApi({ getKnowledgeDetail: vi.fn(async () => ok({ path: '02知识库/其他.md', title: record.title,
+    record, markdown: '不能显示的错误知识', internalKnowledgeLinks: [], versionMarker: { rawSha256: record.rawSha256 } })) });
+  renderRoute(`/knowledge?${new URLSearchParams({ path: record.path })}`, api);
+  expect(await screen.findByText('知识详情与指定路径或版本不一致，请重新读取。')).toBeVisible();
+  expect(screen.queryByText('不能显示的错误知识')).not.toBeInTheDocument();
+});
+
+it('removes all paginated completed sources from dashboard work while keeping changed originals', async () => {
+  const nonce = document.createElement('meta');
+  nonce.name = 'csp-nonce'; nonce.content = 'completed-sources-test-nonce';
+  document.head.append(nonce);
+  const records = ['零候选已完成', '全部放弃已完成', '新版原文', '仍需处理'].map((title) => material({ path: `01图书馆/${title}.md`, title }));
+  const summary = (index: number, sha = records[index]!.rawSha256) => ({ materialPath: records[index]!.path, title: records[index]!.title,
+    view: 'ready' as const, canExtract: true, reviewComplete: true, pendingCandidateCount: 0, sourceRawSha256: sha,
+    latestReadyRun: { id: `done-${index}`, status: 'ready' as const, createdAt: '2026-09-07T00:00:00Z', candidateCount: 0, sourceRawSha256: records[index]!.rawSha256 } });
+  const counts = { pending: 1, generating: 0, ready: 3, unfinished: 0 };
+  const list = vi.fn(async (query: { view?: string | undefined; cursor?: string | undefined; visibility?: string | undefined; reviewState?: string | undefined }) => ok(query.visibility === 'removed' ? { items: [], counts }
+    : query.view === 'pending' ? { items: [{ materialPath: records[3]!.path, title: records[3]!.title, view: 'pending' as const, canExtract: true }], counts }
+      : query.view !== 'ready' || query.reviewState !== 'complete' ? { items: [], counts }
+        : query.cursor ? { items: [summary(1), summary(2, 'd'.repeat(64))], counts } : { items: [summary(0)], counts, nextCursor: 'completed-next' }));
+  const api = createApi({ listMaterials: vi.fn(async () => ok({ items: records })), extractionQueue: { list, get: vi.fn(), history: vi.fn() } });
+  render(<MemoryRouter initialEntries={['/']}><AppRouter api={api} /></MemoryRouter>);
+  expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+  expect(screen.getByRole('heading', { name: '待处理资料 2 份' })).toBeVisible();
+  const deck = screen.getByRole('region', { name: '待提炼材料牌堆' });
+  expect(within(deck).queryByRole('button', { name: /零候选已完成/u })).not.toBeInTheDocument();
+  expect(within(deck).queryByRole('button', { name: /全部放弃已完成/u })).not.toBeInTheDocument();
+  expect(within(deck).getByRole('button', { name: /新版原文/u })).toBeVisible();
+  expect(list).toHaveBeenCalledWith({ view: 'ready', reviewState: 'complete', limit: 200, cursor: 'completed-next' }, expect.any(AbortSignal));
+  nonce.remove();
+});
+
+it('keeps removed pending and historical sources out of dashboard cards without excluding active changed originals', async () => {
+  const nonce = document.createElement('meta'); nonce.name = 'csp-nonce'; nonce.content = 'removed-sources-test-nonce'; document.head.append(nonce);
+  const records = ['移出的待提炼', '移出的旧结果', '继续处理'].map((title) => material({ path: `01图书馆/${title}.md`, title }));
+  const counts = { pending: 1, ready: 0, unfinished: 1, generating: 0 };
+  const list = vi.fn(async (query: { view?: string | undefined; visibility?: string | undefined }) => ok({ counts,
+    items: query.visibility !== 'removed' || !['pending', 'unfinished'].includes(query.view ?? '') ? [] : [{
+      materialPath: records[query.view === 'pending' ? 0 : 1]!.path, title: '已移出资料', view: query.view === 'pending' ? 'pending' as const : 'unfinished' as const,
+      removedAt: '2026-09-07T00:00:00Z', canExtract: false, sourceRawSha256: 'c'.repeat(64)
+    }] }));
+  const api = createApi({ listMaterials: vi.fn(async () => ok({ items: records })), extractionQueue: { list, get: vi.fn(), history: vi.fn() } });
+  render(<MemoryRouter initialEntries={['/']}><AppRouter api={api} /></MemoryRouter>);
+  expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+  const deck = screen.getByRole('region', { name: '待提炼材料牌堆' });
+  expect(within(deck).queryByRole('button', { name: /移出的/u })).not.toBeInTheDocument();
+  expect(within(deck).getByRole('button', { name: /继续处理/u })).toBeVisible();
+  nonce.remove();
+});
 
 type PaginationFocusOutcome = 'next' | 'terminal' | 'failed';
 
@@ -192,12 +270,60 @@ function simulateNativeDisabledFocusLoss(): void {
 }
 
 describe('Phase 1 read pages', () => {
+  it('keeps settings details collapsed and loads document issues only when opened', async () => {
+    const user = userEvent.setup();
+    const listDocumentIssues = vi.fn(async () => ok({ items: [] }));
+    renderRoute('/settings', createApi({ listDocumentIssues }));
+
+    expect(await screen.findByText('3 个结构问题')).toBeVisible();
+    const issuesToggle = screen.getByRole('button', { name: /^待确认资料/u });
+    const diagnosticsToggle = screen.getByRole('button', { name: /^高级诊断/u });
+    expect(issuesToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(diagnosticsToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(listDocumentIssues).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', { name: '待确认资料' })).not.toBeInTheDocument();
+    expect(screen.getByText('models.example')).not.toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: '查看待确认资料' }));
+    expect(issuesToggle).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByText('没有待确认的资料格式')).toBeVisible();
+    expect(listDocumentIssues).toHaveBeenCalledExactlyOnceWith({ limit: 50 }, expect.any(AbortSignal));
+    expect(diagnosticsToggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('shows legacy issues in settings and reads their original text without executing HTML or leaving App', async () => {
+    const path = '01图书馆/小兆clipper/旧剪藏.md';
+    const markdown = '# 原文\n<script>window.bad = true</script>\n![附件](https://example.com/image.png)';
+    const api = createApi({
+      listDocumentIssues: vi.fn(async () => ok({ items: [{ path, code: 'FRONTMATTER_INVALID' as const, message: 'FRONTMATTER_OPENING_DELIMITER_MISSING' }] })),
+      getDocumentDetail: vi.fn(async () => ok({ path, title: '旧剪藏', markdown, versionMarker: { rawSha256: 'a'.repeat(64) } }))
+    });
+    renderRoute('/settings', api);
+    await userEvent.click(await screen.findByRole('button', { name: /^待确认资料/u }));
+    await userEvent.click(await screen.findByRole('button', { name: '查看原文：旧剪藏' }));
+    const original = await screen.findByTestId('document-original');
+    expect(original.textContent).toBe(markdown);
+    expect(original.querySelector('script, img')).toBeNull();
+    expect(screen.getByText('缺少资料信息，原文仍可查看')).toBeInTheDocument();
+    expect(api.openKnowledge).not.toHaveBeenCalled();
+  });
+
+  it('lets the user retry failed issue listing and does not leak technical server errors', async () => {
+    const listDocumentIssues = vi.fn().mockResolvedValueOnce(failure('disconnected')).mockResolvedValueOnce(ok({ items: [] }));
+    renderRoute('/settings', createApi({ listDocumentIssues }));
+    await userEvent.click(await screen.findByRole('button', { name: /^待确认资料/u }));
+    await userEvent.click(await screen.findByRole('button', { name: '重新读取资料列表' }));
+    expect(await screen.findByText('没有待确认的资料格式')).toBeInTheDocument();
+    expect(screen.queryByText('SECRET_SERVER_MESSAGE')).not.toBeInTheDocument();
+  });
+
   beforeEach(() => {
     const nonce = document.createElement('meta');
     nonce.name = 'csp-nonce';
     nonce.content = 'read-pages-test-nonce';
     document.head.append(nonce);
     vi.spyOn(browserReadConsoleApi, 'getHealth').mockResolvedValue(ok(readyHealth()));
+    vi.spyOn(browserReadConsoleApi, 'listDocumentIssues').mockResolvedValue(ok({ items: [] }));
     vi.spyOn(browserReadConsoleApi, 'listMaterials').mockResolvedValue(ok<MaterialPage>({ items: [] }));
     vi.spyOn(browserReadConsoleApi, 'listKnowledge').mockResolvedValue(ok<KnowledgePage>({ items: [] }));
     vi.spyOn(browserReadConsoleApi, 'listOperations').mockResolvedValue(ok<OperationPage>({ items: [] }));
@@ -240,7 +366,7 @@ describe('Phase 1 read pages', () => {
     renderRoute('/');
 
     expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
-    expect(screen.getByTestId('metric-partial')).toHaveTextContent('1');
+    expect(screen.queryByTestId('metric-partial')).not.toBeInTheDocument();
     expect(screen.getByTestId('metric-knowledge')).toHaveTextContent('1');
     const deck = screen.getByRole('region', { name: '待提炼材料牌堆' });
     expect(within(deck).getByRole('button', {
@@ -277,7 +403,7 @@ describe('Phase 1 read pages', () => {
     renderRoute('/', api);
 
     expect(await screen.findByTestId('metric-knowledge')).toHaveTextContent('3');
-    expect(screen.getByTestId('metric-upgradeable')).toHaveTextContent('1');
+    expect(screen.queryByTestId('metric-upgradeable')).not.toBeInTheDocument();
     expect(listMaterials).toHaveBeenLastCalledWith(
       { cursor: 'next.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', limit: 200 },
       expect.any(AbortSignal)
@@ -290,12 +416,7 @@ describe('Phase 1 read pages', () => {
       },
       expect.any(AbortSignal)
     );
-    const recent = screen.getByRole('list', { name: '最近知识' });
-    expect(within(recent).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-      expect.stringContaining('定论'),
-      expect.stringContaining('ai'),
-      expect.stringContaining('过时')
-    ]);
+    expect(screen.queryByRole('list', { name: '最近知识' })).not.toBeInTheDocument();
   });
 
   it('retries one dashboard index drift and never publishes mixed generations', async () => {
@@ -332,7 +453,7 @@ describe('Phase 1 read pages', () => {
 
     renderRoute('/', api);
 
-    expect(await screen.findByText('稳定材料')).toBeVisible();
+    expect(await screen.findByRole('button', { name: /^稳定材料，/u })).toBeVisible();
     expect(listMaterials).toHaveBeenCalledTimes(2);
     expect(api.listKnowledge).toHaveBeenCalledTimes(2);
     expect(api.listOperations).toHaveBeenCalledTimes(2);
@@ -363,6 +484,54 @@ describe('Phase 1 read pages', () => {
       expect(screen.queryByTestId('metric-pending')).not.toBeInTheDocument();
     }
   );
+
+  it.each(['ready', 'stale'] as const)('loads a newly mounted dashboard during a focus refresh with a %s index', async (status) => {
+    const pendingRebuild = deferred<ApiClientResult<IndexJob>>();
+    const health: HealthSnapshot = status === 'ready' ? readyHealth() : {
+      ...readyHealth(),
+      index: {
+        status: 'stale', version: 7, lastSuccessAt: '2026-09-01T00:00:00.000Z',
+        reason: 'INDEX_STALE'
+      }
+    };
+    const api = createApi({
+      getHealth: vi.fn(async () => ok(health)),
+      listMaterials: vi.fn(async () => ok({ items: [material()] })),
+      rebuildIndex: vi.fn(() => pendingRebuild.promise)
+    });
+    renderRoute('/settings', api);
+    await waitFor(() => expect(api.getHealth).toHaveBeenCalledTimes(1));
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(api.rebuildIndex).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('link', { name: '大脑总览' }));
+
+    expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+    expect(screen.queryByText('索引不可用，当前无法读取统计数据')).not.toBeInTheDocument();
+    expect(api.listMaterials).toHaveBeenCalledTimes(1);
+    expect(api.getHealth).toHaveBeenCalledTimes(4);
+  });
+
+  it('retries a failed dashboard read after a successful same-version focus refresh', async () => {
+    const pendingRebuild = deferred<ApiClientResult<IndexJob>>();
+    const api = createApi({
+      listMaterials: vi.fn()
+        .mockResolvedValueOnce(failure<MaterialPage>('disconnected'))
+        .mockResolvedValue(ok({ items: [material()] })),
+      rebuildIndex: vi.fn(() => pendingRebuild.promise)
+    });
+    renderRoute('/', api);
+    expect(await within(screen.getByRole('main')).findByText('无法连接本地服务。')).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(api.rebuildIndex).toHaveBeenCalledTimes(1));
+    expect(api.listMaterials).toHaveBeenCalledTimes(1);
+    await act(async () => pendingRebuild.resolve(ok({ ...completedJob(), indexVersion: 7 })));
+
+    expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+    expect(api.listMaterials).toHaveBeenCalledTimes(2);
+    expect(within(screen.getByRole('main')).queryByText('无法连接本地服务。')).not.toBeInTheDocument();
+  });
 
   it('removes previously published dashboard numbers when an authoritative focus snapshot starts building', async () => {
     const pendingRebuild = deferred<ApiClientResult<IndexJob>>();
@@ -620,11 +789,12 @@ describe('Phase 1 read pages', () => {
 
   it('does not pre-read knowledge markdown from the list page', async () => {
     const detail = vi.spyOn(browserReadConsoleApi, 'getKnowledgeDetail');
+    const catalog = vi.spyOn(browserReadConsoleApi, 'listKnowledgeCatalog').mockResolvedValue(ok({path: '', breadcrumbs: [{path: '', label: '知识书柜'}], folders: [], items: [], total: 0, directTotal: 0, indexVersion: 7}));
     renderRoute('/knowledge');
 
-    await waitFor(() => expect(browserReadConsoleApi.listKnowledge).toHaveBeenCalled());
+    await waitFor(() => expect(catalog).toHaveBeenCalled());
     expect(detail).not.toHaveBeenCalled();
-    expect(screen.getByText('仅搜索标题与 YAML 召回字段')).toBeVisible();
+    expect(screen.getByRole('searchbox', {name: '搜索知识'})).toBeVisible();
   });
 
   it('maps knowledge filters precisely and includes obsolete only when explicitly selected', async () => {
@@ -850,28 +1020,73 @@ describe('Phase 1 read pages', () => {
   it('renders the honest empty operations ledger from the API', async () => {
     renderRoute('/operations');
 
-    expect(await screen.findByText('当前尚无提炼/写入工作流操作')).toBeVisible();
-    expect(browserReadConsoleApi.listOperations).toHaveBeenCalledWith(expect.any(AbortSignal));
+    expect(await screen.findByText('还没有操作记录')).toBeVisible();
+    expect(browserReadConsoleApi.listOperations).toHaveBeenCalledWith(expect.any(AbortSignal), { view: 'all' });
+  });
+  it('keeps the overview usable when operation history has another page', async () => {
+    renderRoute('/', createApi({ listOperations: vi.fn(async () => ok({ items: [], nextCursor: '50', counts: { all: 51, attention: 0, running: 0 }, issues: [] })) }));
+    expect(await screen.findByRole('link', { name: '操作记录' })).toBeVisible();
+    expect(screen.queryByText('总览操作响应包含意外游标。')).not.toBeInTheDocument();
   });
 
-  it('fails closed when operations unexpectedly advertise another cursor', async () => {
+  it('supports the operation ledger pagination contract', async () => {
     const api = createApi({
       listOperations: vi.fn(async () => ok({
-        items: [], nextCursor: 'bad.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+        items: [], nextCursor: '50'
       }))
     });
     renderRoute('/operations', api);
 
-    expect(await screen.findByText('操作记录响应不符合只读契约')).toBeVisible();
+    expect(await screen.findByRole('button', { name: '加载更多记录' })).toBeVisible();
     expect(screen.queryByText('SECRET_SERVER_MESSAGE')).not.toBeInTheDocument();
   });
 
-  it('offers app-only folder selection and the future DeepSeek setup from settings', async () => {
-    renderRoute('/settings');
+  it('offers app-only folder selection and explains when model configuration is unavailable', async () => {
+    renderRoute('/settings', createApi());
     expect(await screen.findByRole('button', { name: '更换大脑文件夹' })).toBeDisabled();
     expect(screen.getByText('请在桌面 App 中更换大脑文件夹')).toBeVisible();
-    expect(screen.getByRole('button', { name: '配置 DeepSeek' })).toBeDisabled();
-    expect(screen.getByText('DeepSeek 设置将在后续阶段启用')).toBeVisible();
+    expect(screen.getByText('请打开最新版桌面 App 配置模型。')).toBeVisible();
+  });
+
+  it('opens archived pending material from the queue into local extraction preparation without sending it', async () => {
+    const source = material({ processingStatus: '已归档' });
+    const extraction = { list: vi.fn(async () => ok({ items: [] })), preview: vi.fn(), start: vi.fn(), get: vi.fn(), cancel: vi.fn() };
+    const api = createApi({ extraction, listMaterials: vi.fn(async () => ok({ items: [source] })) });
+    renderRoute('/queue', api);
+    expect(await screen.findByRole('link', { name: '提炼 材料标题' })).toHaveAttribute('href', `/extractions/new?materialPath=${encodeURIComponent(source.path)}`);
+    expect(extraction.start).not.toHaveBeenCalled();
+  });
+
+  it.each(['已归档', '未归档'] as const)('keeps %s cards visible but only enables archived extraction', async (processingStatus) => {
+    const source = material({ processingStatus });
+    const extraction = { list: vi.fn(async () => ok({ items: [] })), preview: vi.fn(), start: vi.fn(), get: vi.fn(), cancel: vi.fn() };
+    renderRoute('/', createApi({ extraction, listMaterials: vi.fn(async () => ok({ items: [source] })) }));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '材料标题，微信，未提炼' }));
+    const action = screen.getByRole('button', { name: '开始提炼' });
+    if (processingStatus === '已归档') expect(action).toBeEnabled();
+    else {
+      expect(action).toBeDisabled();
+      expect(screen.getByText('请先到收件箱归档这份资料，再开始提炼。')).toBeVisible();
+      await user.click(action);
+    }
+    expect(extraction.preview).not.toHaveBeenCalled();
+    expect(extraction.start).not.toHaveBeenCalled();
+  });
+
+  it('keeps persisted extraction records discoverable even if the material is no longer in the queue', async () => {
+    const run = { id: 'e52917bc-a9df-482f-aae8-8c4b6da4301d', materialPath: material().path, title: '已经移走的原文', readingState: '未看' as const,
+      sourceRawSha256: 'a'.repeat(64), ruleFingerprint: 'b'.repeat(64), model: 'deepseek-v4-flash' as const, createdAt: '2026-09-06T00:00:00.000Z', status: 'cancelled' as const };
+    const extraction = { list: vi.fn(async () => ok({ items: [run] })), preview: vi.fn(), start: vi.fn(), get: vi.fn(), cancel: vi.fn() };
+    renderRoute('/queue', createApi({ extraction }));
+    expect(await screen.findByRole('link', { name: /已经移走的原文/u })).toHaveAttribute('href', `/extractions/${run.id}`);
+    expect(extraction.list).toHaveBeenCalledWith(undefined, expect.any(AbortSignal));
+    expect(extraction.start).not.toHaveBeenCalled();
+  });
+
+  it('labels the extraction workspace as candidate-only rather than claiming it writes knowledge', async () => {
+    renderRoute('/extractions/new', createApi());
+    expect(await screen.findByLabelText('当前模式：候选不入库')).toBeVisible();
   });
 
   it('handles pending, cancelled, failed, and successful desktop folder selection', async () => {
@@ -912,11 +1127,12 @@ describe('Phase 1 read pages', () => {
 
   it('renders connection diagnostics from the runtime snapshot without extra reads', async () => {
     renderRoute('/connections');
+    await userEvent.click(await screen.findByRole('button', { name: /^高级诊断/u }));
 
     expect(await screen.findByText('models.example')).toBeVisible();
     expect(screen.getByText('deepseek-v3')).toBeVisible();
     expect(screen.getByText('3 个结构问题')).toBeVisible();
-    expect(screen.getByText('当前阶段严格只读')).toBeVisible();
+    expect(screen.getByText(/此项仅诊断旧版通用接口；个人 App 的确认归档和候选入库使用独立入口/u)).toBeVisible();
     expect(browserReadConsoleApi.listMaterials).not.toHaveBeenCalled();
     expect(browserReadConsoleApi.listKnowledge).not.toHaveBeenCalled();
     expect(browserReadConsoleApi.listOperations).not.toHaveBeenCalled();
@@ -938,6 +1154,7 @@ describe('Phase 1 read pages', () => {
       }))
     });
     renderRoute('/connections', api);
+    await userEvent.click(await screen.findByRole('button', { name: /^高级诊断/u }));
 
     expect(await screen.findByText('大脑文件夹不可用')).toBeVisible();
     expect(screen.getByText('未配置写入开关')).toBeVisible();
@@ -963,6 +1180,7 @@ describe('Phase 1 read pages', () => {
       }))
     });
     renderRoute('/connections', api);
+    await userEvent.click(await screen.findByRole('button', { name: /^高级诊断/u }));
 
     expect(await screen.findByText('安全读取能力未验证')).toBeVisible();
     expect(screen.getByText('安全恢复能力未验证')).toBeVisible();
@@ -982,11 +1200,12 @@ describe('Phase 1 read pages', () => {
       }
     })) });
     renderRoute('/settings', api);
-    expect(await screen.findByText('本地安全写入尚未启用')).toBeVisible();
-    expect(screen.getByText('恢复功能尚未启用')).toBeVisible();
-    expect(screen.getByText('当前大脑规则尚未批准写入')).toBeVisible();
+    await userEvent.click(await screen.findByRole('button', { name: /^高级诊断/u }));
+    expect(await screen.findByText('通用写入接口尚未启用')).toBeVisible();
+    expect(screen.getByText('通用接口恢复模块尚未启用')).toBeVisible();
+    expect(screen.getByText('当前规则未批准旧通用接口写入')).toBeVisible();
     expect(screen.queryByText(/其他阻断项/u)).not.toBeInTheDocument();
-    expect(screen.getByText('当前阶段严格只读')).toBeVisible();
+    expect(screen.getByText(/此项仅诊断旧版通用接口；个人 App 的确认归档和候选入库使用独立入口/u)).toBeVisible();
   });
 
   it('reports an enabled write gate truthfully while keeping the Phase 1 interface read-only', async () => {
@@ -997,9 +1216,10 @@ describe('Phase 1 read pages', () => {
       }))
     });
     renderRoute('/connections', api);
+    await userEvent.click(await screen.findByRole('button', { name: /^高级诊断/u }));
 
     expect(await screen.findByText('写入门已通过')).toBeVisible();
-    expect(screen.getByText('当前阶段严格只读')).toBeVisible();
+    expect(screen.getByText(/此项仅诊断旧版通用接口；个人 App 的确认归档和候选入库使用独立入口/u)).toBeVisible();
     expect(screen.queryByText('能力已验证但未启用')).not.toBeInTheDocument();
   });
 
@@ -1009,6 +1229,7 @@ describe('Phase 1 read pages', () => {
       .mockResolvedValueOnce(failure<HealthSnapshot>('disconnected'));
     const api = createApi({ getHealth });
     renderRoute('/connections', api);
+    await userEvent.click(await screen.findByRole('button', { name: /^高级诊断/u }));
     expect(await screen.findByText('models.example')).toBeVisible();
 
     act(() => window.dispatchEvent(new Event('focus')));

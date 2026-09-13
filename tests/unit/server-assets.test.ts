@@ -51,6 +51,9 @@ describe('server migration assets', () => {
     await mkdir(source, { recursive: true });
     await writeFile(join(source, '001_initial.sql'), 'SELECT 1;\n', 'utf8');
     await writeFile(join(source, '002_read_api_jobs.sql'), 'SELECT 2;\n', 'utf8');
+    const worker = await readFile(resolve('src/server/attachments/pdf-worker.mjs'), 'utf8');
+    await mkdir(join(root, 'src/server/attachments'), { recursive: true });
+    await writeFile(join(root, 'src/server/attachments/pdf-worker.mjs'), worker, 'utf8');
 
     await execFileAsync(
       resolve('node_modules/.bin/tsx'),
@@ -62,5 +65,6 @@ describe('server migration assets', () => {
       .resolves.toBe('SELECT 1;\n');
     await expect(readFile(join(root, 'dist/server/db/migrations/002_read_api_jobs.sql'), 'utf8'))
       .resolves.toBe('SELECT 2;\n');
+    await expect(readFile(join(root, 'dist/server/pdf-worker.mjs'), 'utf8')).resolves.toBe(worker);
   });
 });

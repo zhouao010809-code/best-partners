@@ -19,7 +19,9 @@ const forbiddenRuntimePatterns = [
   /publish|schedul|archiv/iu,
   /DataRecovery/u,
   /onGoPlanning|onGoContent/u,
-  /(?:发布|排期|归档|拍摄|剪辑|审核)/u,
+  // “归档” is also the current library's user-facing vocabulary. Keep
+  // rejecting inherited production hooks above, without banning that caption.
+  /(?:发布|排期|拍摄|剪辑|审核)/u,
   /\/Users\/ao\/Desktop\/production-deck-source-kit/u
 ] as const;
 

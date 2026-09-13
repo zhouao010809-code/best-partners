@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BookOpenText, Filter, Search, Tags } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import type {
   ApiClientResult,
   KnowledgePage as KnowledgePageResponse,
@@ -8,6 +9,8 @@ import type {
 } from '../api/client.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { KnowledgeDetail } from '../components/KnowledgeDetail.js';
+import { MaterialTrashProvider } from '../components/MaterialTrash.js';
+import { KnowledgeCabinetPage } from './KnowledgeCabinetPage.js';
 import { PageState } from '../components/PageState.js';
 import type { UsageStatus } from '../../shared/domain/records.js';
 import {
@@ -90,7 +93,20 @@ function validatePage(
 }
 
 export function KnowledgePage() {
+  const { api, refreshHealth } = useConsoleRuntime();
+  const [, setParams] = useSearchParams();
+  const [revision, setRevision] = useState(0);
+  return <MaterialTrashProvider onChanged={entry => {
+    if (entry.status === 'trashed' || entry.status === 'deleted') setParams(current => { const next = new URLSearchParams(current); if (next.get('path') === entry.materialPath) next.delete('path'); return next; }, { replace: true });
+    setRevision(value => value + 1); void refreshHealth?.().catch(() => undefined);
+  }}>{api.listKnowledgeCatalog ? <KnowledgeCabinetPage key={revision} /> : <LegacyKnowledgePage key={revision} />}</MaterialTrashProvider>;
+}
+
+function LegacyKnowledgePage() {
   const runtime = useConsoleRuntime();
+  const [params, setParams] = useSearchParams();
+  const linkedPath = params.get('path') ?? '';
+  const closeLinkedDetail = useCallback(() => { setParams((current) => { const next = new URLSearchParams(current); next.delete('path'); return next; }, { replace: true }); }, [setParams]);
   const readUnavailable = runtime.health.status === 'failed'
     || ('data' in runtime.health && runtime.health.data !== undefined && !indexCanServe(runtime.health.data));
   const [draft, setDraft] = useState<KnowledgeFilterDraft>(EMPTY_FILTERS);
@@ -314,7 +330,7 @@ export function KnowledgePage() {
     : { status: 'loading' };
 
   return (
-    <div className={`knowledge-workspace${selected === undefined ? '' : ' knowledge-workspace--detail'}`}>
+    <div className={`knowledge-workspace${selected === undefined && !linkedPath ? '' : ' knowledge-workspace--detail'}`}>
       <section className="instrument-panel workspace-panel live-list-page" aria-labelledby="knowledge-results-title">
         <form className="filter-panel knowledge-filters" aria-label="知识筛选" onSubmit={(event) => { event.preventDefault(); applyFilters(); }}>
           <label className="filter-field filter-field--search"><span>标题与 YAML 召回字段</span><span className="filter-input"><Search aria-hidden="true" /><input value={draft.search} onChange={(event) => setDraft({ ...draft, search: event.target.value })} placeholder="标题、主题、关键词、场景与结论" /></span></label>
@@ -342,7 +358,7 @@ export function KnowledgePage() {
                   type="button"
                   aria-label={`查看 ${item.title} 详情`}
                   aria-expanded={selected?.path === item.path}
-                  onClick={() => { setSelected(item); setOpenState('idle'); }}
+                  onClick={() => { closeLinkedDetail(); setSelected(item); setOpenState('idle'); }}
                 >
                   <span className="record-list__icon"><BookOpenText aria-hidden="true" /></span>
                   <span className="record-list__primary"><strong>{item.title}</strong><small>{item.path}</small></span>
@@ -367,9 +383,34 @@ export function KnowledgePage() {
           </button>
         )}
       </section>
-      {selected !== undefined && (
+      {linkedPath ? <LinkedKnowledgeDetail key={linkedPath} path={linkedPath} onClose={closeLinkedDetail} /> : selected !== undefined && (
         <KnowledgeDetail key={selected.path} record={selected} resource={visibleDetailResource} openState={openState} onClose={closeDetail} onOpen={() => { void openSelected(); }} />
       )}
     </div>
   );
+}
+
+function LinkedKnowledgeDetail({ path, onClose }: { path: string; onClose: () => void }) {
+  const { api, dataRevision } = useConsoleRuntime();
+  const [resource, setResource] = useState<PageResource<LiveKnowledgeDetail>>({ status: 'loading' });
+  const [retry, setRetry] = useState(0);
+  const [openState, setOpenState] = useState<'idle' | 'opening' | 'opened' | 'failed'>('idle');
+  useEffect(() => {
+    const controller = new AbortController(); setResource({ status: 'loading' });
+    void api.getKnowledgeDetail(path, controller.signal).then((result) => {
+      if (controller.signal.aborted || isCancelled(result)) return;
+      if (!result.ok) { setResource({ status: 'failed', state: stableFailure(result.state.status, '读取知识') }); return; }
+      const detail = result.value;
+      if (detail.path !== path || detail.record && !detailMatches(detail.record, detail)) {
+        setResource({ status: 'failed', state: validationState('知识详情与指定路径或版本不一致，请重新读取。') }); return;
+      }
+      setResource({ status: 'ready', data: detail });
+    });
+    return () => controller.abort();
+  }, [api, path, dataRevision, retry]);
+  const detail = resource.status === 'ready' ? resource.data : undefined;
+  const record = detail?.record ?? { path, title: detail?.title ?? path.split('/').at(-1)?.replace(/\.md$/u, '') ?? '知识' };
+  return <KnowledgeDetail record={record} resource={resource} openState={openState} onClose={onClose} onRetry={() => setRetry((value) => value + 1)} onOpen={() => {
+      setOpenState('opening'); void api.openKnowledge(path).then((result) => setOpenState(result.ok && result.value.path === path && result.value.opened ? 'opened' : 'failed'));
+    }} />;
 }

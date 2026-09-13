@@ -167,6 +167,21 @@ describe('loopback Host and Origin boundary', () => {
 });
 
 describe('signed session and bound CSRF protection', () => {
+  it('preserves the first tab session when another tab bootstraps with the same cookie', async () => {
+    const server = createServer();
+    const first = await bootstrap(server);
+    const second = await server.inject({
+      url: '/api/v1/bootstrap', headers: hostHeaders({ cookie: first.cookie })
+    });
+    const cookie = second.headers['set-cookie'] ? sessionCookie(second) : first.cookie;
+    const accepted = await server.inject({
+      method: 'POST', url: '/api/v1/__security-test/mutation',
+      headers: hostHeaders({ origin: PRODUCTION_ORIGIN, cookie, 'x-csrf-token': first.csrfToken })
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(second.json().data.csrfToken).toBe(first.csrfToken);
+  });
+
   it('issues a hardened session cookie and a non-cookie CSRF token at bootstrap', async () => {
     const server = createServer();
     const response = await server.inject({

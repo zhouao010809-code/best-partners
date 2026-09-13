@@ -283,10 +283,11 @@ test('renders safe connection diagnostics without leaking server secrets', async
   page.on('console', (message) => consoleMessages.push(message.text()));
   await openPage(page, '/settings');
 
+  await page.getByRole('button', { name: /^高级诊断/u }).click();
   await expect(page.getByText('models.fixture.example')).toBeVisible();
   await expect(page.getByText('fixture-brain-model')).toBeVisible();
   await expect(page.getByText('3 个结构问题')).toBeVisible();
-  await expect(page.getByText('当前阶段严格只读')).toBeVisible();
+  await expect(page.getByText(/此项仅诊断旧版通用接口；个人 App 的确认归档和候选入库使用独立入口/u)).toBeVisible();
   await expect(page.getByRole('button', { name: '更换大脑文件夹' })).toBeDisabled();
   await expect(page.getByText('请在桌面 App 中更换大脑文件夹')).toBeVisible();
   await expect(page.getByText('DeepSeek 设置将在后续阶段启用')).toBeVisible();

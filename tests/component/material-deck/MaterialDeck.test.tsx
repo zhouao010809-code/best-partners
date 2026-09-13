@@ -52,6 +52,25 @@ describe('MaterialDeck interactions', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps the showcase caption in sync with hover, selection and removed cards', () => {
+    const cards = [makeCard(1), makeCard(2)];
+    const { container, rerender } = render(<MaterialDeck appearance="showcase" cards={cards} onPrimaryAction={vi.fn()} />);
+    const caption = screen.getByRole('region', { name: '当前资料' });
+    expect(caption).toHaveTextContent('材料 1');
+    const triggers = cardTriggers(container);
+    fireEvent.mouseEnter(triggers[1]!);
+    expect(caption).toHaveTextContent('材料 2');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(triggers[0]!);
+    fireEvent.mouseEnter(triggers[1]!);
+    expect(caption).toHaveTextContent('材料 1');
+    rerender(<MaterialDeck appearance="showcase" cards={[cards[1]!]} onPrimaryAction={vi.fn()} />);
+    expect(caption).toHaveTextContent('材料 2');
+    rerender(<MaterialDeck appearance="showcase" cards={[]} onPrimaryAction={vi.fn()} />);
+    expect(caption).toHaveTextContent('暂无待提炼资料');
+    expect(caption).not.toHaveTextContent('材料 2');
+  });
+
   it('renders ordered silver-card summaries with persistent textual status badges', () => {
     const cards = [makeCard(1), makeCard(2), makeCard(3)];
     const { container } = render(
@@ -68,6 +87,34 @@ describe('MaterialDeck interactions', () => {
     expect(screen.getAllByText('部分入库')).toHaveLength(1);
     expect(container.querySelectorAll('[data-card-mode="collapsed"]')).toHaveLength(3);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('opts into desk geometry while retaining keyboard selection and the exact primary card', async () => {
+    const user = userEvent.setup();
+    const cards = [makeCard(1), makeCard(2)];
+    const onPrimaryAction = vi.fn();
+    const { container, rerender } = render(
+      <MaterialDeck cards={cards} onPrimaryAction={onPrimaryAction} />
+    );
+    const region = screen.getByRole('region', { name: '待提炼材料牌堆' });
+    expect(region).toHaveAttribute('data-deck-appearance', 'default');
+    const style = document.head.querySelector('style[data-material-deck-style]')!;
+    const defaultGeometry = style.textContent;
+
+    rerender(<MaterialDeck appearance="desk" cards={cards} onPrimaryAction={onPrimaryAction} />);
+
+    expect(region).toHaveAttribute('data-deck-appearance', 'desk');
+    expect(style.textContent).not.toBe(defaultGeometry);
+    const triggers = cardTriggers(container);
+    triggers[0]!.focus();
+    await user.keyboard('{ArrowRight}{Enter}');
+    const detail = screen.getByRole('dialog', { name: '材料 2 详情' });
+    expect(onPrimaryAction).not.toHaveBeenCalled();
+    await user.click(within(detail).getByRole('button', { name: '继续审阅' }));
+    expect(onPrimaryAction).toHaveBeenCalledExactlyOnceWith(cards[1]);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(triggers[1]).toHaveFocus();
   });
 
   it('fails closed before duplicate keys can create two tab stops or dialogs', () => {
@@ -148,6 +195,7 @@ describe('MaterialDeck interactions', () => {
   it.each([
     ['click', 'start', '开始提炼'],
     ['click', 'resume', '继续审阅'],
+    ['click', 'progress', '查看进度'],
     ['click', 'recover', '恢复提炼']
   ] as const)('opens by %s and exposes the %s action as %s', async (_, nextAction, label) => {
     const user = userEvent.setup();

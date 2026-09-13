@@ -1,7 +1,6 @@
 import type { SchemaIssue } from '../../shared/domain/records.js';
 import { createHash } from 'node:crypto';
-import { parseKnowledgeNote } from '../rules/knowledge-schema.js';
-import { parseLibraryNote } from '../rules/library-schema.js';
+import { parseKnowledgeNoteForRead, parseLibraryNoteForRead } from '../rules/read-compatible-notes.js';
 import type { ReadVaultGateway, VersionedBytes } from '../vault/VaultGateway.js';
 import { sha256Bytes } from '../vault/raw-bytes.js';
 import { canonicalJson, type IndexedFile, type IndexRepository } from './index-repository.js';
@@ -232,7 +231,7 @@ export class SearchIndexer {
     assertRawResponse(path, raw);
     const root = rootForPath(path);
     if (root === '01图书馆') {
-      const parsed = parseLibraryNote(raw.bytes, path, raw.upstreamVersion);
+      const parsed = parseLibraryNoteForRead(raw.bytes, path, raw.upstreamVersion);
       if (parsed.record !== undefined) {
         assertNotAborted(signal);
         scan.files.push({ kind: 'material', record: parsed.record });
@@ -251,7 +250,7 @@ export class SearchIndexer {
       return;
     }
 
-    const parsed = parseKnowledgeNote(raw.bytes, path, raw.upstreamVersion);
+    const parsed = parseKnowledgeNoteForRead(raw.bytes, path, raw.upstreamVersion);
     if (parsed.record !== undefined) {
       assertNotAborted(signal);
       scan.files.push({ kind: 'knowledge', record: parsed.record });

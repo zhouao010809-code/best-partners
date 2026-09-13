@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parseLibraryNote } from '../../src/server/rules/library-schema.js';
 import { buildServer } from '../../src/server/app.js';
 import { applyMigrations } from '../../src/server/db/migrate.js';
 import { createIndexRepository, type IndexRepository } from '../../src/server/index/index-repository.js';
@@ -45,6 +46,7 @@ function material(input: Partial<MaterialRecord> & Pick<MaterialRecord, 'path' |
     knowledgeStatus: input.knowledgeStatus ?? '未提炼',
     collectedAt: input.collectedAt ?? '2026-08-31',
     generatedKnowledge: input.generatedKnowledge ?? [],
+    ...(input.topics === undefined ? {} : { topics: input.topics }),
     ...(input.upstreamVersion === undefined ? {} : { upstreamVersion: input.upstreamVersion })
   };
 }
@@ -207,6 +209,266 @@ function expectFailure(
 }
 
 describe('versioned read APIs', () => {
+  it('preserves existing material topics in the read projection and accepts old index rows', () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const path = '01图书馆/来自B站/2026-09/资料包/原文.md';
+    const bytes = new TextEncoder().encode([
+      '---', '类型: 原始资料', '处理状态: 已归档', '来源平台: B站',
+      '所属主题: ["[[02知识库/01方法/01学习|学习]]"]', '关键词: []',
+      '知识入库状态: 已入库', '生成知识: []', '---', '# 原文保持原样'
+    ].join('\n'));
+    const parsed = parseLibraryNote(bytes, path);
+    expect(parsed.record?.topics).toEqual(['02知识库/01方法/01学习']);
+    repository.replaceFile({ kind: 'material', record: parsed.record! });
+    expect(repository.listMaterials({}).items[0]?.topics).toEqual(['02知识库/01方法/01学习']);
+    database.prepare('UPDATE search_index SET yaml_json = json_remove(yaml_json, \'$.topics\') WHERE path = ?').run(path);
+    expect(repository.listMaterials({}).items[0]?.topics ?? []).toEqual([]);
+  });
+
+  it('lists complete source folders and paginates only direct files across all statuses', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const root = '01图书馆/来自B站/2026-09/资料包';
+    const records = Array.from({ length: 205 }, (_, index) => material({
+      path: `${root}/${String(index).padStart(3, '0')}.md`, title: `真实资料${index}`,
+      knowledgeStatus: index % 3 === 0 ? '已入库' : index % 3 === 1 ? '部分入库' : '未提炼'
+    }));
+    records.push(material({ path: '01图书馆/来自B站/2026-09/单篇.md', title: '单篇' }));
+    records.forEach((record) => repository.replaceFile({ kind: 'material', record }));
+    const { gateway, writeCalls } = createGateway({});
+    const server = createReadServer({ repository, gateway, database });
+    const read = (query = '') => server.inject({ method: 'GET', url: `/api/v1/library?mode=source${query}`, headers: requestHeaders() });
+    const rootResponse = await read();
+    expect(rootResponse.statusCode).toBe(200);
+    expect(rootResponse.json().data).toMatchObject({
+      mode: 'source', path: '', total: 206, directTotal: 0, items: [], indexVersion: 7,
+      breadcrumbs: [{ path: '', label: '全部资料' }],
+      folders: [{ path: '来自B站', label: 'B站', count: 206, folderCount: 1 }]
+    });
+    const month = await read(`&path=${encodeURIComponent('来自B站/2026-09')}`);
+    expect(month.json().data).toMatchObject({ total: 206, directTotal: 1, items: [{ title: '单篇' }],
+      folders: [{ path: '来自B站/2026-09/资料包', count: 205 }] });
+    const first = await read(`&path=${encodeURIComponent('来自B站/2026-09/资料包')}&limit=200`);
+    expect(first.json().data).toMatchObject({ total: 205, directTotal: 205, folders: [] });
+    expect(first.json().data.items).toHaveLength(200);
+    const second = await read(`&path=${encodeURIComponent('来自B站/2026-09/资料包')}&limit=200&cursor=${encodeURIComponent(first.json().data.nextCursor)}`);
+    expect(second.json().data.items).toHaveLength(5);
+    expect(new Set([...first.json().data.items, ...second.json().data.items].map((item: MaterialRecord) => item.path)).size).toBe(205);
+    expect(second.json().data.nextCursor).toBeUndefined();
+    const search = await read(`&title=${encodeURIComponent('真实资料204')}`);
+    expect(search.json().data).toMatchObject({ folders: [], total: 1, directTotal: 1, items: [{ title: '真实资料204' }] });
+    const emptyFilter = await read(`&path=${encodeURIComponent('来自B站/2026-09')}&title=${encodeURIComponent('没有这个标题')}`);
+    expect(emptyFilter.statusCode).toBe(200);
+    expect(emptyFilter.json().data).toMatchObject({ folders: [], total: 0, directTotal: 0, items: [] });
+    const oldDefault = await server.inject({ method: 'GET', url: '/api/v1/materials?limit=200', headers: requestHeaders() });
+    expect(oldDefault.json().data.items.every((item: MaterialRecord) => item.knowledgeStatus !== '已入库')).toBe(true);
+    expect(gateway.rawReadPaths).toEqual([]);
+    expect(writeCalls).toEqual([]);
+  });
+
+  it('classifies only unique indexed topics and bidirectional links with deduplicated ancestors', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const records = [
+      material({ path: '01图书馆/来自B站/多归属.md', title: '多归属', topics: ['01方法', '02知识库/01方法/01学习'], generatedKnowledge: ['笔记法', '02知识库/02思考/01系统/系统思考.md'] }),
+      material({ path: '01图书馆/来自B站/反向.md', title: '反向资料' }),
+      material({ path: '01图书馆/来自B站/未分类.md', title: '未分类', generatedKnowledge: ['重名', '../危险', 'https://bad.example/note'], topics: ['草图示例'] }),
+      material({ path: '01图书馆/来自B站/碰撞.md', title: '系统思考', generatedKnowledge: ['系统思考'] })
+    ];
+    records.forEach((record) => repository.replaceFile({ kind: 'material', record }));
+    [
+      knowledge({ path: '02知识库/01方法/01学习/笔记法.md', title: '笔记法', rawSha256: 'b'.repeat(64), sourceMaterials: ['反向资料'], usageStatus: '过时' }),
+      knowledge({ path: '02知识库/02思考/01系统/系统思考.md', title: '系统思考', rawSha256: 'c'.repeat(64) }),
+      knowledge({ path: '02知识库/01方法/01学习/重名.md', title: '重名', rawSha256: 'd'.repeat(64) }),
+      knowledge({ path: '02知识库/02思考/01系统/重名.md', title: '重名', rawSha256: 'e'.repeat(64) })
+    ].forEach((record) => repository.replaceFile({ kind: 'knowledge', record }));
+    const { gateway } = createGateway({});
+    const server = createReadServer({ repository, gateway, database });
+    const get = (path = '') => server.inject({ method: 'GET', url: `/api/v1/library?path=${encodeURIComponent(path)}`, headers: requestHeaders() });
+    const root = await get();
+    expect(root.statusCode).toBe(200);
+    expect(root.json().data).toMatchObject({ mode: 'topic', total: 4, directTotal: 0, unclassifiedCount: 2,
+      folders: expect.arrayContaining([
+        { path: '01方法', label: '方法', count: 2, folderCount: 1 },
+        { path: '02思考', label: '思考', count: 1, folderCount: 1 },
+        { path: '@unclassified', label: '待分类', count: 2, folderCount: 0 }
+      ]) });
+    // A material sharing a bare name with a knowledge note makes that reference ambiguous.
+    expect(root.json().data.folders.find((folder: { path: string }) => folder.path === '02思考').count).toBe(1);
+    const parent = await get('01方法');
+    expect(parent.json().data).toMatchObject({ total: 2, directTotal: 0, items: [] });
+    const child = await get('01方法/01学习');
+    expect(child.json().data).toMatchObject({ total: 2, directTotal: 2 });
+    expect(child.json().data.items.map((item: MaterialRecord) => item.title).sort()).toEqual(['反向资料', '多归属']);
+    expect((await get('@unclassified')).json().data.items).toHaveLength(2);
+    expect(gateway.rawReadPaths).toEqual([]);
+  });
+
+  it('binds library cursors to directory filters, index version and trash visibility', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const paths = ['01图书馆/来自B站/（原文）.md', '01图书馆/来自B站/📝原文.md'];
+    paths.forEach((path) => repository.replaceFile({ kind: 'material', record: material({ path, title: '原文' }) }));
+    database.prepare('INSERT INTO personal_queue_visibility (material_path, removed_at) VALUES (?, ?)').run(paths[0], '2026-09-07');
+    const { gateway } = createGateway({});
+    let version = 7;
+    const server = createReadServer({ repository, gateway, database, currentIndexVersion: () => version });
+    const get = (query: string) => server.inject({ method: 'GET', url: `/api/v1/library?${query}`, headers: requestHeaders() });
+    const base = `mode=source&path=${encodeURIComponent('来自B站')}&limit=1`;
+    const first = await get(base);
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data.total).toBe(2);
+    const cursor = encodeURIComponent(first.json().data.nextCursor);
+    const next = `${base}&cursor=${cursor}`;
+    expect([...first.json().data.items, ...(await get(next)).json().data.items].map((item: MaterialRecord) => item.path).sort()).toEqual([...paths].sort());
+    expectFailure(await get(`${next}&title=原文`), 400, 'VALIDATION_ERROR');
+    expectFailure(await get(`mode=topic&path=@unclassified&cursor=${cursor}`), 400, 'VALIDATION_ERROR');
+    expectFailure(await server.inject({ method: 'GET', url: `/api/v1/materials?cursor=${cursor}`, headers: requestHeaders() }), 400, 'VALIDATION_ERROR');
+    database.prepare("INSERT INTO personal_trash_entries (id,material_path,title,created_at,status,manifest_json) VALUES ('trash-1',?,'原文','2026-09-07','trashed','{}')").run(paths[1]);
+    expectFailure(await get(next), 409, 'VERSION_CONFLICT');
+    expect((await get(base)).json().data.total).toBe(1);
+    database.prepare('DELETE FROM personal_trash_entries').run();
+    version += 1;
+    expectFailure(await get(next), 409, 'VERSION_CONFLICT');
+    expectFailure(await get('mode=source&path=does-not-exist'), 404, 'LIBRARY_FOLDER_NOT_FOUND');
+    expectFailure(await get(`mode=source&path=${encodeURIComponent('来自B站/%2e%2e')}`), 404, 'LIBRARY_FOLDER_NOT_FOUND');
+    for (const path of ['../02知识库', '来自B站//坏路径', '/来自B站']) {
+      expectFailure(await get(`mode=source&path=${encodeURIComponent(path)}`), 400, 'VALIDATION_ERROR');
+    }
+  });
+
+  it('rejects library pages when their index or trash snapshot changes while collecting records', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const path = '01图书馆/来自B站/资料.md';
+    repository.replaceFile({ kind: 'material', record: material({ path, title: '资料' }) });
+    const { gateway } = createGateway({});
+    let version = 7;
+    const server = createReadServer({ repository, gateway, database, currentIndexVersion: () => version });
+    const list = repository.listKnowledge.bind(repository);
+    vi.spyOn(repository, 'listKnowledge').mockImplementationOnce((query) => {
+      const result = list(query);
+      version += 1;
+      return result;
+    });
+    const get = () => server.inject({ method: 'GET', url: '/api/v1/library', headers: requestHeaders() });
+    expectFailure(await get(), 409, 'VERSION_CONFLICT');
+    vi.spyOn(repository, 'listKnowledge').mockImplementationOnce((query) => {
+      const result = list(query);
+      database.prepare("INSERT INTO personal_trash_entries (id,material_path,title,created_at,status,manifest_json) VALUES ('trash-snapshot',?,'资料','2026-09-07','trashed','{}')").run(path);
+      return result;
+    });
+    expectFailure(await get(), 409, 'VERSION_CONFLICT');
+    expect(gateway.rawReadPaths).toEqual([]);
+  });
+
+  it('lists unreadable metadata separately with version-bound pagination and reads the original in App', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const path = '01图书馆/小兆clipper/原始剪藏.md';
+    const markdown = '\uFEFF# 原文\r\n\r\n![附件](images/原图.png)\r\n<script>不应执行</script>\r\n';
+    const issues = [path, '02知识库/旧知识.md'].map((path) => ({
+      path, code: 'FRONTMATTER_INVALID' as const, message: 'FRONTMATTER_OPENING_DELIMITER_MISSING'
+    }));
+    issues.forEach((issue) => repository.replaceIssue(issue));
+    let version = 7;
+    const { gateway, openedPaths, writeCalls } = createGateway({ [path]: markdown });
+    const server = createReadServer({ repository, gateway, database, currentIndexVersion: () => version });
+    const first = await server.inject({ method: 'GET', url: '/api/v1/documents/issues?limit=1', headers: requestHeaders() });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data.items).toEqual([issues[0]]);
+    const cursor = first.json().data.nextCursor as string;
+    const nextUrl = `/api/v1/documents/issues?cursor=${encodeURIComponent(cursor)}&limit=1`;
+    const second = await server.inject({ method: 'GET', url: nextUrl, headers: requestHeaders() });
+    expect(second.json().data).toEqual({ items: [issues[1]] });
+    const detail = await server.inject({ method: 'GET', url: `/api/v1/documents/file?path=${encodeURIComponent(path)}`, headers: requestHeaders() });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.headers['cache-control']).toBe('no-store');
+    expect(detail.json().data).toMatchObject({ path, title: '原始剪藏', markdown, versionMarker: { rawSha256: (await gateway.readRaw(path)).rawSha256 } });
+    expect(repository.listMaterials({}).items).toEqual([]);
+    expect(openedPaths).toEqual([]);
+    expect(writeCalls).toEqual([]);
+    version += 1;
+    expectFailure(await server.inject({ method: 'GET', url: nextUrl, headers: requestHeaders() }), 409, 'VERSION_CONFLICT');
+    expectFailure(await server.inject({ method: 'GET', url: `/api/v1/materials?cursor=${encodeURIComponent(cursor)}`, headers: requestHeaders() }), 400, 'VALIDATION_ERROR');
+  });
+
+  it('denies unindexed, non-Markdown and outside-root documents without a raw read', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const { gateway } = createGateway({});
+    const server = createReadServer({ repository, gateway, database });
+    for (const path of ['00大脑规则/规则.md', '03大讲堂/文章.md', '01图书馆/../secret.md', '01图书馆/image.png']) {
+      expectFailure(await server.inject({ method: 'GET', url: `/api/v1/documents/file?path=${encodeURIComponent(path)}`, headers: requestHeaders() }), 400, 'PATH_NOT_ALLOWED');
+    }
+    expectFailure(await server.inject({ method: 'GET', url: '/api/v1/documents/file?path=01图书馆/不存在.md', headers: requestHeaders() }), 404, 'DOCUMENT_NOT_FOUND');
+    expect(gateway.rawReadPaths).toEqual([]);
+  });
+
+  it('paginates full-width and supplementary Unicode issue paths without omissions', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const paths = ['01图书馆/（原文）.md', '01图书馆/📝原文.md'];
+    paths.forEach((path) => repository.replaceIssue({ path, code: 'FRONTMATTER_INVALID', message: 'Missing' }));
+    const { gateway } = createGateway({});
+    const server = createReadServer({ repository, gateway, database });
+    const first = await server.inject({ method: 'GET', url: '/api/v1/documents/issues?limit=1', headers: requestHeaders() });
+    const second = await server.inject({ method: 'GET', url: `/api/v1/documents/issues?limit=1&cursor=${encodeURIComponent(first.json().data.nextCursor)}`, headers: requestHeaders() });
+    expect([...first.json().data.items, ...second.json().data.items].map((item: { path: string }) => item.path).sort()).toEqual(paths.sort());
+  });
+
+  it('rejects a document read if the index changed while the file was read', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const path = '02知识库/待确认.md';
+    repository.replaceIssue({ path, code: 'INVALID_FIELD', field: '使用状态', message: 'Invalid field' });
+    const { gateway } = createGateway({ [path]: '# 原文' });
+    let version = 7;
+    const read = gateway.readRaw.bind(gateway);
+    vi.spyOn(gateway, 'readRaw').mockImplementation(async (path) => {
+      const result = await read(path);
+      version += 1;
+      return result;
+    });
+    const server = createReadServer({ repository, gateway, database, currentIndexVersion: () => version });
+    expectFailure(await server.inject({ method: 'GET', url: `/api/v1/documents/file?path=${encodeURIComponent(path)}`, headers: requestHeaders() }), 409, 'VERSION_CONFLICT');
+  });
+
+  it('rejects mismatched hashes and invalid UTF-8 rather than showing altered originals', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const path = '01图书馆/旧文档.md';
+    repository.replaceIssue({ path, code: 'FRONTMATTER_INVALID', message: 'FRONTMATTER_YAML_INVALID' });
+    const { gateway } = createGateway({ [path]: '# 原文' });
+    const server = createReadServer({ repository, gateway, database });
+    const read = gateway.readRaw.bind(gateway);
+    vi.spyOn(gateway, 'readRaw').mockImplementationOnce(async (path) => ({ ...await read(path), rawSha256: '0'.repeat(64) }));
+    const url = `/api/v1/documents/file?path=${encodeURIComponent(path)}`;
+    expectFailure(await server.inject({ method: 'GET', url, headers: requestHeaders() }), 409, 'VERSION_CONFLICT');
+    gateway.mutateFixture(path, new Uint8Array([0xff]));
+    expectFailure(await server.inject({ method: 'GET', url, headers: requestHeaders() }), 422, 'MARKDOWN_ENCODING_INVALID');
+  });
+
+  it('reads indexed material originals and rejects content or upstream-version drift', async () => {
+    const database = openDatabase();
+    const repository = createIndexRepository(database);
+    const path = '01图书馆/100%25-e\u0301.md';
+    const { gateway } = createGateway({ [path]: '# 已入库原文\r\n' });
+    gateway.mutateFixture(path, '# 已入库原文\r\n', 'v1');
+    const raw = await gateway.readRaw(path);
+    repository.replaceFile({ kind: 'material', record: material({ path, title: '原始标题', rawSha256: raw.rawSha256, upstreamVersion: 'v1', knowledgeStatus: '已入库' }) });
+    const server = createReadServer({ repository, gateway, database });
+    const url = `/api/v1/documents/file?path=${encodeURIComponent(path)}`;
+    const success = await server.inject({ method: 'GET', url, headers: requestHeaders() });
+    expect(success.statusCode).toBe(200);
+    expect(success.json().data).toMatchObject({ path, markdown: '# 已入库原文\r\n', versionMarker: { rawSha256: raw.rawSha256, upstreamVersion: 'v1' } });
+    gateway.mutateFixture(path, '# 已入库原文\r\n', 'v2');
+    expectFailure(await server.inject({ method: 'GET', url, headers: requestHeaders() }), 409, 'VERSION_CONFLICT');
+    gateway.mutateFixture(path, '# 已被修改', 'v1');
+    expectFailure(await server.inject({ method: 'GET', url, headers: requestHeaders() }), 409, 'VERSION_CONFLICT');
+  });
+
   it('returns only pending materials by default and parses every supported filter', async () => {
     const database = openDatabase();
     const repository = createIndexRepository(database);
@@ -541,6 +803,7 @@ describe('versioned read APIs', () => {
         title: '安全知识',
         markdown,
         internalKnowledgeLinks: [],
+        record: knowledge({ path: live.path, title: '安全知识', rawSha256: live.rawSha256, upstreamVersion: 'indexed-version' }),
         versionMarker: { rawSha256: live.rawSha256 }
       },
       version: 1
@@ -837,7 +1100,7 @@ describe('versioned read APIs', () => {
       method: 'GET', url: '/api/v1/operations', headers: requestHeaders()
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ data: { items: [] }, version: 1 });
+    expect(response.json()).toMatchObject({ data: { items: [], counts: { all: 0, attention: 0, running: 0 }, issues: expect.any(Array) }, version: 1 });
   });
 });
 

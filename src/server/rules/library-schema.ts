@@ -108,6 +108,7 @@ export function parseLibraryNote(
     processingStatus: validated.data.处理状态,
     knowledgeStatus: validated.data.知识入库状态,
     ...(validated.data.采集日期 === undefined ? {} : { collectedAt: validated.data.采集日期 }),
+    topics: normalizeWikiLinkList(validated.data.所属主题),
     generatedKnowledge: normalizeWikiLinkList(validated.data.生成知识)
   };
 

@@ -5,10 +5,14 @@ import {
   BrainCircuit,
   CircleDot,
   DatabaseZap,
+  Archive,
+  Inbox,
   GitPullRequestArrow,
   LayoutDashboard,
   ListFilter,
-  Settings
+  Settings,
+  Search,
+  MessageCircle
 } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
@@ -20,10 +24,19 @@ import {
   type ReadConsoleApi
 } from '../api/client.js';
 import type { ConsoleRuntime, Resource } from './ConsoleRuntime.js';
+import { useTrashInventory } from '../components/useTrashInventory.js';
+import { RecycleBinArtwork } from '../components/RecycleBinArtwork.js';
+import { AssistantPanel, AssistantToggle } from '../components/assistant/AssistantPanel.js';
+import { GlobalSearch, rememberRecent } from '../components/GlobalSearch.js';
+import { ASSISTANT_INTENT_EVENT, askAssistant } from '../components/assistant/assistantIntent.js';
+import '../styles/unified-trash.css';
+import '../styles/ai-glow.css';
 
 const NAVIGATION = [
   { to: '/', label: '大脑总览', icon: LayoutDashboard, end: true },
+  { to: '/intake', label: '收件箱', icon: Inbox, end: false },
   { to: '/queue', label: '提炼队列', icon: ListFilter, end: false },
+  { to: '/library', label: '档案库', icon: Archive, end: false },
   { to: '/knowledge', label: '知识库', icon: BookOpenText, end: false },
   { to: '/operations', label: '操作与恢复', icon: GitPullRequestArrow, end: false },
   { to: '/settings', label: '设置', icon: Settings, end: false }
@@ -168,9 +181,9 @@ type PageIdentity = {
 function pageIdentity(pathname: string): PageIdentity {
   if (pathname.startsWith('/extractions/')) {
     return {
-      eyebrow: 'EXTRACTION / PHASE 2',
+      eyebrow: 'EXTRACTION / CANDIDATES',
       title: '提炼工作区',
-      description: '将原始材料收束为可审阅的知识候选。'
+      description: '提炼、编辑与核对候选，确认后保存为正式知识。'
     };
   }
   if (pathname.startsWith('/write-plans/')) {
@@ -184,17 +197,25 @@ function pageIdentity(pathname: string): PageIdentity {
   const canonicalPath = pathname.length > 1 ? pathname.replace(/\/+$/u, '') : pathname;
 
   switch (canonicalPath) {
+    case '/intake':
+      return { eyebrow: 'INCOMING / PERSONAL ARCHIVE', title: '收件箱', description: '收藏的下一站。' };
     case '/':
       return {
         eyebrow: 'BRAIN / OVERVIEW',
         title: '大脑总览',
-        description: '观察材料、知识与本地系统的当前状态。'
+        description: '把收藏的资料变成可复用的知识。'
       };
     case '/queue':
       return {
-        eyebrow: 'LIBRARY / INBOX',
-        title: '提炼队列',
-        description: '筛选尚未入库的原始材料，安排下一次提炼。'
+        eyebrow: 'BRAIN / EXTRACTION',
+        title: '提炼工作台',
+        description: '读懂资料，留下值得复用的知识。'
+      };
+    case '/library':
+      return {
+        eyebrow: 'LIBRARY / ORIGINALS',
+        title: '档案库',
+        description: '妥善封存，按需调阅。'
       };
     case '/knowledge':
       return {
@@ -202,18 +223,20 @@ function pageIdentity(pathname: string): PageIdentity {
         title: '知识库',
         description: '按标题与 YAML 召回字段检索已结构化的知识。'
       };
+    case '/trash':
+      return { eyebrow: 'RECYCLE / LOCAL STORAGE', title: '回收站', description: '收件箱、档案库、提炼队列与知识库的暂存处。' };
     case '/operations':
       return {
         eyebrow: 'SYSTEM / LEDGER',
         title: '操作与恢复',
-        description: '查看本地操作记录；恢复功能将在后续阶段启用。'
+        description: '查看进展，继续未完成的操作。'
       };
     case '/connections':
     case '/settings':
       return {
-        eyebrow: 'SYSTEM / DIAGNOSTICS',
+        eyebrow: 'PREFERENCES / LOCAL WORKSPACE',
         title: '设置',
-        description: '管理大脑文件夹，查看索引、模型与只读状态。'
+        description: '连接你的大脑，设置顺手的工作方式。'
       };
     default:
       return {
@@ -230,6 +253,19 @@ export interface AppShellProps {
 
 export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   const location = useLocation();
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [selectedPassage, setSelectedPassage] = useState('');
+  const [assistantRunning, setAssistantRunning] = useState(false);
+  const [assistantWidth, setAssistantWidth] = useState(430);
+  const resizeAssistant = useCallback((width: number) => setAssistantWidth([360, 430, 520, 600].reduce((nearest, item) => Math.abs(item - width) < Math.abs(nearest - width) ? item : nearest, 430)), []);
+  const closeAssistant = useCallback(() => setAssistantOpen(false), []);
+  const queueHref = useRef('/queue');
+  if (location.pathname.replace(/\/+$/u, '') === '/queue') {
+    const filters = new URLSearchParams(location.search);
+    for (const key of ['materialPath', 'run', 'pane']) filters.delete(key);
+    queueHref.current = `/queue${filters.size ? `?${filters}` : ''}`;
+  }
   const headingRef = useRef<HTMLHeadingElement>(null);
   const previousPath = useRef<string | undefined>(undefined);
   const mountedRef = useRef(false);
@@ -243,6 +279,15 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   const publishedIndexVersionRef = useRef<number | undefined>(undefined);
   const [health, setHealth] = useState<Resource<HealthSnapshot>>({ status: 'loading' });
   const [dataRevision, setDataRevision] = useState(0);
+  const trashInventory = useTrashInventory(api, dataRevision);
+  const trashCountDescription = trashInventory.complete
+    ? `${trashInventory.active.length} 份暂存`
+    : trashInventory.loading ? '正在读取回收站数量' : '回收站数量暂不可用';
+  const lastTrashNavigation = useRef(location.pathname);
+  useEffect(() => {
+    if (lastTrashNavigation.current !== location.pathname && location.pathname === '/trash') trashInventory.refresh();
+    lastTrashNavigation.current = location.pathname;
+  }, [location.pathname, trashInventory.refresh]);
   const identity = pageIdentity(location.pathname);
 
   healthRef.current = health;
@@ -466,29 +511,55 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   }), [api, dataRevision, health, refreshHealth]);
   const connection = connectionPresentation(health);
   const indexStatus = indexPresentation(health);
+  const quietOverview = location.pathname === '/' && health.status === 'ready'
+    && health.data.index.status === 'ready' && health.data.vaultSource.status === 'ready';
   const vaultSource = resourceData(health)?.vaultSource;
+  const vaultName = vaultSource?.status === 'ready' ? vaultSource.displayName : 'local';
+  useEffect(() => {
+    const openAssistant = () => setAssistantOpen(true);
+    const keys = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && !event.isComposing) { event.preventDefault(); setSearchOpen(value => !value); } };
+    window.addEventListener(ASSISTANT_INTENT_EVENT, openAssistant); window.addEventListener('keydown', keys);
+    return () => { window.removeEventListener(ASSISTANT_INTENT_EVENT, openAssistant); window.removeEventListener('keydown', keys); };
+  }, []);
+  useEffect(() => {
+    setSelectedPassage('');
+    const query = new URLSearchParams(location.search);
+    const path = ['/library', '/knowledge'].includes(location.pathname) ? query.get('path') : location.pathname === '/queue' ? query.get('materialPath') : undefined;
+    if (path) rememberRecent(vaultName, { href: `${location.pathname}${location.search}`, title: path.split('/').at(-1)?.replace(/\.md$/iu, '') || path });
+    const selection = () => {
+      const value = window.getSelection();
+      const parent = value?.anchorNode?.parentElement;
+      const end = value?.focusNode?.parentElement;
+      const readingSelector = location.pathname === '/library' ? '.library-original__reading .safe-markdown' : location.pathname === '/knowledge' ? '.knowledge-detail__body section[aria-label="知识正文"] .safe-markdown' : '.queue-original .safe-markdown';
+      const reading = parent?.closest(readingSelector);
+      setSelectedPassage(path && reading && end && reading.contains(end) && !parent?.closest('#assistant-panel') ? value!.toString().trim().slice(0, 6000) : '');
+    };
+    document.addEventListener('selectionchange', selection);
+    return () => document.removeEventListener('selectionchange', selection);
+  }, [location.pathname, location.search, vaultName]);
 
   return (
-    <div className="app-frame">
+    <div className={`app-frame app-frame--assistant-${assistantWidth}${assistantOpen ? ' app-frame--assistant-open' : ''}`}>
       <a className="skip-link" href="#main-content">跳到主内容</a>
 
-      <aside className="sidebar" aria-label="小兆大脑侧边栏">
-        <div className="brand-lockup" aria-label="小兆大脑">
+      <aside className="sidebar" aria-label="最佳拍档侧边栏">
+        <div className="brand-lockup" aria-label="最佳拍档">
           <span className="brand-mark" aria-hidden="true">
             <BrainCircuit strokeWidth={1.7} />
           </span>
           <span className="brand-copy">
-            <strong>小兆大脑</strong>
+            <strong>最佳拍档</strong>
             <small>LOCAL MIND OS</small>
           </span>
         </div>
 
+        <button type="button" className="global-search-trigger" aria-label="搜索大脑" title="搜索大脑 · ⌘ K" onClick={() => setSearchOpen(true)}><Search size={16} /><span>搜索大脑</span><kbd>⌘ K</kbd></button>
         <div className="sidebar-section-label">WORKSPACE</div>
         <nav className="main-navigation" aria-label="主导航">
           {NAVIGATION.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
-              to={to}
+              to={to === '/queue' ? queueHref.current : to}
               end={end}
               aria-label={label}
               title={label}
@@ -502,6 +573,10 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
         </nav>
 
         <div className="sidebar-footer">
+          <NavLink to="/trash" aria-label="回收站" aria-describedby="sidebar-trash-description" title="回收站" className={({ isActive }) => `sidebar-trash${isActive ? ' sidebar-trash--active' : ''}`}>
+            <RecycleBinArtwork hasPapers={trashInventory.active.length > 0} count={trashInventory.complete ? trashInventory.active.length : undefined} />
+            <span id="sidebar-trash-description" className="visually-hidden">{trashCountDescription}</span>
+          </NavLink>
           <div
             className={`connection-badge ${connection.className}`}
             role="status"
@@ -529,25 +604,25 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
         <header className="workspace-bar">
           <div className="workspace-bar__context">
             <Activity aria-hidden="true" />
-            <span>本地只读控制台</span>
+            <span>{location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
           </div>
-          <div className="workspace-bar__status" role="status" aria-label="索引运行状态">
+          <div className="workspace-bar__actions"><div className={`workspace-bar__status${quietOverview ? ' workspace-bar__status--quiet' : ''}`} role="status" aria-label="索引运行状态" title={indexStatus}>
             <CircleDot aria-hidden="true" />
-            <span>{indexStatus}</span>
-          </div>
+            <span>{health.status === 'ready' && health.data.index.status === 'ready' ? '资料已就绪' : indexStatus}</span>
+          </div><AssistantToggle open={assistantOpen} running={assistantRunning} onClick={() => setAssistantOpen(value => !value)} /></div>
         </header>
 
         <main id="main-content" className="main-content" tabIndex={-1}>
           <header className="page-heading">
             <div>
-              <p className="page-heading__eyebrow">{identity.eyebrow}</p>
+              {location.pathname !== '/' && <p className="page-heading__eyebrow">{identity.eyebrow}</p>}
               <h1 ref={headingRef} tabIndex={-1}>{identity.title}</h1>
               <p className="page-heading__description">{identity.description}</p>
             </div>
-            <div className="read-only-seal" aria-label="当前模式：只读">
+            {location.pathname !== '/' && location.pathname !== '/operations' && <div className="read-only-seal" aria-label={location.pathname === '/intake' ? '当前模式：归档需确认' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? '当前模式：入库需确认' : '当前模式：候选不入库' : location.pathname === '/settings' ? '当前模式：本地设置' : ['/trash', '/library', '/knowledge'].includes(location.pathname) && api.trash ? '当前模式：删除需确认' : '当前模式：只读'}>
               <span aria-hidden="true" />
-              READ ONLY
-            </div>
+              {location.pathname === '/intake' ? 'CONFIRM TO ARCHIVE' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? 'CONFIRM TO KEEP' : 'CANDIDATES ONLY' : location.pathname === '/settings' ? 'LOCAL SETTINGS' : (location.pathname === '/trash' || location.pathname.startsWith('/library') || location.pathname === '/knowledge') && api.trash ? 'MANUAL CONFIRM' : 'READ ONLY'}
+            </div>}
           </header>
 
           <div className="page-stage">
@@ -555,6 +630,9 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
           </div>
         </main>
       </section>
+      {searchOpen && <GlobalSearch api={api} vault={vaultName} onClose={() => setSearchOpen(false)} />}
+      {selectedPassage && !searchOpen && <button type="button" className="selection-ask" onMouseDown={event => event.preventDefault()} onClick={() => { const query = new URLSearchParams(location.search); const path = query.get('materialPath') || query.get('path'); askAssistant({ prompt: `请解释这段原文，并结合上下文说明：\n\n“${selectedPassage}”`, ...(path ? { contextPath: path } : {}) }); setSelectedPassage(''); window.getSelection()?.removeAllRanges(); }}><MessageCircle size={16} />问问这段内容</button>}
+      <AssistantPanel api={api} open={assistantOpen} onClose={closeAssistant} width={assistantWidth} onWidthChange={resizeAssistant} onRunningChange={setAssistantRunning} dataRevision={dataRevision} />
     </div>
   );
 }

@@ -12,6 +12,7 @@ import type { MaterialDeckCard } from './materialDeckLayout.js';
 const actionLabels = {
   start: '开始提炼',
   resume: '继续审阅',
+  progress: '查看进度',
   recover: '恢复提炼'
 } as const;
 
@@ -26,7 +27,7 @@ export interface MaterialDeckDetailProps {
 export function MaterialDeckDetail({
   card,
   mode,
-  primaryActionDisabledReason,
+  primaryActionDisabledReason = card.primaryActionDisabledReason,
   onClose,
   onPrimaryAction
 }: MaterialDeckDetailProps) {
@@ -94,7 +95,7 @@ export function MaterialDeckDetail({
           )}
           <button
             type="button"
-            className="material-deck-detail__primary"
+            className={`material-deck-detail__primary${card.nextAction === 'start' ? ' ai-glow-control' : ''}`}
             disabled={primaryActionDisabledReason !== undefined}
             onClick={(event) => {
               event.stopPropagation();

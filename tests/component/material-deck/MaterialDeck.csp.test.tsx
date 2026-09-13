@@ -64,7 +64,7 @@ describe('MaterialDeck CSP isolation', () => {
     const { container } = render(
       <StrictMode>
         <div data-testid="first-deck">
-          <MaterialDeck cards={cards} onPrimaryAction={vi.fn()} />
+          <MaterialDeck appearance="desk" cards={cards} onPrimaryAction={vi.fn()} />
         </div>
         <div data-testid="second-deck">
           <MaterialDeck cards={cards} onPrimaryAction={vi.fn()} />
@@ -79,6 +79,8 @@ describe('MaterialDeck CSP isolation', () => {
     expect(instanceIds[0]).toMatch(/^[A-Za-z0-9]+$/u);
     expect(instanceIds[1]).toMatch(/^[A-Za-z0-9]+$/u);
     expect(instanceIds[0]).not.toBe(instanceIds[1]);
+    expect(roots[0]).toHaveAttribute('data-deck-appearance', 'desk');
+    expect(roots[1]).toHaveAttribute('data-deck-appearance', 'default');
 
     const styles = dynamicStyles();
     expect(styles).toHaveLength(2);
@@ -145,7 +147,7 @@ describe('MaterialDeck CSP isolation', () => {
   it('uses no style attribute or DOM id in either instance', () => {
     const { container } = render(
       <>
-        <MaterialDeck cards={[makeCard(1)]} onPrimaryAction={vi.fn()} />
+        <MaterialDeck appearance="desk" cards={[makeCard(1)]} onPrimaryAction={vi.fn()} />
         <MaterialDeck cards={[makeCard(1)]} onPrimaryAction={vi.fn()} />
       </>
     );

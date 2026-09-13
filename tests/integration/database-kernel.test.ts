@@ -135,12 +135,13 @@ describe('SQLite state kernel', () => {
     }
   });
 
-  it('applies the published initial schema and additive job migration once across repeated startup', () => {
+  it('applies published migrations including assistant conversations once across repeated startup', () => {
     const input = makeRoots();
     const first = requireNormal(input);
 
-    expect(first.db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
-      .toEqual({ count: 2 });
+    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15].map((version) => ({ version }));
+    expect(first.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
+      .toEqual(expectedVersions);
     const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
     expect(extractionColumns.map((column) => column.name)).toEqual([
       'id',
@@ -166,11 +167,15 @@ describe('SQLite state kernel', () => {
       'created_at',
       'updated_at'
     ]);
+    expect((first.db.pragma('table_info(personal_extraction_runs)') as Array<{ name: string }>).map((column) => column.name))
+      .toContain('preview_token');
+    expect((first.db.pragma('table_info(personal_ingestion_batches)') as Array<{ name: string }>).map((column) => column.name))
+      .toContain('plan_json');
     first.close();
 
     const second = requireNormal(input);
-    expect(second.db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get())
-      .toEqual({ count: 2 });
+    expect(second.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
+      .toEqual(expectedVersions);
   });
 
   it('rejects a second active run for one material version but permits terminal history', () => {

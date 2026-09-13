@@ -10,6 +10,7 @@ export type MaterialRecord = {
   processingStatus: '未归档' | '已归档';
   knowledgeStatus: KnowledgeStatus;
   collectedAt?: string;
+  topics?: string[];
   generatedKnowledge: string[];
 };
 

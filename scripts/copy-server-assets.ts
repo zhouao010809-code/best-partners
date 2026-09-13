@@ -15,3 +15,4 @@ try {
 
 await mkdir(destination, { recursive: true });
 await cp(source, destination, { recursive: true });
+await cp(resolve('src/server/attachments/pdf-worker.mjs'), resolve('dist/server/pdf-worker.mjs'));

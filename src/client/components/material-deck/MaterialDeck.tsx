@@ -15,6 +15,7 @@ import type {
 import { MaterialDeckDetail } from './MaterialDeckDetail.js';
 import {
   getMaterialDeckLayout,
+  type MaterialDeckAppearance,
   type MaterialDeckCard
 } from './materialDeckLayout.js';
 import { useDeckStyleSheet } from './useDeckStyleSheet.js';
@@ -25,6 +26,7 @@ export const PRESS_MOVE_TOLERANCE_PX = 12;
 
 export interface MaterialDeckProps {
   cards: readonly MaterialDeckCard[];
+  appearance?: MaterialDeckAppearance;
   primaryActionDisabledReason?: string;
   onPrimaryAction(card: MaterialDeckCard): void;
 }
@@ -46,6 +48,7 @@ type ClickSuppression = {
 
 export function MaterialDeck({
   cards,
+  appearance = 'default',
   primaryActionDisabledReason,
   onPrimaryAction
 }: MaterialDeckProps) {
@@ -93,13 +96,16 @@ export function MaterialDeck({
   const effectiveFocusedKey = focusedKey !== undefined && indexByKey.has(focusedKey)
     ? focusedKey
     : cards[0]?.key;
+  const captionKey = activeKey ?? liftedKey ?? effectiveFocusedKey;
+  const captionCard = captionKey === undefined ? undefined : cards[indexByKey.get(captionKey) ?? -1];
   const layout = useMemo(() => getMaterialDeckLayout({
     count: cards.length,
+    appearance,
     ...(activeIndex === undefined ? {} : { activeIndex }),
     ...(liftedIndex === undefined ? {} : { liftedIndex }),
     viewportWidth: viewportSize.width,
     viewportHeight: viewportSize.height
-  }), [activeIndex, cards.length, liftedIndex, viewportSize.height, viewportSize.width]);
+  }), [activeIndex, appearance, cards.length, liftedIndex, viewportSize.height, viewportSize.width]);
   const instanceId = useDeckStyleSheet(layout);
 
   const clearPointerPreview = useCallback((key?: string) => {
@@ -342,6 +348,8 @@ export function MaterialDeck({
       className="material-deck"
       aria-label="待提炼材料牌堆"
       data-deck-instance={instanceId}
+      data-deck-appearance={appearance}
+      data-deck-density={cards.length === 0 ? 'empty' : cards.length <= 3 ? 'sparse' : 'full'}
       tabIndex={-1}
       onKeyDown={handleRootKeyDown}
     >
@@ -439,6 +447,15 @@ export function MaterialDeck({
           </div>
         </div>
       </div>
+      {appearance === 'showcase' && (
+        <div className="material-deck__caption" role="region" aria-label="当前资料">
+          <div>
+            <strong>{captionCard?.title ?? '暂无待提炼资料'}</strong>
+            <p>{captionCard ? `${captionCard.sourcePlatform} · ${captionCard.collectedAt || '日期未记录'}` : '新资料归档后会出现在这里'}</p>
+          </div>
+          <span>{captionCard ? '点击翻阅 · 左右键切换' : '等待下一份收藏'}</span>
+        </div>
+      )}
     </section>
   );
 }

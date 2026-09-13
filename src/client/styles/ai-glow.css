@@ -1,0 +1,63 @@
+/* A moving reflection follows the border; no light layer covers the workspace. */
+@property --ai-orbit {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+.assistant-toggle { position: relative; isolation: isolate; }
+.assistant-toggle::before, .assistant-toggle::after,
+.assistant-panel::before, .assistant-panel::after {
+  content: '';
+  position: absolute;
+  z-index: 5;
+  inset: -1px;
+  padding: 1.5px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(from var(--ai-orbit),
+    transparent 0deg 45deg, #4285f430 75deg, #579aff 115deg,
+    #a3a5ff 145deg, #efb5e7 160deg, transparent 185deg 250deg,
+    #6a96fa30 280deg, #91b5ff 310deg, transparent 340deg);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+.assistant-toggle::before, .assistant-panel::before {
+  inset: -2px;
+  padding: 3px;
+  filter: blur(3px);
+}
+.assistant-toggle:is(:hover, :focus-visible):not(:disabled)::after,
+.app-frame:has(.queue-workspace[data-ai-active='true'], .extraction-workbench[data-ai-active='true']) .assistant-toggle::after,
+.assistant-toggle[data-ai-active='true']::after {
+  opacity: 1;
+  animation: ai-border-orbit 3s linear infinite;
+}
+.assistant-toggle:is(:hover, :focus-visible):not(:disabled)::before,
+.app-frame:has(.queue-workspace[data-ai-active='true'], .extraction-workbench[data-ai-active='true']) .assistant-toggle::before,
+.assistant-toggle[data-ai-active='true']::before {
+  opacity: .65;
+  animation: ai-border-orbit 3s linear infinite;
+}
+.assistant-panel[data-ai-active='true']::after,
+.app-frame:has(.queue-workspace[data-ai-active='true'], .extraction-workbench[data-ai-active='true']) .assistant-panel::after {
+  opacity: .95;
+  animation: ai-border-orbit 6s linear infinite;
+}
+.assistant-panel[data-ai-active='true']::before,
+.app-frame:has(.queue-workspace[data-ai-active='true'], .extraction-workbench[data-ai-active='true']) .assistant-panel::before {
+  opacity: .48;
+  animation: ai-border-orbit 6s linear infinite;
+}
+@keyframes ai-border-orbit { to { --ai-orbit: 360deg; } }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-toggle::before, .assistant-toggle::after,
+  .assistant-panel::before, .assistant-panel::after { animation: none !important; transition: none; }
+}
+@media (forced-colors: active) {
+  .assistant-toggle::before, .assistant-toggle::after,
+  .assistant-panel::before, .assistant-panel::after { display: none; }
+}

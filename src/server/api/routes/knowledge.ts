@@ -14,11 +14,19 @@ import {
 import { PublicApiError } from '../../../shared/api/errors.js';
 import type { ReadService } from '../../services/read-service.js';
 import { parseApiInput, parseApiOutput } from '../route-validation.js';
+import { knowledgeCatalogQuerySchema, knowledgeCatalogPageSchema, knowledgeCatalogPageResponseSchema } from '../../../shared/api/knowledge-catalog.js';
 
 export function registerKnowledgeRoutes(
   app: FastifyInstance,
   input: { service?: ReadService; operationId: () => string }
 ): void {
+  app.get('/api/v1/knowledge/catalog', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    if (input.service === undefined) throw new PublicApiError('READ_API_UNAVAILABLE', 'Read API is unavailable', 503);
+    const query = parseApiInput(knowledgeCatalogQuerySchema, request.query);
+    const data = parseApiOutput(knowledgeCatalogPageSchema, await input.service.listKnowledgeCatalog(query));
+    return parseApiOutput(knowledgeCatalogPageResponseSchema, { data, version: API_VERSION });
+  });
   app.get('/api/v1/knowledge', async (request) => {
     if (input.service === undefined) {
       throw new PublicApiError('READ_API_UNAVAILABLE', 'Read API is unavailable', 503);

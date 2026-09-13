@@ -22,11 +22,30 @@ import {
   type IndexSchedulerPort
 } from './services/index-job-service.js';
 import { registerMaterialRoutes } from './api/routes/materials.js';
+import { registerDocumentRoutes } from './api/routes/documents.js';
 import { registerKnowledgeRoutes } from './api/routes/knowledge.js';
 import { registerOperationRoutes } from './api/routes/operations.js';
 import { registerIndexJobRoutes } from './api/routes/index-jobs.js';
 import { registerHealthRoutes } from './api/routes/health.js';
 import { parseApiOutput } from './api/route-validation.js';
+import { registerIntakeRoutes } from './api/routes/intake.js';
+import type { IntakeService } from './services/intake-service.js';
+import type { ExtractionService } from './services/extraction-service.js';
+import { registerExtractionRoutes } from './api/routes/extractions.js';
+import type { IngestionService } from './ingestion/ingestion-service.js';
+import { registerIngestionRoutes } from './api/routes/ingestion.js';
+import { registerTrashRoutes } from './api/routes/trash.js';
+import type { TrashService } from './trash/trash-service.js';
+import type { IntakeTrashService } from './trash/intake-trash-service.js';
+import { registerIntakeTrashRoutes } from './api/routes/intake-trash.js';
+import { registerAssistantRoutes } from './api/routes/assistant.js';
+import { createAssistantService } from './assistant/service.js';
+import { createAssistantTools } from './assistant/attachment-tools.js';
+import type { AssistantAdapter } from './assistant/types.js';
+import type { AttachmentService } from './attachments/service.js';
+import { registerAttachmentRoutes } from './api/routes/attachments.js';
+import { createAssistantDraftService } from './assistant/draft-service.js';
+import { registerAssistantDraftRoutes } from './api/routes/assistant-drafts.js';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -119,6 +138,13 @@ export interface ReadApiDependencies {
 }
 
 export interface BuildServerOptions {
+  readonly assistantAdapters?: AssistantAdapter[];
+  readonly attachmentService?: AttachmentService;
+  readonly trashService?: TrashService;
+  readonly ingestionService?: IngestionService;
+  readonly extractionService?: ExtractionService;
+  readonly intakeService?: IntakeService;
+  readonly intakeTrashService?: IntakeTrashService;
   readonly httpPolicy?: HttpPolicy;
   readonly healthService?: HealthService;
   readonly operationIdFactory?: () => string;
@@ -158,6 +184,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   const readService = options.readApi === undefined
     ? undefined
     : createReadService({
+      database: options.readApi.database,
       repository: options.readApi.repository,
       gateway: options.readApi.gateway,
       currentIndexVersion: options.readApi.currentIndexVersion,
@@ -173,6 +200,13 @@ export function buildServer(options: BuildServerOptions = {}) {
       operationIdFactory: operationId,
       jobIdFactory: options.readApi.jobIdFactory ?? randomUUID
     });
+  const assistant = options.assistantAdapters && options.readApi && readService
+    ? createAssistantService({ database: options.readApi.database, adapters: options.assistantAdapters,
+      ...(options.attachmentService ? { resolveAttachment: (id: string) => options.attachmentService!.get(id) } : {}),
+      createTools: context => createAssistantTools({ ...context, readService,
+        ...(options.attachmentService ? { attachmentService: options.attachmentService } : {}),
+        ...(options.extractionService ? { extractionService: options.extractionService } : {}) }) })
+    : undefined;
 
   registerHtmlCsp(app);
   app.setErrorHandler((error, _request, reply) => {
@@ -219,25 +253,51 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
 
   registerHealthRoutes(app, healthService);
+  registerAssistantRoutes(app, assistant);
+  registerAttachmentRoutes(app, options.attachmentService);
+  registerAssistantDraftRoutes(app, { ...(options.readApi ? { assistantDrafts: createAssistantDraftService({ database: options.readApi.database }) } : {}) });
   registerMaterialRoutes(app, readService);
+  registerDocumentRoutes(app, readService);
+  registerIntakeRoutes(app, options.intakeService);
+  registerIntakeTrashRoutes(app, options.intakeTrashService);
+  registerExtractionRoutes(app, options.extractionService, () => options.readApi?.indexScheduler.snapshot().state);
+  registerIngestionRoutes(app, options.ingestionService);
+  registerTrashRoutes(app, options.trashService);
   registerKnowledgeRoutes(app, {
     ...(readService === undefined ? {} : { service: readService }),
     operationId
   });
-  registerOperationRoutes(app);
+  registerOperationRoutes(app, { database: options.readApi?.database,
+    intakeHistory: options.intakeService?.history,
+    trash: options.trashService ? () => options.trashService!.list() : undefined,
+    intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined });
   registerIndexJobRoutes(app, indexJobs);
-  app.get('/api/v1/bootstrap', async (_request, reply) => {
-    const session = sessions.issue();
-    reply.header('set-cookie', session.setCookie);
+  app.get('/api/v1/bootstrap', async (request, reply) => {
+    let sessionId = sessions.read(request.headers.cookie);
+    if (sessionId === undefined) {
+      const session = sessions.issue();
+      sessionId = session.sessionId;
+      reply.header('set-cookie', session.setCookie);
+    }
     reply.header('cache-control', 'no-store');
     const data = parseApiOutput(bootstrapDataSchema, {
-      csrfToken: csrf.issue(session.sessionId)
+      csrfToken: csrf.issue(sessionId)
     });
     return parseApiOutput(bootstrapResponseSchema, { data, version: API_VERSION });
   });
-  if (indexJobs !== undefined || options.onClose !== undefined) {
+  if (assistant !== undefined || indexJobs !== undefined || options.onClose !== undefined || options.attachmentService !== undefined || options.extractionService !== undefined || options.ingestionService !== undefined || options.trashService !== undefined || options.intakeTrashService !== undefined) {
     app.addHook('onClose', async () => {
-      try { await indexJobs?.close(); } finally { await options.onClose?.(); }
+      try { await assistant?.close(); } finally {
+        try { try { await options.attachmentService?.close(); } finally { await options.extractionService?.close(); } } finally {
+          try { await options.ingestionService?.close(); } finally {
+            try { await options.trashService?.close(); } finally {
+              try { await options.intakeTrashService?.close(); } finally {
+                try { await indexJobs?.close(); } finally { await options.onClose?.(); }
+              }
+            }
+          }
+        }
+      }
     });
   }
   return app;

@@ -1,8 +1,8 @@
-import { mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadDesktopSettings, resolveInitialVaultSettings, saveDesktopSettings, validateDesktopVault } from '../../src/electron/settings-store.js';
+import { createInitialVault, loadDesktopSettings, resolveInitialVaultSettings, saveDesktopSettings, validateDesktopVault } from '../../src/electron/settings-store.js';
 
 const roots: string[] = [];
 async function root() { const value = await mkdtemp(join(tmpdir(), 'xiaozhao-settings-')); roots.push(value); return value; }
@@ -73,5 +73,39 @@ describe('initial vault selection', () => {
     expect(await resolveInitialVaultSettings(args)).toBeUndefined();
     args.chooseDirectory.mockResolvedValueOnce('/bad').mockResolvedValueOnce(undefined);
     expect(await resolveInitialVaultSettings(args)).toBeUndefined();
+  });
+
+  it('lets a first-launch choice create a starter vault before opening the picker', async () => {
+    const args = input([]);
+    const createInitial = vi.fn(async () => ({ vaultRoot: '/created' }));
+    expect(await resolveInitialVaultSettings({
+      ...args,
+      showInitialChoice: vi.fn(async () => 'create' as const),
+      createInitial
+    })).toEqual({ vaultRoot: '/created' });
+    expect(createInitial).toHaveBeenCalledOnce();
+    expect(args.chooseDirectory).not.toHaveBeenCalled();
+  });
+
+  it('creates a starter vault only after the user chooses a parent directory', async () => {
+    const parentRoot = await realpath(await root());
+    const userDataDir = await root();
+    const created = await createInitialVault({
+      parentRoot,
+      userDataDir,
+      validate: vi.fn(async (vaultRoot: string) => ({ vaultRoot }))
+    });
+    expect(created).toEqual({ vaultRoot: join(parentRoot, '我的大脑') });
+    expect(await readdir(join(parentRoot, '我的大脑'))).toEqual(['00大脑规则', '01图书馆', '02知识库', '03大讲堂']);
+    expect(await readFile(join(parentRoot, '我的大脑', '00大脑规则/00_大脑规范.md'), 'utf8')).toContain('初始规则');
+  });
+
+  it('does not overwrite an existing folder when starter creation collides', async () => {
+    const parentRoot = await realpath(await root());
+    const userDataDir = await root();
+    await mkdir(join(parentRoot, '我的大脑'));
+    await writeFile(join(parentRoot, '我的大脑', 'keep.txt'), 'keep');
+    await expect(createInitialVault({ parentRoot, userDataDir, validate: vi.fn() })).rejects.toThrow('INITIAL_VAULT_EXISTS');
+    expect(await readFile(join(parentRoot, '我的大脑', 'keep.txt'), 'utf8')).toBe('keep');
   });
 });

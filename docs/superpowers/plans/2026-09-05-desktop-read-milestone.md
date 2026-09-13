@@ -88,4 +88,4 @@ tests before feature changes.
 Formal-vault acceptance, AI, automatic clipper intake, transactional writes and
 distribution signing/notarization remain outside this completed read-only
 implementation. The original main checkout is unchanged; changes are isolated
-on `codex/desktop-read`.
+on `desktop-read`.

@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef, ReactNode } from 'react';
+import { Children, cloneElement, createContext, isValidElement, useContext, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -64,18 +64,35 @@ const SAFE_REMARK_PLUGINS = [remarkGfm];
 
 export interface SafeMarkdownProps {
   readonly children: string;
+  readonly renderCitation?: ((id: string) => ReactNode) | undefined;
 }
 
-export function SafeMarkdown({ children }: SafeMarkdownProps) {
+type CitationRenderer = ((id: string) => ReactNode) | undefined;
+const CitationContext = createContext<CitationRenderer>(undefined);
+function withCitations(nodes: ReactNode, renderCitation: CitationRenderer): ReactNode {
+  return Children.map(nodes, (node) => {
+    if (typeof node === 'string') return node.split(/(\[S\d+\])/gu).map((part, i) => /^\[S\d+\]$/u.test(part) ? <span key={i}>{renderCitation?.(part.slice(1, -1)) ?? part}</span> : part);
+    if (isValidElement<{ children?: ReactNode }>(node) && typeof node.type === 'string' && !['code', 'pre', 'a', 'button'].includes(String(node.type))) return cloneElement(node, {}, withCitations(node.props.children, renderCitation));
+    return node;
+  });
+}
+const CITATION_COMPONENTS: Components = {
+  ...SAFE_COMPONENTS,
+  p: function CitationParagraph({ children }) { return <p>{withCitations(children, useContext(CitationContext))}</p>; },
+  li: function CitationListItem({ children }) { return <li>{withCitations(children, useContext(CitationContext))}</li>; },
+  td: function CitationCell({ children }) { return <td>{withCitations(children, useContext(CitationContext))}</td>; }
+};
+
+export function SafeMarkdown({ children, renderCitation }: SafeMarkdownProps) {
   return (
-    <div className="safe-markdown">
+    <CitationContext.Provider value={renderCitation}><div className="safe-markdown">
       <ReactMarkdown
         remarkPlugins={SAFE_REMARK_PLUGINS}
-        components={SAFE_COMPONENTS}
+        components={renderCitation ? CITATION_COMPONENTS : SAFE_COMPONENTS}
         skipHtml
       >
         {children}
       </ReactMarkdown>
-    </div>
+    </div></CitationContext.Provider>
   );
 }

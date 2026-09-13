@@ -125,6 +125,7 @@ function projection(entry: IndexedFile): { yamlJson: string; linksJson: string }
         sourcePlatform: record.sourcePlatform,
         processingStatus: record.processingStatus,
         knowledgeStatus: record.knowledgeStatus,
+        ...(record.topics === undefined ? {} : { topics: record.topics }),
         ...(record.collectedAt === undefined ? {} : { collectedAt: record.collectedAt })
       }),
       linksJson: canonicalJson(record.generatedKnowledge)
@@ -152,6 +153,7 @@ function materialFromRow(row: SearchRow): MaterialRecord {
     processingStatus: MaterialRecord['processingStatus'];
     knowledgeStatus: KnowledgeStatus;
     collectedAt?: string;
+    topics?: string[];
   };
   return {
     path: row.path,
@@ -162,6 +164,7 @@ function materialFromRow(row: SearchRow): MaterialRecord {
     processingStatus: yaml.processingStatus,
     knowledgeStatus: yaml.knowledgeStatus,
     ...(yaml.collectedAt === undefined ? {} : { collectedAt: yaml.collectedAt }),
+    ...(yaml.topics === undefined ? {} : { topics: yaml.topics }),
     generatedKnowledge: JSON.parse(row.linksJson) as string[]
   };
 }

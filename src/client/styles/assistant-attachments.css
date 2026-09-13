@@ -1,0 +1,31 @@
+.attachment-picker { min-width: 0; border-radius: 12px; }
+.attachment-picker.is-dragging { background: #e9edf7; outline: 1px dashed #8597c7; }
+.attachment-picker__toolbar { display: flex; align-items: center; gap: 9px; padding: 6px 0; }
+.attachment-picker__toolbar button, .attachment-picker__actions button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: #414d64; cursor: pointer; font: inherit; font-size: 12px; padding: 4px 0; }
+.attachment-picker__toolbar span, .attachment-picker__meta, .attachment-picker__help { font-size: 11px; color: #7a808a; }
+.attachment-picker__list { list-style: none; padding: 0; margin: 3px 0 8px; display: grid; gap: 7px; max-height: 220px; overflow-y: auto; }
+.attachment-picker__item { min-width: 0; border: 1px solid #e1e3e7; border-radius: 10px; background: #fafafb; padding: 9px 11px; }
+.attachment-picker__title { display: flex; align-items: center; gap: 7px; }
+.attachment-picker__title strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 550; }
+.attachment-picker__title button { flex: none; width: 24px; height: 24px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 6px; color: #7a808a; cursor: pointer; }
+.attachment-picker__meta, .attachment-picker__actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; margin-top: 4px; }
+.attachment-picker__actions a { font-size: 11px; color: #4d6284; }
+.attachment-picker__error { margin: 5px 0; font-size: 12px; color: #9c493b; overflow-wrap: anywhere; }
+.attachment-picker__help { margin: 6px 0; line-height: 1.55; }
+.attachment-picker__pages { border: 0; padding: 4px 0 0; margin: 5px 0 0; display: flex; align-items: center; gap: 8px; font-size: 11px; color: #727986; }
+.attachment-picker__pages legend { float: left; margin: 5px 10px 0 0; }
+.attachment-picker__pages label { display: flex; align-items: center; gap: 4px; }
+.attachment-picker__pages input { width: 49px; border: 1px solid #dce0e6; border-radius: 5px; background: #fff; padding: 3px; color: #454d5b; font: inherit; }
+.attachment-picker button:disabled { opacity: .45; cursor: default; }
+.assistant-panel .attachment-picker.is-dragging { background: #273546; outline-color: #91a6c5; }
+.assistant-panel .attachment-picker__toolbar button, .assistant-panel .attachment-picker__actions button { color: #c2d0df; }
+.assistant-panel .attachment-picker__toolbar span, .assistant-panel .attachment-picker__meta, .assistant-panel .attachment-picker__help { color: #a9b5c2; }
+.assistant-panel .attachment-picker__item { background: #242a30; border-color: #3b444e; }
+.assistant-panel .attachment-picker__title { color: #e4ebf2; }
+.assistant-panel .attachment-picker__title button { color: #adb9c4; }
+.assistant-panel .attachment-picker__actions a { color: #b8cde4; }
+.assistant-panel .attachment-picker__error { color: #efb7a8; }
+.assistant-panel .attachment-picker__pages { color: #a9b5c2; }
+.assistant-panel .attachment-picker__pages input { border-color: #46525d; background: #1b2127; color: #e0e8ef; }
+.assistant-message__attachments { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
+.assistant-message__attachments a { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; overflow-wrap: anywhere; color: #bbcfe2; font-size: 12px; }

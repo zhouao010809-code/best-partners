@@ -18,10 +18,13 @@ import { AppShell } from '../../src/client/app/AppShell.js';
 import { AppRouter } from '../../src/client/app/router.js';
 import { useConsoleRuntime } from '../../src/client/app/ConsoleRuntime.js';
 import { PageState } from '../../src/client/components/PageState.js';
+import { ASSISTANT_INTENT_EVENT } from '../../src/client/components/assistant/assistantIntent.js';
 
 const MAIN_NAVIGATION_NAMES = [
   '大脑总览',
+  '收件箱',
   '提炼队列',
+  '档案库',
   '知识库',
   '操作与恢复',
   '设置'
@@ -77,7 +80,10 @@ function completedJob(version = 8): IndexJob {
 function createApi(overrides: Partial<ReadConsoleApi> = {}): ReadConsoleApi {
   return {
     getHealth: vi.fn(async () => ok(readyHealth())),
+    listDocumentIssues: vi.fn(async () => ok({ items: [] })),
+    getDocumentDetail: vi.fn(async () => ({ ok: false as const, state: { status: 'operation-error' as const, message: 'Unavailable' } })),
     listMaterials: vi.fn(async () => ok({ items: [] })),
+    listLibrary: vi.fn(async () => ok({ mode: 'topic' as const, path: '', breadcrumbs: [{ path: '', label: '全部资料' }], folders: [], items: [], total: 0, directTotal: 0, unclassifiedCount: 0, indexVersion: 7 })),
     listKnowledge: vi.fn(async () => ok({ items: [] })),
     getKnowledgeDetail: vi.fn(async () => failure<LiveKnowledgeDetail>('operation-error', 'not used')),
     listOperations: vi.fn(async () => ok({ items: [] })),
@@ -114,6 +120,78 @@ function renderShell(api: ReadConsoleApi) {
   );
 }
 
+describe('asking about selected source prose', () => {
+  const materialPath = '01图书馆/来自个人/原始资料.md';
+  const knowledgePath = '02知识库/阅读知识.md';
+  function mountSelectionPage(route: string) {
+    const api = createApi();
+    render(<MemoryRouter initialEntries={[route]}><Routes><Route element={<AppShell api={api} />}><Route path="*" element={<>
+      <div className="library-original__reading"><div className="safe-markdown"><p data-testid="library-source">档案原文证据</p></div></div>
+      <div className="library-original__source"><pre data-testid="library-raw">原始文件元信息</pre></div>
+      <div className="knowledge-detail__body"><section aria-label="知识正文"><div className="safe-markdown"><p data-testid="knowledge-source">知识正文证据</p></div></section><section aria-label="来源材料"><div className="safe-markdown"><p data-testid="knowledge-provenance">关联资料信息</p></div></section></div>
+      <section className="queue-original"><div className="safe-markdown"><p data-testid="queue-source">队列原文证据</p></div></section>
+      <article className="ingestion-candidate"><div className="safe-markdown"><p data-testid="candidate">尚未提交的候选判断</p></div></article>
+    </>} /></Route></Routes></MemoryRouter>);
+    return api;
+  }
+  function selectText(start: string, end = start) {
+    act(() => {
+      const first = screen.getByTestId(start).firstChild!;
+      const last = screen.getByTestId(end).firstChild!;
+      const range = document.createRange(); range.setStart(first, 0); range.setEnd(last, last.textContent!.length);
+      const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+  }
+  beforeEach(() => { sessionStorage.clear(); localStorage.clear(); });
+  afterEach(() => { cleanup(); window.getSelection()?.removeAllRanges(); vi.restoreAllMocks(); });
+
+  it.each([
+    ['/library', 'path', materialPath, 'library-source', '档案原文证据'],
+    ['/knowledge', 'path', knowledgePath, 'knowledge-source', '知识正文证据'],
+    ['/queue', 'materialPath', materialPath, 'queue-source', '队列原文证据']
+  ])('prepares a source-bound draft from the original reading area on %s', async (route, key, path, target, passage) => {
+    const listener = vi.fn(); window.addEventListener(ASSISTANT_INTENT_EVENT, listener);
+    try {
+      const api = mountSelectionPage(`${route}?${new URLSearchParams({ [key]: path })}`);
+      await screen.findByTitle('索引 v7 已就绪');
+      selectText(target);
+      await userEvent.click(screen.getByRole('button', { name: '问问这段内容' }));
+      expect(listener).toHaveBeenCalledOnce();
+      expect((listener.mock.calls[0]![0] as CustomEvent).detail).toEqual({
+        prompt: `请解释这段原文，并结合上下文说明：\n\n“${passage}”`, contextPath: path
+      });
+      expect(screen.queryByRole('button', { name: '问问这段内容' })).toBeNull();
+      expect(api.getDocumentDetail).not.toHaveBeenCalled(); expect(api.getKnowledgeDetail).not.toHaveBeenCalled();
+    } finally { window.removeEventListener(ASSISTANT_INTENT_EVENT, listener); }
+  });
+
+  it.each([
+    [`/library?${new URLSearchParams({ path: materialPath })}`, 'candidate'],
+    [`/knowledge?${new URLSearchParams({ path: knowledgePath })}`, 'candidate'],
+    [`/queue?${new URLSearchParams({ materialPath })}`, 'candidate'],
+    [`/library?${new URLSearchParams({ path: materialPath })}`, 'library-raw'],
+    [`/knowledge?${new URLSearchParams({ path: knowledgePath })}`, 'knowledge-provenance']
+  ])('does not attribute %s selection in %s to the current source', async (route, target) => {
+    mountSelectionPage(route); await screen.findByTitle('索引 v7 已就绪');
+    selectText(target);
+    expect(screen.queryByRole('button', { name: '问问这段内容' })).toBeNull();
+  });
+
+  it('clears the source action when a selection crosses from original prose into a candidate', async () => {
+    mountSelectionPage(`/queue?${new URLSearchParams({ materialPath })}`); await screen.findByTitle('索引 v7 已就绪');
+    selectText('queue-source'); expect(screen.getByRole('button', { name: '问问这段内容' })).toBeVisible();
+    selectText('queue-source', 'candidate');
+    expect(screen.queryByRole('button', { name: '问问这段内容' })).toBeNull();
+  });
+
+  it('requires an explicit source path before attributing selected original prose', async () => {
+    mountSelectionPage('/library'); await screen.findByTitle('索引 v7 已就绪');
+    selectText('library-source');
+    expect(screen.queryByRole('button', { name: '问问这段内容' })).toBeNull();
+  });
+});
+
 describe('black-glass application shell', () => {
   beforeEach(() => setPath('/'));
   afterEach(() => cleanup());
@@ -125,26 +203,39 @@ describe('black-glass application shell', () => {
       'href',
       '#main-content'
     );
-    expect(screen.getByRole('complementary', { name: '小兆大脑侧边栏' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '最佳拍档侧边栏' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '主导航' })).toBeInTheDocument();
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
     expect(screen.getByRole('main')).toHaveAttribute('tabindex', '-1');
   });
 
-  it('contains five and only five main navigation destinations', () => {
+  it('contains the seven main navigation destinations including intake', () => {
     render(<App />);
 
     const navigation = screen.getByRole('navigation', { name: '主导航' });
     const links = within(navigation).getAllByRole('link');
-    expect(links).toHaveLength(5);
+    expect(links).toHaveLength(7);
     expect(links.map((link) => link.textContent?.trim())).toEqual(MAIN_NAVIGATION_NAMES);
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
       '/',
+      '/intake',
       '/queue',
+      '/library',
       '/knowledge',
       '/operations',
       '/settings'
     ]);
+  });
+
+  it('keeps the icon-only recycle link discoverable outside the main navigation', async () => {
+    renderShell(createApi());
+
+    const link = screen.getByRole('link', { name: '回收站' });
+    expect(link).toHaveAttribute('href', '/trash');
+    expect(link).toHaveAttribute('title', expect.stringContaining('回收站'));
+    expect(within(link).queryByText('回收站', { exact: true })).toBeNull();
+    expect(within(screen.getByRole('navigation', { name: '主导航' })).queryByRole('link', { name: '回收站' })).toBeNull();
+    await waitFor(() => expect(link).toHaveAccessibleDescription('回收站数量暂不可用'));
   });
 
   it('marks the current destination and keeps live connection state out of links', async () => {
@@ -165,7 +256,8 @@ describe('black-glass application shell', () => {
 
   it.each([
     ['/', '大脑总览'],
-    ['/queue/', '提炼队列'],
+    ['/queue/', '提炼工作台'],
+    ['/library/', '档案库'],
     ['/knowledge/', '知识库'],
     ['/operations/', '操作与恢复'],
     ['/settings/', '设置'],
@@ -186,7 +278,7 @@ describe('black-glass application shell', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
     const navigation = screen.getByRole('navigation', { name: '主导航' });
-    expect(within(navigation).getAllByRole('link')).toHaveLength(5);
+    expect(within(navigation).getAllByRole('link')).toHaveLength(7);
     expect(within(navigation).queryByText(heading)).not.toBeInTheDocument();
   });
 
@@ -198,7 +290,21 @@ describe('black-glass application shell', () => {
     expect(initialHeading).not.toHaveFocus();
 
     await user.click(screen.getByRole('link', { name: '提炼队列' }));
-    expect(screen.getByRole('heading', { level: 1, name: '提炼队列' })).toHaveFocus();
+    expect(screen.getByRole('heading', { level: 1, name: '提炼工作台' })).toHaveFocus();
+  });
+
+  it('returns from settings to the cabinet with search preserved but no automatically selected file', async () => {
+    const user = userEvent.setup();
+    const query = '?view=ready&title=资料&materialPath=01图书馆%2F资料.md&run=run-1';
+    setPath(`/queue${query}`); render(<App />);
+    await user.click(screen.getByRole('link', { name: '设置' }));
+    const queue = screen.getByRole('link', { name: '提炼队列' });
+    expect(queue.getAttribute('href')).not.toContain('materialPath=');
+    await user.click(queue);
+    expect(new URLSearchParams(window.location.search).get('title')).toBe('资料');
+    expect(new URLSearchParams(window.location.search).get('view')).toBe('ready');
+    expect(new URLSearchParams(window.location.search).has('run')).toBe(false);
+    expect(new URLSearchParams(window.location.search).has('materialPath')).toBe(false);
   });
 });
 
@@ -215,7 +321,7 @@ describe('live console runtime', () => {
     expect(api.listMaterials).not.toHaveBeenCalled();
     expect(api.listKnowledge).not.toHaveBeenCalled();
     expect(api.rebuildIndex).not.toHaveBeenCalled();
-    expect(screen.getByText('索引 v7 已就绪')).toBeVisible();
+    expect(screen.getByTitle('索引 v7 已就绪')).toBeVisible();
   });
 
   it.each([
@@ -268,7 +374,7 @@ describe('live console runtime', () => {
       </StrictMode>
     );
 
-    expect(await screen.findByText('索引 v7 已就绪')).toBeVisible();
+    expect(await screen.findByTitle('索引 v7 已就绪')).toBeVisible();
     expect(getHealth).toHaveBeenCalledTimes(2);
     expect(api.rebuildIndex).not.toHaveBeenCalled();
   });
@@ -289,7 +395,7 @@ describe('live console runtime', () => {
       getIndexJob: vi.fn(async () => ok(completedJob(8)))
     });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => {
       window.dispatchEvent(new Event('focus'));
@@ -304,7 +410,7 @@ describe('live console runtime', () => {
     await waitFor(() => expect(screen.getByTestId('revision')).toHaveTextContent('1'));
 
     expect(getHealth).toHaveBeenCalledTimes(3);
-    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+    expect(screen.getByTitle('索引 v8 已就绪')).toBeVisible();
   });
 
   it('forces a fresh post-terminal health read and ignores an older concurrent refresh result', async () => {
@@ -329,7 +435,7 @@ describe('live console runtime', () => {
       getIndexJob: vi.fn(() => terminalJob)
     });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(api.getIndexJob).toHaveBeenCalledTimes(1));
@@ -339,11 +445,11 @@ describe('live console runtime', () => {
     act(() => releaseTerminalJob(ok(completedJob(8))));
 
     await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(4));
-    expect(await screen.findByText('索引 v8 已就绪')).toBeVisible();
+    expect(await screen.findByTitle('索引 v8 已就绪')).toBeVisible();
     expect(screen.getByTestId('revision')).toHaveTextContent('1');
 
     act(() => releaseStaleHealth(ok(readyHealth(7))));
-    await waitFor(() => expect(screen.getByText('索引 v8 已就绪')).toBeVisible());
+    await waitFor(() => expect(screen.getByTitle('索引 v8 已就绪')).toBeVisible());
     expect(screen.getByTestId('revision')).toHaveTextContent('1');
   });
 
@@ -364,7 +470,7 @@ describe('live console runtime', () => {
     const rebuildIndex = vi.fn(() => rebuild);
     const api = createApi({ getHealth, rebuildIndex });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(getHealth).toHaveBeenCalledTimes(2));
@@ -378,11 +484,11 @@ describe('live console runtime', () => {
     expect(rebuildIndex).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText('运行时快照')).toHaveTextContent('refreshing');
     expect(screen.getByText('索引刷新中')).toBeVisible();
-    expect(screen.queryByText('索引 v7 已就绪')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('索引 v7 已就绪')).not.toBeInTheDocument();
 
     act(() => releaseRebuild(ok(completedJob(8))));
     await waitFor(() => expect(screen.getByTestId('revision')).toHaveTextContent('1'));
-    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+    expect(screen.getByTitle('索引 v8 已就绪')).toBeVisible();
   });
 
   it('allows a health refresh started after a focus cycle to publish its newer snapshot', async () => {
@@ -394,15 +500,15 @@ describe('live console runtime', () => {
       .mockResolvedValueOnce(ok(readyHealth(9)));
     const api = createApi({ getHealth });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(screen.getByTestId('revision')).toHaveTextContent('1'));
-    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+    expect(screen.getByTitle('索引 v8 已就绪')).toBeVisible();
 
     await user.click(screen.getByRole('button', { name: '刷新运行时健康状态' }));
 
-    expect(await screen.findByText('索引 v9 已就绪')).toBeVisible();
+    expect(await screen.findByTitle('索引 v9 已就绪')).toBeVisible();
     expect(getHealth).toHaveBeenCalledTimes(4);
     expect(screen.getByLabelText('运行时快照')).toHaveTextContent('ready');
   });
@@ -424,7 +530,7 @@ describe('live console runtime', () => {
       .mockResolvedValueOnce(ok(readyHealth(version + 1)));
     const api = createApi({ getHealth });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
 
@@ -448,7 +554,7 @@ describe('live console runtime', () => {
       getIndexJob
     });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
 
@@ -459,7 +565,7 @@ describe('live console runtime', () => {
     expect(getIndexJob).toHaveBeenCalledTimes(3);
     expect(getIndexJob.mock.calls.every(([, signal]) => signal instanceof AbortSignal)).toBe(true);
     expect(getHealth).toHaveBeenCalledTimes(3);
-    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+    expect(screen.getByTitle('索引 v8 已就绪')).toBeVisible();
   });
 
   it.each(['failed', 'interrupted'] as const)(
@@ -481,7 +587,7 @@ describe('live console runtime', () => {
         getIndexJob: vi.fn(async () => ok(terminalJob))
       });
       renderShell(api);
-      await screen.findByText('索引 v7 已就绪');
+      await screen.findByTitle('索引 v7 已就绪');
 
       act(() => window.dispatchEvent(new Event('focus')));
 
@@ -502,7 +608,7 @@ describe('live console runtime', () => {
       rebuildIndex: vi.fn(async () => ok(completedJob(8)))
     });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
 
@@ -530,7 +636,7 @@ describe('live console runtime', () => {
       .mockResolvedValueOnce(ok(completedJob(9)));
     const api = createApi({ getHealth, rebuildIndex });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(screen.getByTestId('revision')).toHaveTextContent('1'));
@@ -561,7 +667,7 @@ describe('live console runtime', () => {
       ))
     });
     renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
 
@@ -602,7 +708,7 @@ describe('live console runtime', () => {
       getIndexJob
     });
     const view = renderShell(api);
-    await screen.findByText('索引 v7 已就绪');
+    await screen.findByTitle('索引 v7 已就绪');
 
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(getIndexJob).toHaveBeenCalledTimes(1));
@@ -643,12 +749,12 @@ describe('passive desktop refresh', () => {
 
     await act(async () => vi.advanceTimersByTimeAsync(3_000));
     expect(api.listMaterials).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('索引 v7 已就绪')).toBeVisible();
+    expect(screen.getByTitle('索引 v7 已就绪')).toBeVisible();
 
     version = 8;
     await act(async () => vi.advanceTimersByTimeAsync(3_000));
     expect(api.listMaterials).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+    expect(screen.getByTitle('索引 v8 已就绪')).toBeVisible();
     expect(api.rebuildIndex).not.toHaveBeenCalled();
   });
 
@@ -665,7 +771,7 @@ describe('passive desktop refresh', () => {
     expect(document.body).not.toHaveTextContent('private backend path');
 
     await act(async () => vi.advanceTimersByTimeAsync(3_000));
-    expect(screen.getByText('索引 v8 已就绪')).toBeVisible();
+    expect(screen.getByTitle('索引 v8 已就绪')).toBeVisible();
     expect(screen.getByTestId('revision')).toHaveTextContent('1');
     expect(api.rebuildIndex).not.toHaveBeenCalled();
   });
@@ -713,7 +819,7 @@ describe('passive desktop refresh', () => {
   it.each([
     ['/queue', 'listMaterials', '当前筛选范围内没有待处理材料'],
     ['/knowledge', 'listKnowledge', '当前筛选范围内没有知识记录'],
-    ['/operations', 'listOperations', '当前尚无提炼/写入工作流操作']
+    ['/operations', 'listOperations', '还没有操作记录']
   ] as const)('recovers %s after an initial disconnect even when no new index version exists', async (path, method, emptyMessage) => {
     let available = false;
     const api = createApi({
@@ -722,11 +828,12 @@ describe('passive desktop refresh', () => {
     });
     render(<MemoryRouter initialEntries={[path]}><AppRouter api={api} /></MemoryRouter>);
     await act(async () => {});
-    expect(screen.getByText('无法连接本地服务。')).toBeVisible();
+    const disconnectedMessage = path === '/operations' ? '操作记录暂时无法读取，请重试。已有记录可能不是最新状态。' : '无法连接本地服务。';
+    expect(screen.getByText(disconnectedMessage)).toBeVisible();
 
     available = true;
     await act(async () => vi.advanceTimersByTimeAsync(3_000));
-    expect(screen.queryByText('无法连接本地服务。')).not.toBeInTheDocument();
+    expect(screen.queryByText(disconnectedMessage)).not.toBeInTheDocument();
     expect(screen.getByText(emptyMessage)).toBeVisible();
     expect(api[method]).toHaveBeenCalledTimes(2);
     await act(async () => vi.advanceTimersByTimeAsync(3_000));
@@ -736,7 +843,7 @@ describe('passive desktop refresh', () => {
   it.each([
     ['/queue', 'listMaterials', '当前筛选范围内没有待处理材料'],
     ['/knowledge', 'listKnowledge', '当前筛选范围内没有知识记录'],
-    ['/operations', 'listOperations', '当前尚无提炼/写入工作流操作']
+    ['/operations', 'listOperations', '还没有操作记录']
   ] as const)('loads %s after the initial index finishes building', async (path, method, emptyMessage) => {
     let building = true;
     const api = createApi({

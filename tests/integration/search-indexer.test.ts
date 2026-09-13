@@ -75,6 +75,25 @@ ${input.body ?? '不应进入 SQLite 的知识正文'}
 }
 
 describe('SearchIndexer', () => {
+  it('replaces a cached legacy link issue with a compatible projection without changing source bytes', async () => {
+    const path = '01图书馆/旧链接.md';
+    const original = materialNote({ title: '旧链接', status: '已入库' })
+      .replace('生成知识: ["[[已有知识]]"]', '生成知识: [[已有知识]]');
+    const gateway = new FakeVaultGateway({ [path]: original });
+    const { repository } = createRepository();
+    repository.replaceIssue({ path, code: 'INVALID_FIELD', field: '生成知识', message: 'Invalid field' });
+    const before = await gateway.readRaw(path);
+    const indexer = new SearchIndexer({ gateway, repository, maxRawReadsPerPoll: 20 });
+    await indexer.refresh();
+    expect(repository.listIssues()).toEqual([]);
+    expect(repository.listMaterials({}).items).toEqual([expect.objectContaining({
+      path, rawSha256: before.rawSha256, knowledgeStatus: '已入库', generatedKnowledge: ['已有知识']
+    })]);
+    expect(await gateway.readRaw(path)).toEqual(before);
+    await indexer.refresh();
+    expect(repository.listIssues()).toEqual([]);
+  });
+
   it('projects only current note types and reports all three historical types as schema issues', async () => {
     const gateway = new FakeVaultGateway({
       '01图书馆/当前资料.md': materialNote({ title: '当前资料' }),
@@ -165,7 +184,7 @@ describe('SearchIndexer', () => {
     expect(serializedRows).not.toContain(forbiddenMaterialBody);
     expect(serializedRows).not.toContain(forbiddenKnowledgeBody);
     expect(stored[0]?.yamlJson).toBe(
-      '{"collectedAt":"2026-08-31","knowledgeStatus":"未提炼","processingStatus":"未归档","sourcePlatform":"B站","title":"资料"}'
+      '{"collectedAt":"2026-08-31","knowledgeStatus":"未提炼","processingStatus":"未归档","sourcePlatform":"B站","title":"资料","topics":[]}'
     );
     expect(stored[0]?.linksJson).toBe('["已有知识"]');
     expect(stored[1]?.yamlJson).toBe(

@@ -7,11 +7,14 @@ if (process.platform !== 'darwin' || process.arch !== 'arm64') {
 }
 
 const paths = await packager({
-  dir: resolve('.'), out: resolve('dist/desktop'), name: '小兆大脑',
+  ...(process.env.XIAOZHAO_ELECTRON_ZIP_DIR ? { electronZipDir: resolve(process.env.XIAOZHAO_ELECTRON_ZIP_DIR) } : {}),
+  dir: resolve('.'), out: resolve('dist/desktop'), name: '最佳拍档',
   appBundleId: 'local.xiaozhao.brain', platform: 'darwin', arch: 'arm64',
   electronVersion: '44.1.0', overwrite: true, asar: false,
+  icon: resolve('assets/best-partners-icon.icns'),
   ignore: (path) => {
     if (path === '') return false;
+    if (path.startsWith('/dist/native/')) return !['/dist/native/atomic-file-helper', '/dist/native/personal-archive.node'].includes(path);
     return !/^\/(?:package\.json$|node_modules(?:\/|$)|dist(?:$|\/(?:client|server|electron|native)(?:\/|$)))/u.test(path);
   },
   afterPrune: [async ({ buildPath, electronVersion, arch }) => {
@@ -19,4 +22,4 @@ const paths = await packager({
     await rebuild({ buildPath, electronVersion, arch, onlyModules: ['better-sqlite3'], force: true });
   }]
 });
-for (const path of paths) process.stdout.write(`${path}/小兆大脑.app\n`);
+for (const path of paths) process.stdout.write(`${path}/最佳拍档.app\n`);

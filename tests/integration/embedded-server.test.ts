@@ -1,11 +1,14 @@
 import Database from 'better-sqlite3';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as databaseModule from '../../src/server/db/database.js';
+import * as archiveModule from '../../src/server/archive/sandbox-native.js';
+import * as ingestionModule from '../../src/server/ingestion/ingestion-service.js';
+import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js';
 import { startServer, type StartedServer } from '../../src/server/start-server.js';
 import { FakeVaultGateway } from '../../src/server/vault/FakeVaultGateway.js';
 
@@ -52,6 +55,101 @@ function rawRequest(server: StartedServer, path: string, headers: Record<string,
 }
 
 describe('embedded runtime with its real allocated listener', () => {
+  async function ingestionFixture() {
+    const config = await fixture();
+    Object.assign(config.gateway, { probeReadiness: async () => ({ status: 'ready' as const }) });
+    for (const path of RULE_BUNDLE_SOURCE_PATHS) config.gateway.mutateFixture(path, `isolated rule ${path}`);
+    const order: string[] = [];
+    const ingestionPort = { rootIdentity: { dev: '1', ino: '2' }, read: vi.fn(() => null), writeRecovery: vi.fn(),
+      readRecovery: vi.fn(() => null), listRecovery: vi.fn(() => []), apply: vi.fn(), close: vi.fn(() => { order.push('ingestion-port'); }) };
+    const archive = { root: config.vaultRealRoot, rootIdentity: ingestionPort.rootIdentity, openIngestion: vi.fn(() => ingestionPort), openTrash: vi.fn(() => { throw new Error('TRASH_UNAVAILABLE'); }), openIntakeTrash: vi.fn(() => { throw new Error('INTAKE_TRASH_UNAVAILABLE'); }),
+      stat: vi.fn(() => null), list: vi.fn(() => []), read: vi.fn(() => Buffer.from('')), move: vi.fn(), syncParents: vi.fn(),
+      readRecovery: vi.fn(() => null), writeRecovery: vi.fn(), listRecovery: vi.fn(() => []), listIntake: vi.fn(() => []),
+      ensureMonth: vi.fn(), statRecovery: vi.fn(() => null), swapMain: vi.fn(), renameMain: vi.fn(), close: vi.fn(() => { order.push('archive-port'); }) };
+    const service = { review: vi.fn(), save: vi.fn(), matches: vi.fn(), preview: vi.fn(), commit: vi.fn(), batch: vi.fn(),
+      resume: vi.fn(), recoveryPreview: vi.fn(), resolve: vi.fn(), recover: vi.fn(async () => {}), close: vi.fn(async () => { order.push('ingestion-service'); }) };
+    vi.spyOn(archiveModule, 'openPersonalArchive').mockReturnValue(archive);
+    const createService = vi.spyOn(ingestionModule, 'createIngestionService').mockReturnValue(service);
+    const kernel = vi.spyOn(databaseModule, 'openStateKernel');
+    return { config: { ...config, personalArchiveAddonPath: '/isolated/fake-personal.node' }, order, ingestionPort, archive, service, createService, kernel };
+  }
+
+  it('opens ingestion from the existing archive, recovers before exposing HTTP, and closes processing before native handles', async () => {
+    const f = await ingestionFixture();
+    let finishRecovery!: () => void;
+    f.service.recover.mockImplementation(() => new Promise<void>((resolve) => { finishRecovery = resolve; }));
+    let finished = false; const launching = startServer(f.config).then((server) => { cleanup.push(() => server.close()); finished = true; return server; });
+    await vi.waitFor(() => expect(f.service.recover).toHaveBeenCalledOnce());
+    expect(finished).toBe(false); finishRecovery(); const server = await launching;
+    const directory = join(f.config.appDataDir, 'personal-ingestion-v1');
+    expect(f.archive.openIngestion).toHaveBeenCalledExactlyOnceWith(directory);
+    expect((await stat(directory)).mode & 0o777).toBe(0o700);
+    expect(f.createService).toHaveBeenCalledWith(expect.objectContaining({ port: f.ingestionPort, gateway: f.config.gateway }));
+    expect(f.ingestionPort.apply).not.toHaveBeenCalled();
+    let finishClosing!: () => void; const pendingClose = new Promise<void>((resolve) => { finishClosing = resolve; });
+    f.service.close.mockImplementation(async () => { f.order.push('ingestion-closing'); await pendingClose; f.order.push('ingestion-finished'); });
+    const closing = server.close();
+    await vi.waitFor(() => expect(f.service.close).toHaveBeenCalled());
+    expect(f.ingestionPort.close).not.toHaveBeenCalled(); expect(f.archive.close).not.toHaveBeenCalled();
+    finishClosing(); await closing;
+    expect(f.order.lastIndexOf('ingestion-finished')).toBeLessThan(f.order.indexOf('ingestion-port'));
+    expect(f.order.indexOf('ingestion-port')).toBeLessThan(f.order.indexOf('archive-port'));
+    const kernel = f.kernel.mock.results[0]!.value as databaseModule.StateKernel;
+    expect(kernel.mode === 'normal' && kernel.db.open).toBe(false);
+  });
+
+  it('keeps reading but blocks archive writes when packet recovery cannot be checked', async () => {
+    const f = await ingestionFixture();
+    const server = await startServer(f.config); cleanup.push(() => server.close());
+    expect((await (await fetch(`${server.origin}/api/v1/intake`)).json()).data.available).toBe(true);
+    const b = await fetch(`${server.origin}/api/v1/bootstrap`);
+    const cookie = b.headers.get('set-cookie')!.split(';')[0]!;
+    const csrfToken = (await b.json()).data.csrfToken as string;
+    const response = await fetch(`${server.origin}/api/v1/intake/commit`, { method: 'POST',
+      headers: { origin: server.origin, cookie, 'content-type': 'application/json', 'x-csrf-token': csrfToken },
+      body: JSON.stringify({ token: '12345678-1234-4123-8123-123456789abc' }) });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.message).toBe('收件箱回收状态暂时无法核验，请重新打开 App 后再归档。');
+    expect(f.archive.move).not.toHaveBeenCalled();
+  });
+
+  it.each(['open', 'recover'])('keeps reading and intake available when ingestion %s fails', async (failure) => {
+    const f = await ingestionFixture();
+    if (failure === 'open') f.archive.openIngestion.mockImplementation(() => { throw new Error('RECOVERY_LOCKED'); });
+    else f.service.recover.mockRejectedValue(new Error('INVALID_RECOVERY'));
+    const server = await startServer(f.config); cleanup.push(() => server.close());
+    expect(f.archive.openIngestion).toHaveBeenCalledOnce();
+    expect((await fetch(`${server.origin}/api/v1/ingestion/reviews/11111111-1111-4111-8111-111111111111`)).status).toBe(503);
+    expect((await (await fetch(`${server.origin}/api/v1/intake`)).json()).data.available).toBe(true);
+    expect((await fetch(`${server.origin}/api/v1/health`)).status).toBe(200);
+    expect(f.archive.close).not.toHaveBeenCalled();
+    if (failure === 'recover') { expect(f.service.close).toHaveBeenCalled(); expect(f.ingestionPort.close).toHaveBeenCalledOnce(); }
+  });
+
+  it('enables personal model configuration only with a native credential port and reflects key status without opening formal writes', async () => {
+    const config = await fixture();
+    let key = ''; let revision = 0;
+    const modelCredentials = { status: () => ({ available: true, configured: !!key, revision: String(revision) }), getKey: () => key,
+      setKey: (value: string) => { key = value; revision++; }, clear: () => { key = ''; revision++; } };
+    const server = await startServer({ ...config, modelCredentials }); cleanup.push(() => server.close());
+    const before = await (await fetch(`${server.origin}/api/v1/health`)).json();
+    expect(before.data.model).toEqual({ status: 'unconfigured', providerHost: 'api.deepseek.com' });
+    const bootstrap = await fetch(`${server.origin}/api/v1/bootstrap`); const cookie = bootstrap.headers.get('set-cookie')!.split(';')[0]!;
+    const { data } = await bootstrap.json() as { data: { csrfToken: string } };
+    const headers = { origin: server.origin, cookie, 'x-csrf-token': data.csrfToken, 'content-type': 'application/json' };
+    const saved = await fetch(`${server.origin}/api/v1/deepseek/key`, { method: 'POST', headers, body: JSON.stringify({ apiKey: 'isolated-test-key' }) });
+    expect(saved.status).toBe(200); expect(await saved.text()).not.toContain('isolated-test-key');
+    const configured = await (await fetch(`${server.origin}/api/v1/health`)).json();
+    expect(configured.data.model).toEqual({ status: 'configured', providerHost: 'api.deepseek.com', name: 'deepseek-v4-pro' });
+    expect(configured.data.writeGate).toEqual(before.data.writeGate);
+    await fetch(`${server.origin}/api/v1/deepseek/clear`, { method: 'POST', headers, body: '{}' });
+    expect((await (await fetch(`${server.origin}/api/v1/health`)).json()).data.model.status).toBe('unconfigured');
+    await server.close();
+    const absent = await startServer(config); cleanup.push(() => absent.close());
+    expect((await (await fetch(`${absent.origin}/api/v1/deepseek`)).json()).data.available).toBe(false);
+    expect((await (await fetch(`${absent.origin}/api/v1/health`)).json()).data.model.status).toBe('unavailable');
+  });
+
   it('finishes a direct filesystem scan larger than one read budget in one refresh attempt', async () => {
     const config = await fixture();
     const note = await readFile(new URL('../fixtures/knowledge-valid.md', import.meta.url));

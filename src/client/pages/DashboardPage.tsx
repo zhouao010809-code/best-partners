@@ -1,11 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  BookOpenCheck,
-  CircleDashed,
-  FileStack,
-  History,
-  ShieldCheck
-} from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { extractionHref } from './ExtractionPage.js';
+import { ArrowUpRight } from 'lucide-react';
 import type {
   ApiClientResult,
   HealthSnapshot,
@@ -18,6 +14,7 @@ import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { PageState } from '../components/PageState.js';
 import { MaterialDeck } from '../components/material-deck/MaterialDeck.js';
 import type { MaterialDeckCard } from '../components/material-deck/materialDeckLayout.js';
+import type { ExtractionQueueItem, ExtractionQueuePage } from '../../shared/api/extraction-queue.js';
 import {
   dataFromResource,
   indexCanServe,
@@ -26,6 +23,7 @@ import {
   validationState,
   type PageResource
 } from './pageSupport.js';
+import '../styles/dashboard-desk.css';
 
 const PAGE_LIMIT = 200;
 
@@ -34,7 +32,10 @@ type DashboardSnapshot = {
   readonly knowledge: readonly KnowledgeItem[];
   readonly operations: OperationPage;
   readonly version: number;
+  readonly completedSources: ReadonlySet<string>;
+  readonly queue?: DashboardQueue;
 };
+type DashboardQueue = { items: ExtractionQueueItem[]; counts: ExtractionQueuePage['counts']; pendingReviewCount: number };
 
 type MaterialItem = MaterialPage['items'][number];
 type KnowledgeItem = KnowledgePage['items'][number];
@@ -112,75 +113,106 @@ async function collectKnowledge(
   return { ok: true, value: items };
 }
 
+async function collectCompletedSources(api: ReadConsoleApi, signal: AbortSignal): Promise<CollectionResult<string>> {
+  if (!api.extractionQueue) return { ok: true, value: [] };
+  const completed: string[] = []; const seenPaths = new Set<string>();
+  const scopes = [
+    { view: 'ready', reviewState: 'complete' }, { view: 'unfinished', reviewState: 'complete' },
+    ...(['pending', 'generating', 'ready', 'unfinished'] as const).map((view) => ({ view, visibility: 'removed' as const }))
+  ] as const;
+  for (const scope of scopes) {
+    let cursor: string | undefined; const seenCursors = new Set<string>();
+    do {
+      const result = await api.extractionQueue.list({ ...scope, limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) }, signal);
+      if (!result.ok) return result;
+      for (const item of result.value.items) {
+        if (seenPaths.has(item.materialPath)) return validationResult('处理状态列表已变化，请刷新总览。');
+        seenPaths.add(item.materialPath);
+        const reviewedSha = item.latestReadyRun?.currentSourceSha256 ?? item.latestReadyRun?.sourceRawSha256;
+        // Explicit removals persist across edits; completed reviews only hide their verified source version.
+        if (item.removedAt !== undefined || item.reviewComplete === true && item.sourceRawSha256 !== undefined && item.sourceRawSha256 === reviewedSha) completed.push(item.materialPath);
+      }
+      const next = result.value.nextCursor;
+      if (next !== undefined) {
+        if (!result.value.items.length || next === cursor || seenCursors.has(next)) return validationResult('处理状态分页游标无效。');
+        seenCursors.add(next);
+      }
+      cursor = next;
+    } while (cursor !== undefined);
+  }
+  return { ok: true, value: completed };
+}
+
+async function collectActiveQueue(api: ReadConsoleApi, signal: AbortSignal): Promise<ApiClientResult<DashboardQueue | undefined>> {
+  if (!api.extractionQueue) return { ok: true, value: undefined };
+  const items: ExtractionQueueItem[] = []; const paths = new Set<string>();
+  let counts: ExtractionQueuePage['counts'] | undefined;
+  for (const view of ['pending', 'generating', 'ready', 'unfinished'] as const) {
+    let cursor: string | undefined; const cursors = new Set<string>();
+    do {
+      const result = await api.extractionQueue.list({ view, ...(view === 'ready' ? { reviewState: 'pending' as const } : {}), limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) }, signal);
+      if (!result.ok) return result;
+      if (counts && (Object.keys(counts) as Array<keyof typeof counts>).some(key => counts![key] !== result.value.counts[key])) {
+        return { ok: false, state: { status: 'conflict', message: '任务阶段已变化，请重新读取。' } };
+      }
+      counts = result.value.counts;
+      for (const item of result.value.items) {
+        if (item.view !== view || paths.has(item.materialPath)) return { ok: false, state: validationState('任务列表的资料阶段或路径重复，请刷新总览。') };
+        paths.add(item.materialPath); items.push(item);
+      }
+      const next = result.value.nextCursor;
+      if (next !== undefined) {
+        if (!result.value.items.length || next === cursor || cursors.has(next)) return { ok: false, state: validationState('任务列表分页游标无效。') };
+        cursors.add(next);
+      }
+      cursor = next;
+    } while (cursor !== undefined);
+  }
+  return { ok: true, value: { items, counts: counts!, pendingReviewCount: items.filter(item => item.view === 'ready' && item.reviewComplete !== true).length } };
+}
+
+function queueItemHref(item: ExtractionQueueItem): string {
+  const run = item.activeRun ?? (item.view === 'ready' ? item.latestReadyRun ?? item.latestRun : item.latestRun);
+  return `/queue?${new URLSearchParams({ view: item.view, materialPath: item.materialPath, ...(run ? { run: run.id, pane: 'result' } : {}) })}`;
+}
+
 function stableVersion(snapshot: HealthSnapshot): number | undefined {
   return indexCanServe(snapshot) ? snapshot.index.version : undefined;
 }
 
-function dateForSort(record: KnowledgeItem): string | undefined {
-  return record.updatedAt ?? record.createdAt;
-}
-
-function recentKnowledge(records: readonly KnowledgeItem[]): readonly KnowledgeItem[] {
-  return [...records].sort((left, right) => {
-    const leftDate = dateForSort(left);
-    const rightDate = dateForSort(right);
-    if (leftDate === undefined && rightDate !== undefined) return 1;
-    if (leftDate !== undefined && rightDate === undefined) return -1;
-    const byDate = (rightDate ?? '').localeCompare(leftDate ?? '');
-    return byDate === 0 ? left.path.localeCompare(right.path, 'zh-CN') : byDate;
-  }).slice(0, 6);
-}
-
-function deckCards(materials: readonly MaterialItem[]): readonly MaterialDeckCard[] {
+function deckCards(materials: readonly MaterialItem[], completed: ReadonlySet<string>, queue?: DashboardQueue): readonly MaterialDeckCard[] {
+  const tasks = new Map(queue?.items.map(item => [item.materialPath, item]));
   return materials.flatMap((record): MaterialDeckCard[] => (
-    record.knowledgeStatus !== '未提炼' ? [] : [{
+    (record.knowledgeStatus !== '未提炼' && !tasks.has(record.path)) || completed.has(record.path) ? [] : [{
       key: record.path,
       path: record.path,
       title: record.title,
       sourcePlatform: record.sourcePlatform,
       ...(record.collectedAt === undefined ? {} : { collectedAt: record.collectedAt }),
-      knowledgeStatus: record.knowledgeStatus,
-      nextAction: 'start'
+      knowledgeStatus: record.knowledgeStatus === '未提炼' ? '未提炼' : '部分入库',
+      ...(record.processingStatus === '已归档' ? {} : {
+        primaryActionDisabledReason: '请先到收件箱归档这份资料，再开始提炼。'
+      }),
+      nextAction: tasks.get(record.path)?.view === 'ready' ? 'resume' : tasks.get(record.path)?.view === 'generating' ? 'progress' : tasks.get(record.path)?.view === 'unfinished' ? 'recover' : 'start'
     }]
   ));
 }
 
-function DashboardMetrics({ snapshot }: { readonly snapshot: DashboardSnapshot }) {
-  const pending = snapshot.materials.filter((item) => item.knowledgeStatus === '未提炼').length;
-  const partial = snapshot.materials.filter((item) => item.knowledgeStatus === '部分入库').length;
-  const upgradeable = snapshot.knowledge.filter(
-    (item) => item.usageStatus === 'AI总结' || item.usageStatus === '已优化'
-  ).length;
-  const metrics = [
-    { testId: 'metric-pending', label: '待提炼', value: pending, icon: FileStack, tone: 'green', note: '尚未形成正式知识' },
-    { testId: 'metric-partial', label: '部分入库', value: partial, icon: CircleDashed, tone: 'amber', note: '已有部分知识产出' },
-    { testId: 'metric-knowledge', label: '正式知识', value: snapshot.knowledge.length, icon: BookOpenCheck, tone: 'blue', note: '包含标记为过时的知识' },
-    { testId: 'metric-upgradeable', label: '可升级', value: upgradeable, icon: ShieldCheck, tone: 'red', note: '定论受保护，过时不活跃' }
-  ] as const;
-
-  return (
-    <section className="metric-strip" aria-label="大脑状态摘要">
-      {metrics.map(({ testId, label, value, icon: Icon, tone, note }) => (
-        <article key={testId} className={`metric-cell metric-cell--${tone}`} data-testid={testId}>
-          <div className="metric-cell__label"><Icon aria-hidden="true" /><span>{label}</span></div>
-          <strong>{value}</strong>
-          <small>{note}</small>
-        </article>
-      ))}
-    </section>
-  );
-}
-
 export function DashboardPage() {
+  const navigate = useNavigate();
   const runtime = useConsoleRuntime();
   const [resource, setResource] = useState<PageResource<DashboardSnapshot>>({ status: 'loading' });
   const resourceRef = useRef(resource);
   resourceRef.current = resource;
   const health = dataFromResource(runtime.health);
-  const canLoad = runtime.health.status === 'ready' && indexCanServe(health);
+  const refreshing = runtime.health.status === 'refreshing';
+  const canLoad = (runtime.health.status === 'ready' || refreshing)
+    && indexCanServe(health);
 
   useEffect(() => {
     if (!canLoad) return undefined;
+    // A new page can load now; an existing page retries when focus refresh finishes.
+    if (refreshing && resourceRef.current.status !== 'loading') return undefined;
     const controller = new AbortController();
     const prior = resourceRef.current.status === 'ready' || resourceRef.current.status === 'refreshing'
       ? resourceRef.current.data
@@ -192,6 +224,7 @@ export function DashboardPage() {
       : { status: 'refreshing', data: prior });
 
     void (async () => {
+      let queueChanged = false;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const before = await runtime.api.getHealth(controller.signal);
         if (controller.signal.aborted || isCancelled(before)) return;
@@ -209,30 +242,27 @@ export function DashboardPage() {
           return;
         }
 
-        const [materials, knowledge, operations] = await Promise.all([
+        const personalQueue = before.value.vaultSource.status === 'ready' && before.value.vaultSource.adapter === 'filesystem';
+        const [materials, knowledge, operations, completed, queue] = await Promise.all([
           collectMaterials(runtime.api, controller.signal),
           collectKnowledge(runtime.api, controller.signal),
-          runtime.api.listOperations(controller.signal)
+          runtime.api.listOperations(controller.signal),
+          personalQueue ? collectCompletedSources(runtime.api, controller.signal) : Promise.resolve({ ok: true as const, value: [] as string[] }),
+          personalQueue ? collectActiveQueue(runtime.api, controller.signal) : Promise.resolve({ ok: true as const, value: undefined })
         ]);
         if (controller.signal.aborted
           || isCancelled(materials)
           || isCancelled(knowledge)
-          || isCancelled(operations)) return;
-        const failed = [materials, knowledge, operations].find((result) => !result.ok);
+          || isCancelled(operations) || isCancelled(completed) || isCancelled(queue)) return;
+        const failed = [materials, knowledge, operations, completed, queue].find((result) => !result.ok);
         if (failed !== undefined && !failed.ok && !isCancelled(failed)) {
-          if (failed.state.status === 'conflict') continue;
+          if (failed.state.status === 'conflict') { if (failed === queue) queueChanged = true; continue; }
           setResource(prior === undefined
             ? { status: 'failed', state: stableFailure(failed.state.status) }
             : { status: 'failed', state: stableFailure(failed.state.status), data: prior });
           return;
         }
-        if (!materials.ok || !knowledge.ok || !operations.ok) return;
-        if (operations.value.nextCursor !== undefined) {
-          setResource(prior === undefined
-            ? { status: 'failed', state: validationState('总览操作响应包含意外游标。') }
-            : { status: 'failed', state: validationState('总览操作响应包含意外游标。'), data: prior });
-          return;
-        }
+        if (!materials.ok || !knowledge.ok || !operations.ok || !completed.ok || !queue.ok) return;
 
         const after = await runtime.api.getHealth(controller.signal);
         if (controller.signal.aborted || isCancelled(after)) return;
@@ -249,26 +279,25 @@ export function DashboardPage() {
               materials: materials.value,
               knowledge: knowledge.value,
               operations: operations.value,
-              version: beforeVersion
+              version: beforeVersion,
+              completedSources: new Set(completed.value), ...(queue.value ? { queue: queue.value } : {})
             }
           });
           return;
         }
       }
 
-      setResource(prior === undefined
-        ? { status: 'refreshing', message: '索引版本仍在变化，等待稳定快照' }
-        : { status: 'refreshing', data: prior, message: '索引版本仍在变化，等待稳定快照' });
+      const message = queueChanged ? '任务阶段仍在变化，等待稳定快照' : '索引版本仍在变化，等待稳定快照';
+      setResource(prior === undefined ? { status: 'refreshing', message } : { status: 'refreshing', data: prior, message });
     })();
 
     return () => controller.abort();
-  }, [canLoad, runtime.api, runtime.dataRevision]);
+  }, [canLoad, refreshing, runtime.api, runtime.dataRevision]);
 
   const data = resource.status === 'ready' || resource.status === 'refreshing' || resource.status === 'failed'
     ? resource.data
     : undefined;
-  const cards = useMemo(() => deckCards(data?.materials ?? []), [data?.materials]);
-  const recent = useMemo(() => recentKnowledge(data?.knowledge ?? []), [data?.knowledge]);
+  const cards = useMemo(() => deckCards(data?.materials ?? [], data?.completedSources ?? new Set(), data?.queue), [data?.materials, data?.completedSources, data?.queue]);
 
   if (runtime.health.status === 'failed' && (data === undefined || !indexCanServe(health))) {
     return <PageState state={stableFailure(runtime.health.state.status)} />;
@@ -298,10 +327,12 @@ export function DashboardPage() {
     return <PageState state={resource.state} />;
   }
   if (data === undefined) return null;
+  const review = data.queue?.items.find(item => item.view === 'ready' && item.reviewComplete !== true);
+  const unfinished = data.queue?.items.find(item => item.view === 'unfinished');
+  const generating = data.queue?.items.find(item => item.view === 'generating');
 
   return (
-    <div className="dashboard-grid dashboard-grid--live">
-      <DashboardMetrics snapshot={data} />
+    <div className="dashboard-reading-desk">
       {runtime.health.status === 'failed' ? (
         <div className="dashboard-status"><PageState state={stableFailure(runtime.health.state.status)} /></div>
       ) : (resource.status === 'refreshing' || runtime.health.status === 'refreshing') && (
@@ -311,41 +342,49 @@ export function DashboardPage() {
         <div className="dashboard-status"><PageState state={resource.state} /></div>
       )}
 
-      <section className="instrument-panel instrument-panel--wide dashboard-deck" aria-labelledby="materials-title">
-        <header className="panel-heading">
-          <div><p>MATERIAL SIGNALS</p><h2 id="materials-title">待提炼材料</h2></div>
-          <span className="panel-chip">INDEX v{data.version}</span>
+      {data.queue && <nav className="dashboard-next" aria-label="继续工作">
+        <header><h2>继续工作</h2><span>从上次停下的地方继续</span></header>
+        <p className="dashboard-next__explanation">把收藏的资料变成可复用的知识；“待提炼”表示还没有生成知识候选。</p>
+        {health?.model.status === 'unconfigured' && data.queue.counts.pending > 0 && (
+          <Link className="dashboard-preflight" to="/settings">开始提炼前需要配置 DeepSeek 密钥 · 去设置<ArrowUpRight aria-hidden="true" /></Link>
+        )}
+        <div className="dashboard-stage-links">
+          <Link to="/queue?view=pending">待提炼 <strong data-testid="metric-pending">{data.queue.counts.pending}</strong></Link>
+          <Link to="/queue?view=generating">提炼中 <strong>{data.queue.counts.generating}</strong></Link>
+          <Link to="/queue?view=ready&reviewState=pending">待确认 <strong>{data.queue.pendingReviewCount}</strong></Link>
+          <Link to="/queue?view=unfinished">未完成 <strong>{data.queue.counts.unfinished}</strong></Link>
+        </div>
+        <div className="dashboard-next-actions">
+          {review && <Link className="dashboard-next-card dashboard-next-card--primary" to={queueItemHref(review)}><span>继续审阅</span><strong>{review.title}</strong><small>候选已备好，确认后才会入库</small><ArrowUpRight aria-hidden="true" /></Link>}
+          {unfinished && <Link className="dashboard-next-card" to={queueItemHref(unfinished)}><span>处理未完成任务</span><strong>{unfinished.title}</strong><small>查看上次进展，再决定如何继续</small><ArrowUpRight aria-hidden="true" /></Link>}
+          {generating && <Link className="dashboard-next-card" to={queueItemHref(generating)}><span>查看提炼进度</span><strong>{generating.title}</strong><small>任务进行中，可查看状态或停止</small><ArrowUpRight aria-hidden="true" /></Link>}
+          {runtime.api.intake && <Link className="dashboard-next-card" to="/intake"><span>整理新收件</span><strong>把收藏放进大脑</strong><small>核对信息，预览后归档</small><ArrowUpRight aria-hidden="true" /></Link>}
+        </div>
+      </nav>}
+      <div className="dashboard-workspace">
+      <section className="dashboard-materials" aria-labelledby="materials-title">
+        <header className="dashboard-section-heading">
+          <div><h2 id="materials-title">{data.queue ? '待处理资料' : '待提炼材料'} <span {...(data.queue ? {} : { 'data-testid': 'metric-pending' })}>{cards.length} 份</span></h2></div>
+          <div className="dashboard-heading-links">
+            <Link to="/knowledge" className="dashboard-knowledge-total" data-testid="metric-knowledge" title="包含已标记为过时的知识笔记">已积累 {data.knowledge.length} 篇知识</Link>
+            <Link to="/queue" className="dashboard-text-link">提炼队列 <ArrowUpRight aria-hidden="true" /></Link>
+          </div>
         </header>
         <MaterialDeck
+          appearance="showcase"
           cards={cards}
-          primaryActionDisabledReason="提炼工作流将在 Phase 2 启用"
-          onPrimaryAction={() => undefined}
+          {...(runtime.api.extraction ? {} : { primaryActionDisabledReason: '请打开最新版桌面 App 使用提炼' })}
+          onPrimaryAction={(card) => { const item = data.queue?.items.find(item => item.materialPath === card.path); navigate(item && card.nextAction !== 'start' ? queueItemHref(item) : extractionHref(card.path)); }}
         />
-      </section>
-
-      <section className="instrument-panel" aria-labelledby="recent-title">
-        <header className="panel-heading">
-          <div><p>RECENT KNOWLEDGE</p><h2 id="recent-title">最近知识</h2></div>
-          <History aria-hidden="true" />
-        </header>
-        {recent.length === 0 ? (
-          <p className="quiet-empty">当前没有正式知识</p>
-        ) : (
-          <ul className="recent-knowledge" aria-label="最近知识">
-            {recent.map((item) => (
-              <li key={item.path}>
-                <span className={`status-dot status-dot--${item.usageStatus === '过时' ? 'muted' : 'active'}`} aria-hidden="true" />
-                <span><strong>{item.title}</strong><small>{item.path}</small></span>
-                <time>{dateForSort(item) ?? '日期未标注'}</time>
-              </li>
-            ))}
-          </ul>
+        {cards.length === 0 && runtime.api.intake && (
+          <Link className="dashboard-empty-action" to="/intake">去收件箱整理新收件<ArrowUpRight aria-hidden="true" /></Link>
         )}
-        <div className="operation-honesty">
-          <strong>操作记录</strong>
-          <span>{data.operations.items.length === 0 ? '当前尚无提炼/写入工作流操作' : '已读取操作记录'}</span>
-        </div>
       </section>
+      </div>
+      <footer className="dashboard-footer">
+        <span><span aria-hidden="true" />收藏成为知识，思考留下痕迹。</span>
+        <Link to="/operations" title={data.operations.issues?.length ? '部分操作记录暂未读取' : (data.operations.counts?.all ?? data.operations.items.length) === 0 ? '当前尚无操作记录' : '查看操作进展与历史'}>操作记录 <ArrowUpRight aria-hidden="true" /></Link>
+      </footer>
     </div>
   );
 }
