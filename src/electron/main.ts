@@ -11,6 +11,7 @@ import { createModelKeyStore } from './model-key-store.js';
 import { changeDesktopVault } from './vault-selection.js';
 import { createDesktopVaultNavigation } from './vault-navigation.js';
 import { validateAssistantLoginUrl } from './assistant-login.js';
+import { runClipperHost } from './clipper-host.js';
 
 app.setName('最佳拍档');
 let started: StartedServer | undefined;
@@ -190,8 +191,16 @@ app.on('will-quit', (event) => {
 app.on('window-all-closed', () => app.quit());
 app.on('second-instance', () => { if (window?.isMinimized()) window.restore(); window?.focus(); });
 
-void bootstrap().catch(async () => {
+const isClipperHost = process.argv.includes('--clipper-host');
+if (!isClipperHost) void bootstrap().catch(async () => {
   if (process.env.NODE_ENV !== 'test') dialog.showErrorBox('最佳拍档未能启动', '本地服务或大脑文件夹暂不可用。原始资料没有被修改，请重新打开应用或选择有效的大脑文件夹。');
   await started?.close();
   app.exit(1);
 });
+
+if (isClipperHost) {
+  // Native host mode has no window and must share the desktop user-data namespace.
+  app.setPath('userData', join(app.getPath('appData'), '小兆大脑'));
+  const configPath = join(app.getPath('userData'), 'clipper-bridge.json');
+  void runClipperHost({ configPath }).then(() => app.exit(0), () => app.exit(1));
+}
