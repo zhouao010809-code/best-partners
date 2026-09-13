@@ -163,21 +163,14 @@ export async function copyDefaultVaultTemplate(input: {
     temporary = await mkdtemp(join(parentRoot, '.我的大脑-'));
     await chmod(temporary, 0o700);
     await copyTree(templateRoot, temporary);
-    // Validate the copied bytes before publishing, then repeat the check after the rename.
+    // Validate the copied bytes before publishing, then publish the complete directory
+    // in one atomic rename. Node's fs.promises API has no directory no-replace rename.
     await readAndValidateManifest(temporary);
-    // Reserve the final name without replacement. A concurrent directory or symlink
-    // therefore wins the race and remains untouched.
-    await mkdir(vaultRoot, { mode: 0o700 });
-    await chmod(vaultRoot, 0o700);
-    const reserved = await lstat(vaultRoot);
-    if (!reserved.isDirectory() || reserved.isSymbolicLink()) throw new Error('INITIAL_VAULT_TEMPLATE_INVALID');
-    publishedIdentity = { dev: reserved.dev, ino: reserved.ino };
-    for (const entry of await readdir(temporary, { withFileTypes: true })) {
-      if (entry.isSymbolicLink()) throw new Error('INITIAL_VAULT_TEMPLATE_INVALID');
-      await rename(join(temporary, entry.name), join(vaultRoot, entry.name));
-    }
-    await rm(temporary, { recursive: true, force: true });
+    await rename(temporary, vaultRoot);
     temporary = undefined;
+    const published = await lstat(vaultRoot);
+    if (!published.isDirectory() || published.isSymbolicLink()) throw new Error('INITIAL_VAULT_TEMPLATE_INVALID');
+    publishedIdentity = { dev: published.dev, ino: published.ino };
     await readAndValidateManifest(vaultRoot);
     return await input.validate(vaultRoot);
   } catch (error) {
