@@ -141,7 +141,7 @@ Expected: FAIL。
 
 - [ ] **Step 3: 实现最小扩展**
 
-右键菜单和扩展按钮调用 `document.title`、`location.href`、可读正文提取和页面时间候选；service worker 通过 Native Messaging host 发送 payload；发送失败时将标题、链接和正文保留在 `chrome.storage.local`，允许重试；不申请历史记录、cookies 或任意文件权限。
+右键菜单和扩展按钮调用 `document.title`、`location.href`、可读正文提取和页面时间候选；service worker 通过 Native Messaging host 发送 payload；发送失败时将完整待发送 payload 保存在扩展本地 IndexedDB，`chrome.storage.local` 只保留轻量索引/状态，允许重试且不会静默丢失；不申请历史记录、cookies 或任意文件权限。
 
 - [ ] **Step 4: 添加安装说明**
 
