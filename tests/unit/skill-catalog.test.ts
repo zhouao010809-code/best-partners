@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { PublicApiError } from '../../src/shared/api/errors.js';
-import { createSkillCatalogService } from '../../src/server/services/skill-catalog.js';
+import { createSkillCatalogService, skillId } from '../../src/server/services/skill-catalog.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -30,8 +30,8 @@ it('discovers only safe direct skills, keeps ids opaque, and returns bounded det
   await skill(root, 'fallback', '# No frontmatter\n\nFallback body\n');
   await mkdir(join(root, '.hidden'));
   await writeFile(join(root, '.env'), 'SECRET=do-not-read');
-  await mkdir(join(root, 'scripts'));
-  await writeFile(join(root, 'scripts', 'run.sh'), 'echo unsafe');
+  await skill(root, 'scripts', '# Reserved directory');
+  await skill(root, 'env', '# Reserved directory');
   const outside = await mkdtemp(join(tmpdir(), 'xiaozhao-skill-outside-'));
   roots.push(outside);
   await skill(outside, 'outside', '# outside');
@@ -41,6 +41,7 @@ it('discovers only safe direct skills, keeps ids opaque, and returns bounded det
   const items = await service.list();
   expect(items).toHaveLength(2);
   expect(items.map((item) => item.name)).toEqual(['fallback', 'Writer']);
+  expect(items.some((item) => ['scripts', 'env'].includes(item.name))).toBe(false);
   expect(items.every((item) => /^[a-f0-9]{64}$/u.test(item.id))).toBe(true);
   expect(items.every((item) => !item.id.includes('/'))).toBe(true);
   expect(items.find((item) => item.name === 'Writer')).toMatchObject({
@@ -53,6 +54,21 @@ it('discovers only safe direct skills, keeps ids opaque, and returns bounded det
     markdown: '\n# Writer\n\nUse the method.\n',
     references: ['REFERENCE.md']
   });
+});
+
+it('keeps canonically equivalent directory names on distinct opaque ids', async () => {
+  const root = await fixture();
+  const decomposed = 'e\u0301';
+  const composed = 'é';
+  await skill(root, decomposed, '# Decomposed');
+  await skill(root, composed, '# Composed');
+
+  const items = await createSkillCatalogService({ skillsRoot: root }).list();
+  // APFS may normalize the two directory names to one entry. The ID
+  // invariant is still asserted directly, and on a non-normalizing filesystem
+  // the catalog must expose both entries without a collision.
+  expect(skillId(decomposed)).not.toBe(skillId(composed));
+  if (items.length === 2) expect(new Set(items.map((item) => item.id)).size).toBe(2);
 });
 
 it('rejects traversal, absolute, malformed, and unknown ids as public errors', async () => {
@@ -75,6 +91,33 @@ it('reports an unavailable catalog when the fixed root is absent or unsafe', asy
   await symlink(outside, link);
   await expect(createSkillCatalogService({ skillsRoot: link }).list())
     .rejects.toMatchObject({ code: 'SKILL_CATALOG_UNAVAILABLE', statusCode: 503 });
+});
+
+it('rejects a parent symlink that would move the catalog outside the configured vault', async () => {
+  const vault = await fixture();
+  const outside = await fixture();
+  await skill(join(outside, 'skills'), 'outside', '# Outside');
+  await symlink(outside, join(vault, '.claude'));
+
+  const service = createSkillCatalogService({ skillsRoot: join(vault, '.claude', 'skills') });
+  await expect(service.list()).rejects.toMatchObject({
+    code: 'SKILL_CATALOG_UNAVAILABLE',
+    statusCode: 503
+  });
+});
+
+it('rejects a symlink at the catalog root itself', async () => {
+  const vault = await fixture();
+  const outside = await fixture();
+  await skill(outside, 'outside', '# Outside');
+  await mkdir(join(vault, '.claude'));
+  await symlink(outside, join(vault, '.claude', 'skills'));
+
+  const service = createSkillCatalogService({ skillsRoot: join(vault, '.claude', 'skills') });
+  await expect(service.list()).rejects.toMatchObject({
+    code: 'SKILL_CATALOG_UNAVAILABLE',
+    statusCode: 503
+  });
 });
 
 it('omits symlinked, oversized, and non-regular skill files', async () => {

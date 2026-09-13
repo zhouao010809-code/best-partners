@@ -12,6 +12,7 @@ const DEFAULT_DESCRIPTION = 'No description provided.';
 const MAX_NAME_LENGTH = 256;
 const MAX_DESCRIPTION_LENGTH = 10_000;
 const MAX_REFERENCE_COUNT = 1_000;
+const RESERVED_DIRECTORY_NAMES = new Set(['env', 'scripts']);
 
 export interface SkillCatalogService {
   list(): Promise<SkillSummary[]>;
@@ -35,6 +36,7 @@ function safeDirectoryName(name: string): boolean {
     && !name.startsWith('.')
     && name !== '.'
     && name !== '..'
+    && !RESERVED_DIRECTORY_NAMES.has(name.toLowerCase())
     && !/[\\/\0\u0000-\u001f\u007f]/u.test(name)
     && Buffer.byteLength(name, 'utf8') <= 255;
 }
@@ -43,8 +45,11 @@ function digest(value: Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function skillId(name: string): string {
-  return digest(Buffer.from(name.normalize('NFC'), 'utf8'));
+export function skillId(name: string): string {
+  // Keep the raw directory bytes. Unicode-equivalent names can coexist on
+  // filesystems that do not normalize filenames, and must therefore retain
+  // distinct opaque IDs.
+  return digest(Buffer.from(name, 'utf8'));
 }
 
 function field(value: unknown, fallback: string, maxLength: number): string {
@@ -89,12 +94,29 @@ type DiscoveredSkill = {
 
 export function createSkillCatalogService(input: { skillsRoot: string }): SkillCatalogService {
   const configuredRoot = resolve(input.skillsRoot);
+  // The production path is `<vault>/.claude/skills`. Treat the vault and the
+  // two catalog components as the trust boundary. Ancestors above the vault
+  // may contain harmless OS aliases (for example `/var` -> `/private/var`),
+  // so compare against a canonicalized boundary rather than the raw absolute
+  // string.
+  const configuredCatalogParent = dirname(configuredRoot);
+  const configuredVaultRoot = dirname(configuredCatalogParent);
 
   async function fixedRoot(): Promise<string> {
     try {
+      const vaultStat = await lstat(configuredVaultRoot);
+      const parentStat = await lstat(configuredCatalogParent);
       const rootStat = await lstat(configuredRoot);
-      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw unavailable();
+      if (!vaultStat.isDirectory() || vaultStat.isSymbolicLink()
+        || !parentStat.isDirectory() || parentStat.isSymbolicLink()
+        || !rootStat.isDirectory() || rootStat.isSymbolicLink()) throw unavailable();
+      const canonicalVaultRoot = await realpath(configuredVaultRoot);
       const canonical = await realpath(configuredRoot);
+      // Requiring the canonical path to remain under the canonical vault and
+      // to preserve the `.claude/skills` suffix rejects a symlink in either
+      // catalog parent instead of silently reading outside the vault.
+      const expected = join(canonicalVaultRoot, basename(configuredCatalogParent), basename(configuredRoot));
+      if (canonical !== expected) throw unavailable();
       const canonicalStat = await lstat(canonical);
       if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink()) throw unavailable();
       return canonical;

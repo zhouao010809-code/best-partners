@@ -55,6 +55,45 @@ function rawRequest(server: StartedServer, path: string, headers: Record<string,
 }
 
 describe('embedded runtime with its real allocated listener', () => {
+  it('wires the filesystem Skill catalog to the selected vault', async () => {
+    const config = await fixture();
+    const skillDirectory = join(config.vaultRealRoot, '.claude', 'skills', 'writer');
+    await mkdir(skillDirectory, { recursive: true });
+    await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: Writer\ndescription: Draft copy\n---\n\n# Writer\n');
+
+    const server = await startServer(config);
+    cleanup.push(() => server.close());
+    const response = await fetch(`${server.origin}/api/v1/skills`);
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { data: { items: Array<{ name: string; description: string }> } })
+      .toMatchObject({ data: { items: [{ name: 'Writer', description: 'Draft copy' }] } });
+  });
+
+  it('does not expose a Skill catalog through the local-rest adapter', async () => {
+    const config = await fixture();
+    const skillDirectory = join(config.vaultRealRoot, '.claude', 'skills', 'writer');
+    await mkdir(skillDirectory, { recursive: true });
+    await writeFile(join(skillDirectory, 'SKILL.md'), '# Must not be read by local-rest\n');
+    const legacyConfig = {
+      ...config,
+      adapter: 'local-rest' as const,
+      legacyHealth: {
+        gateway: config.gateway,
+        writeEnabled: false,
+        profileDirectory: join(config.appDataDir, 'profiles'),
+        development: true
+      }
+    };
+
+    const server = await startServer(legacyConfig);
+    cleanup.push(() => server.close());
+    const response = await fetch(`${server.origin}/api/v1/skills`);
+    expect(response.status).toBe(503);
+    expect((await response.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: 'SKILL_CATALOG_UNAVAILABLE' }
+    });
+  });
+
   async function ingestionFixture() {
     const config = await fixture();
     Object.assign(config.gateway, { probeReadiness: async () => ({ status: 'ready' as const }) });
