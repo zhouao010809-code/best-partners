@@ -43,6 +43,24 @@ flowchart LR
 
 每一步都保留预览、确认和恢复入口：AI 不会自动发送，知识也不会自动写入。
 
+## 界面预览
+
+先在“待提炼材料”里浏览已归档资料，再打开单份材料查看来源、状态和下一步操作；手机宽度也会自动收拢为可滚动的材料卡片。
+
+<p align="center">
+  <img src="assets/screenshots/material-deck-overview.png" alt="待提炼材料总览" width="720" />
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/material-deck-selected.png" alt="打开材料后的详情面板" width="720" />
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/material-deck-mobile.png" alt="窄屏下的材料卡片界面" width="260" />
+</p>
+
+以上截图使用隔离测试资料，仅用于展示界面结构，不包含真实账号或个人资料。
+
 ## 现在能做什么
 
 | 工作 | 你能得到什么 |
