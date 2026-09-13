@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>最佳拍档网页剪藏设置</title>
+    <style>
+      body { max-width: 680px; margin: 2rem auto; padding: 0 1rem; font: 16px/1.6 system-ui, sans-serif; color: #1f2933; }
+      button { padding: .55rem .9rem; cursor: pointer; }
+      #status { min-height: 1.6em; margin-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>最佳拍档网页剪藏</h1>
+    <p>扩展只把当前页面的标题、链接、可读正文和时间候选交给桌面 App 的本地 Native Messaging host。</p>
+    <h2>首次连接</h2>
+    <p>请先打开桌面 App 并完成“安装网页剪藏 host”，再点击测试。浏览器会要求确认一次，这是为了允许扩展连接本机 App；扩展不会静默安装或访问任意文件。</p>
+    <button id="test" type="button">测试首次连接</button>
+    <button id="retry" type="button">重试待发送收藏</button>
+    <p id="status" role="status" aria-live="polite"></p>
+    <p>卸载：在 Chrome 或 Edge 的扩展管理页关闭本扩展的“移除”并确认。卸载只移除浏览器扩展，不删除大脑资料；重新安装后需再次确认本地连接。</p>
+    <script src="options.js"></script>
+  </body>
+</html>

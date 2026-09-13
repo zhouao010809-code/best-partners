@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "最佳拍档网页剪藏",
+  "description": "把当前网页保存到最佳拍档的本地收件箱。",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArtViq+GI33Y5Q6RZLvQtO2KIZbGsQzHkCqjP/BBed8cdbQPRNX2HSckAe0nZoiFCtzcK+9fifM9pJQ4i0azzN62edJfgHGTWZBfOylSOfKnIUTOGQO1PWI5IWjISuaM3W7EzmnAOwlqm+CUqrazj83bO7mosBSFgk7fqCV4VjSgOQL7vME4cjn+5dwToHV3V0WkBLB4g7oHKFJMcWWxJgyyXCSsoa62Ls17mMk/RT+Ka+GbAEU5QuBdT/KHVK0U05OdIXEgvo4wPQiuudwBTVBgyAG/NxNEMLTkXc4XZ0JqF77xngFZ3Y6BV5PBmhBBFlfm7Jsf63IsMYOS3TGFkXwIDAQAB",
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus", "nativeMessaging"],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "保存到最佳拍档"
+  },
+  "options_page": "src/options.html"
+}
