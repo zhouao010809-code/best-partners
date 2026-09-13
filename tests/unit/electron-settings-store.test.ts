@@ -96,8 +96,10 @@ describe('initial vault selection', () => {
       validate: vi.fn(async (vaultRoot: string) => ({ vaultRoot }))
     });
     expect(created).toEqual({ vaultRoot: join(parentRoot, '我的大脑') });
-    expect(await readdir(join(parentRoot, '我的大脑'))).toEqual(['00大脑规则', '01图书馆', '02知识库', '03大讲堂']);
-    expect(await readFile(join(parentRoot, '我的大脑', '00大脑规则/00_大脑规范.md'), 'utf8')).toContain('初始规则');
+    expect(await readdir(join(parentRoot, '我的大脑'))).toEqual([
+      '00大脑规则', '01图书馆', '02知识库', '03大讲堂', 'template-manifest.json', '最佳拍档入门说明.md'
+    ]);
+    expect(await readFile(join(parentRoot, '我的大脑', '00大脑规则/00_大脑规范.md'), 'utf8')).toContain('原始资料');
   });
 
   it('does not overwrite an existing folder when starter creation collides', async () => {
