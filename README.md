@@ -19,7 +19,7 @@
 
 “收件箱”就是待整理资料；“提炼”就是让 AI 生成可编辑草稿；“入库”就是你确认后保存为可搜索笔记。
 
-当前只支持 Apple Silicon Mac。公开仓库暂未提供可直接下载的签名 DMG；如果你只是想试用，请先确认自己能运行开发者构建流程。
+当前只支持 Apple Silicon Mac。可以下载 [Apple Silicon 开发者预览版](https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.0-preview.1)；它尚未完成签名和公证，正式使用前请先阅读 Release 说明。
 
 <p align="center">
   <a href="#核心闭环">核心闭环</a> ·
@@ -103,7 +103,7 @@ flowchart LR
 
 ## 在这台 Mac 上使用
 
-构建产物位于 `dist/desktop/最佳拍档-darwin-arm64/最佳拍档.app`，可以双击打开。当前仅针对 Apple Silicon Mac 构建；没有 DMG、公证或对外分发保证。
+构建产物位于 `dist/desktop/最佳拍档-darwin-arm64/最佳拍档.app`，可以双击打开。当前仅针对 Apple Silicon Mac 构建；Release 中的预览 DMG 尚未完成 Developer ID 签名和 Apple 公证。
 
 首次启动尝试读取之前保存的位置，否则使用当前用户主目录下的 `我的大脑`。没有可用位置时会先让你选择“创建我的大脑”或“选择已有文件夹”；创建时只在你选定的保存位置建立最小目录和五份初始规则文件，不移动现有资料。位置无效时会弹出文件夹选择框。有效文件夹需要包含 `00大脑规则`、`01图书馆`、`02知识库`、`03大讲堂` 及当前规定的五份规则文件；不接受符号链接。
 
