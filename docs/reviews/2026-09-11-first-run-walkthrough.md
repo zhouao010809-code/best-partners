@@ -266,4 +266,12 @@
 7. 工程诊断默认放在“高级诊断”折叠区，不为了引导而增加引导。
 8. 每次改动核心入口、权限、外发、写入或结果回路后，重跑 `tests/electron/first-run-walkthrough.test.ts`，再在隔离临时大脑中复核首次使用和已配置用户流程；不要用真实账号制造首次使用。
 
+## 公开分发预检（2026-09-13）
+
+- **已观察**：本机已具备 `hdiutil`、`xcrun notarytool` 等 DMG/公证工具；`最佳拍档.app` 已生成，包名、可执行文件名和图标资源一致。
+- **已观察**：已生成本机验收用未签名镜像 `dist/desktop/最佳拍档-0.1.0-arm64-unsigned.dmg`，格式为压缩只读 UDZO。
+- **已观察**：`security find-identity -v -p codesigning` 返回 `0 valid identities found`，当前没有可用的 Developer ID 签名证书。
+- **发布结论**：源码仓库可以公开；DMG 只能作为本机或受控测试分发，不能宣称已通过 macOS Gatekeeper 的正式公开发布。
+- **正式发布前置**：由项目所有者在 Apple Developer 账户准备 Developer ID Application 证书和公证凭据；拿到后再执行签名、公证、装载验证，并替换未签名镜像。
+
 相关永久回归：`tests/electron/first-run-walkthrough.test.ts`。
