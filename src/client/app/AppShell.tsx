@@ -12,7 +12,8 @@ import {
   ListFilter,
   Settings,
   Search,
-  MessageCircle
+  MessageCircle,
+  Sparkles
 } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
@@ -38,6 +39,7 @@ const NAVIGATION = [
   { to: '/queue', label: '提炼队列', icon: ListFilter, end: false },
   { to: '/library', label: '档案库', icon: Archive, end: false },
   { to: '/knowledge', label: '知识库', icon: BookOpenText, end: false },
+  { to: '/skills', label: 'Skill 库', icon: Sparkles, end: false },
   { to: '/operations', label: '操作与恢复', icon: GitPullRequestArrow, end: false },
   { to: '/settings', label: '设置', icon: Settings, end: false }
 ] as const;
@@ -222,6 +224,12 @@ function pageIdentity(pathname: string): PageIdentity {
         eyebrow: 'KNOWLEDGE / RETRIEVAL',
         title: '知识库',
         description: '按标题与 YAML 召回字段检索已结构化的知识。'
+      };
+    case '/skills':
+      return {
+        eyebrow: 'SKILLS / LOCAL METHODS',
+        title: 'Skill 库',
+        description: '浏览本地可复用的方法说明，保持只读。'
       };
     case '/trash':
       return { eyebrow: 'RECYCLE / LOCAL STORAGE', title: '回收站', description: '收件箱、档案库、提炼队列与知识库的暂存处。' };

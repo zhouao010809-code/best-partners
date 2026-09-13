@@ -10,6 +10,7 @@ import { LibraryPage } from '../pages/LibraryPage.js';
 import { TrashPage } from '../pages/TrashPage.js';
 import { IntakePage } from '../pages/IntakePage.js';
 import { ExtractionPage } from '../pages/ExtractionPage.js';
+import { SkillsPage } from '../pages/SkillsPage.js';
 import { AppShell } from './AppShell.js';
 
 function WritePlanPlaceholder() {
@@ -48,6 +49,7 @@ export function AppRouter({ api }: AppRouterProps = {}) {
         <Route path="library" element={<LibraryPage />} />
         <Route path="trash" element={<TrashPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
+        <Route path="skills" element={<SkillsPage />} />
         <Route path="operations" element={<OperationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="connections" element={<Navigate to="/settings" replace />} />

@@ -45,6 +45,8 @@ import { trashPreviewResponseSchema, trashDeletePreviewResponseSchema, trashEntr
   type TrashPreview, type TrashDeletePreview, type TrashEntry, type TrashList } from '../../shared/api/trash.js';
 import { intakeTrashPreviewResponseSchema, intakeTrashDeletePreviewResponseSchema, intakeTrashEntryResponseSchema, intakeTrashListResponseSchema,
   type IntakeTrashPreview, type IntakeTrashDeletePreview, type IntakeTrashEntry, type IntakeTrashList } from '../../shared/api/intake-trash.js';
+import { skillResponseSchema, skillsResponseSchema, type SkillDetail, type SkillsPage } from '../../shared/api/skills.js';
+export type { SkillDetail, SkillsPage } from '../../shared/api/skills.js';
 
 type ClientFailureStatus =
   | 'disconnected'
@@ -100,6 +102,10 @@ export interface KnowledgeQuery {
 }
 
 export interface ReadConsoleApi {
+  readonly skills?: {
+    list(signal?: AbortSignal): Promise<ApiClientResult<SkillsPage>>;
+    get(id: string, signal?: AbortSignal): Promise<ApiClientResult<SkillDetail>>;
+  };
   attachments?: {
     list(signal?: AbortSignal): Promise<ApiClientResult<{ attachments: Attachment[] }>>;
     archive(id: string, fields?: Partial<IntakePreviewRequest['fields']>): Promise<ApiClientResult<{ result: AttachmentArchiveResult }>>;
@@ -394,6 +400,10 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
   }
 
   return {
+    skills: {
+      list: signal => requestData(fetcher, '/api/v1/skills', skillsResponseSchema, getInit(signal)),
+      get: (id, signal) => requestData(fetcher, `/api/v1/skills/${encodeURIComponent(id)}`, skillResponseSchema, getInit(signal))
+    },
     attachments: {
       list: signal => requestData(fetcher, '/api/v1/assistant/attachments', attachmentListResponseSchema, getInit(signal)),
       archive: (id, fields) => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/archive`, attachmentArchiveResponseSchema, fields ? { fields } : {}),
