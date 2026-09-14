@@ -1,6 +1,7 @@
 import { packager } from '@electron/packager';
 import { rebuild } from '@electron/rebuild';
-import { resolve } from 'node:path';
+import { cp, mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 
 if (process.platform !== 'darwin' || process.arch !== 'arm64') {
   throw new Error('This personal build targets the current arm64 Mac only');
@@ -22,4 +23,12 @@ const paths = await packager({
     await rebuild({ buildPath, electronVersion, arch, onlyModules: ['better-sqlite3'], force: true });
   }]
 });
-for (const path of paths) process.stdout.write(`${path}/最佳拍档.app\n`);
+for (const path of paths) {
+  const resources = join(path, '最佳拍档.app', 'Contents', 'Resources');
+  await mkdir(resources, { recursive: true });
+  await cp(resolve('templates/default-vault'), join(resources, 'templates', 'default-vault'), { recursive: true });
+  await cp(resolve('browser-extension'), join(resources, 'clipper-extension'), { recursive: true });
+  const zip = resolve('dist/best-partners-clipper.zip');
+  await cp(zip, join(resources, 'best-partners-clipper.zip'));
+  process.stdout.write(`${path}/最佳拍档.app\n`);
+}
