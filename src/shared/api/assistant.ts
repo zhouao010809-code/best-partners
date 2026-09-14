@@ -37,7 +37,7 @@ export const assistantPlanActionSchema = z.strictObject({
   attachmentId: z.uuid(), sourceTitle: z.string().max(255), sourceSha256: sha256,
   targetPath: z.string().min(1).max(4096), mainName: z.string().min(1).max(255),
   summary: z.string().max(2000), createdAt: z.string(), expiresAt: z.string(),
-  resultActionId: z.uuid().optional(), problem: z.string().optional()
+  resultActionId: z.string().min(1).max(255).optional(), problem: z.string().max(2000).optional()
 });
 export const assistantActionSchema = z.discriminatedUnion('type', [assistantReviewActionSchema, assistantArchiveActionSchema, assistantPlanActionSchema]);
 export const assistantStepSchema = z.object({ id: z.string(), toolName: z.string(), label: z.string(), status: z.enum(['running', 'completed', 'failed', 'stopped']), startedAt: z.string(), finishedAt: z.string().optional() });

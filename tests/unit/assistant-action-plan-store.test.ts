@@ -24,6 +24,7 @@ describe('assistant action plan store', () => {
     const row = f.db.prepare('SELECT payload,status FROM assistant_action_plans').get() as { payload: string; status: string };
     expect(row.status).toBe('pending'); expect(JSON.parse(row.payload)).toMatchObject({ archivePayload: f.payload });
     expect(plan).not.toHaveProperty('payload');
+    expect(f.store.getServerRecord(plan.id)).toMatchObject({ conversationId: f.conversationId, payload: f.payload, fingerprint: expect.any(String) });
   });
 
   it('runs one confirmation, completes it, and rejects a different request', () => {
@@ -35,6 +36,7 @@ describe('assistant action plan store', () => {
     const completed = f.store.markCompleted(plan.id, randomUUID(), { targetPath: f.payload.targetPath });
     expect(completed.status).toBe('completed');
     expect(f.store.findConfirmation('request-1')).toEqual(completed);
+    expect(f.store.markRunning(plan.id, 'request-1', 'fingerprint-1')).toEqual(completed);
   });
 
   it('rejects a reused confirmation id with a different fingerprint', () => {
@@ -47,12 +49,30 @@ describe('assistant action plan store', () => {
     expect(() => f.store.markCompleted(plan.id, randomUUID())).toThrow(/already resolved|已经处理/u);
     const expired = create(f); const abandoned = create(f); f.store.markRunning(abandoned.plan.id, 'request-2', 'fingerprint-2');
     f.advance(4_000_000); expect(f.store.recover()).toMatchObject({ stale: 1, failed: 1 }); expect(f.store.get(plan.id).status).toBe('failed'); expect(f.store.get(expired.plan.id).status).toBe('stale'); expect(f.store.get(abandoned.plan.id).status).toBe('failed');
+    expect(() => f.store.markRunning(abandoned.plan.id, 'request-2', 'fingerprint-2')).toThrowError(expect.objectContaining({ code: 'ASSISTANT_ACTION_RECOVERY_REQUIRED' }));
   });
 
   it('marks an unconfirmed expired plan stale and lists by conversation', () => {
     const f = fixture(); const first = create(f).plan; f.advance(4_000_000);
     expect(f.store.recover()).toMatchObject({ stale: 1, failed: 0 }); expect(f.store.get(first.id).status).toBe('stale');
     expect(f.store.listForConversation(f.conversationId)).toHaveLength(1);
+  });
+
+  it('keeps plans isolated by conversation and rejects cross-conversation reads', () => {
+    const first = fixture();
+    const secondConversationId = randomUUID();
+    first.db.prepare('INSERT INTO assistant_conversations(id,updated_at,payload) VALUES(?,?,?)').run(secondConversationId, new Date().toISOString(), '{}');
+    const plan = create(first).plan;
+    expect(first.store.listForConversation(secondConversationId)).toHaveLength(0);
+    expect(() => first.store.getServerRecord(plan.id, secondConversationId)).toThrow(/没有找到|not found/u);
+    expect(first.store.listServerRecordsForConversation(first.conversationId)).toHaveLength(1);
+  });
+
+  it('returns stable expiry and stale errors without executing a write', () => {
+    const f = fixture(); const plan = create(f).plan; f.advance(4_000_000);
+    expect(() => f.store.markRunning(plan.id, 'request-expired', 'fingerprint-expired')).toThrowError(expect.objectContaining({ code: 'ASSISTANT_ACTION_EXPIRED' }));
+    expect(f.store.get(plan.id).status).toBe('stale');
+    expect(() => f.store.markRunning(plan.id, 'request-other', 'fingerprint-other')).toThrowError(expect.objectContaining({ code: 'ASSISTANT_ACTION_STALE' }));
   });
 
   it('rejects malformed persisted payloads', () => {
