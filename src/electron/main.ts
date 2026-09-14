@@ -200,7 +200,16 @@ if (!isClipperHost) void bootstrap().catch(async () => {
 
 if (isClipperHost) {
   // Native host mode has no window and must share the desktop user-data namespace.
-  app.setPath('userData', join(app.getPath('appData'), '小兆大脑'));
-  const configPath = join(app.getPath('userData'), 'clipper-bridge.json');
-  void runClipperHost({ configPath }).then(() => app.exit(0), () => app.exit(1));
+  // Tests may provide an isolated user-data root; production uses the same path
+  // as the regular desktop bootstrap.
+  const hostUserData = process.env.NODE_ENV === 'test'
+    ? process.env.XIAOZHAO_TEST_USER_DATA
+    : join(app.getPath('appData'), '小兆大脑');
+  if (hostUserData === undefined || hostUserData.length === 0) {
+    app.exit(1);
+  } else {
+    app.setPath('userData', hostUserData);
+    const configPath = join(hostUserData, 'clipper-bridge.json');
+    void runClipperHost({ configPath }).then(() => app.exit(0), () => app.exit(1));
+  }
 }

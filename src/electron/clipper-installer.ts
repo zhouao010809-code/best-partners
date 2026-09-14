@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { promises as fs } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { CLIPPER_EXTENSION_ID, CLIPPER_HOST_NAME } from '../shared/api/clipper.js';
@@ -11,11 +11,17 @@ export function hostManifest(wrapperPath: string) { return { name: CLIPPER_HOST_
 export function clipperPaths(home = homedir()) { return { chrome: join(home, 'Library/Application Support/Google/Chrome/NativeMessagingHosts', `${CLIPPER_HOST_NAME}.json`), edge: join(home, 'Library/Application Support/Microsoft Edge/NativeMessagingHosts', `${CLIPPER_HOST_NAME}.json`) }; }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 async function writePrivateFile(path: string, content: string, mode: number): Promise<void> {
+  try {
+    const existing = await fs.lstat(path);
+    if (existing.isSymbolicLink() || !existing.isFile() || existing.nlink !== 1) throw new Error('Native host 文件路径无效');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+  }
   const file = await fs.open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, mode);
   try { await file.writeFile(content); } finally { await file.close(); }
   await fs.chmod(path, mode);
 }
-export function createBridgeConfig(vaultRoot: string): ClipperBridgeConfig { return { version: 1, vaultRoot, token: randomUUID(), extensionId: CLIPPER_EXTENSION_ID }; }
+export function createBridgeConfig(vaultRoot: string): ClipperBridgeConfig { return { version: 1, vaultRoot, token: randomBytes(32).toString('hex'), extensionId: CLIPPER_EXTENSION_ID }; }
 export async function readClipperBridgeConfig(configPath: string): Promise<ClipperBridgeConfig> {
   const stat = await fs.lstat(configPath); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0) throw new Error('Native host 配置权限无效');
   return parseClipperHostConfig(JSON.parse(await fs.readFile(configPath, 'utf8'))) as ClipperBridgeConfig;

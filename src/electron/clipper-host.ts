@@ -9,6 +9,13 @@ export type ClipperHostConfig = { vaultRoot: string; token: string; extensionId:
 function fail(message: string): never { throw new Error(message); }
 function isMissing(error: unknown): boolean { return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT'; }
 function isInside(root: string, candidate: string): boolean { return candidate === root || candidate.startsWith(`${root}${sep}`); }
+async function assertNoSymlinkPath(path: string): Promise<void> {
+  // Each vault component is checked at the point it is entered by
+  // safeRealDirectory. Do not walk system ancestors (/var, /tmp on macOS),
+  // which are commonly symlink aliases and outside the configured vault.
+  const stat = await fs.lstat(path).catch((error) => { if (isMissing(error)) fail('保存位置无效'); throw error; });
+  if (stat.isSymbolicLink()) fail('保存位置无效');
+}
 
 export function encodeNativeMessage(value: unknown): Buffer {
   const body = Buffer.from(JSON.stringify(value)); if (body.length > MAX_NATIVE_MESSAGE_BYTES) fail('消息超过 12 MiB 限制');
@@ -33,6 +40,7 @@ async function assertPrivateConfig(path: string): Promise<void> {
   const stat = await fs.lstat(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.size > 16_384) fail('Native host 配置权限无效');
 }
 async function safeRealDirectory(path: string, root?: string): Promise<string> {
+  await assertNoSymlinkPath(path);
   const stat = await fs.lstat(path).catch((error) => { if (isMissing(error)) fail('保存位置无效'); throw error; });
   if (!stat.isDirectory() || stat.isSymbolicLink()) fail('保存位置无效'); const real = await fs.realpath(path);
   if (root !== undefined && !isInside(root, real)) fail('保存位置无效'); return real;
@@ -46,15 +54,31 @@ function markdownFor(message: Extract<ClipperMessage, { payload: unknown }>): st
   const p = message.payload; return `# ${p.title}\n\n来源：${p.url}\n采集时间：${p.clippedAt}\n\n${p.content}\n`;
 }
 async function findDuplicate(inbox: string, packetId: string, contentHash: string): Promise<boolean> {
+  const readMetadata = async (directory: string): Promise<string | undefined> => {
+    const metadataPath = join(directory, 'metadata.json');
+    const stat = await fs.lstat(metadataPath).catch((error) => { if (isMissing(error)) return undefined; throw error; });
+    if (!stat) return undefined;
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) fail('保存位置无效');
+    return fs.readFile(metadataPath, 'utf8');
+  };
   const direct = join(inbox, packetId);
   try {
     const stat = await fs.lstat(direct); if (stat.isSymbolicLink() || !stat.isDirectory()) fail('保存位置无效');
-    if (await fs.readFile(join(direct, 'index.md'), 'utf8').catch(() => undefined) !== undefined) return true;
+    // An index without metadata is an incomplete/foreign directory, not proof of
+    // a duplicate packet.  Never report a duplicate solely because index.md exists.
+    const metadata = await readMetadata(direct);
+    if (metadata !== undefined) {
+      try {
+        const parsed = JSON.parse(metadata) as Record<string, unknown>;
+        if (parsed.packetId === packetId || parsed.contentHash === contentHash || parsed.hash === contentHash) return true;
+      } catch { /* malformed metadata is ignored */ }
+    }
   } catch (error) { if (!isMissing(error)) throw error; }
   for (const entry of await fs.readdir(inbox, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) fail('保存位置无效');
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     const directory = join(inbox, entry.name); const stat = await fs.lstat(directory); if (stat.isSymbolicLink()) fail('保存位置无效');
-    const metadata = await fs.readFile(join(directory, 'metadata.json'), 'utf8').catch(() => undefined); if (metadata === undefined) continue;
+    const metadata = await readMetadata(directory); if (metadata === undefined) continue;
     try { const parsed = JSON.parse(metadata) as Record<string, unknown>; if (parsed.contentHash === contentHash || parsed.hash === contentHash) return true; } catch { /* malformed metadata is ignored */ }
   }
   return false;
@@ -81,11 +105,31 @@ export async function handleClipperMessage(message: unknown, configInput: Clippe
 }
 export async function runClipperHost(opts: { configPath: string; input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }) {
   await assertPrivateConfig(opts.configPath); const config = parseClipperHostConfig(JSON.parse(await fs.readFile(opts.configPath, 'utf8'))); const input = opts.input ?? process.stdin; const output = opts.output ?? process.stdout;
-  let data = Buffer.alloc(0);
+  let header = Buffer.alloc(0); let expected = -1; let bodyChunks: Buffer[] = []; let bodyBytes = 0;
+  const rejectOversized = () => { output.write(encodeNativeMessage({ ok: false, error: '消息超过 12 MiB 限制' })); };
   for await (const chunk of input) {
-    const part = Buffer.from(chunk as Uint8Array);
-    if (data.length < 4) { const needed = 4 - data.length; data = Buffer.concat([data, part.subarray(0, needed)]); if (data.length < 4) continue; const n = data.readUInt32LE(0); if (n > MAX_NATIVE_MESSAGE_BYTES) { output.write(encodeNativeMessage({ ok: false, error: '消息超过 12 MiB 限制' })); return; } data = Buffer.concat([data, part.subarray(needed)]); } else data = Buffer.concat([data, part]);
-    while (data.length >= 4) { const n = data.readUInt32LE(0); if (n > MAX_NATIVE_MESSAGE_BYTES) { output.write(encodeNativeMessage({ ok: false, error: '消息超过 12 MiB 限制' })); return; } if (data.length < n + 4) break; const frame = data.subarray(0, n + 4); data = data.subarray(n + 4); let response: unknown; try { response = await handleClipperMessage(decodeNativeMessage(frame), config); } catch (error) { response = { ok: false, error: error instanceof Error ? error.message : '保存失败' }; } output.write(encodeNativeMessage(response)); }
-    if (data.length > MAX_NATIVE_MESSAGE_BYTES + 4) { output.write(encodeNativeMessage({ ok: false, error: '消息超过 12 MiB 限制' })); return; }
+    const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array); let offset = 0;
+    while (offset < part.length) {
+      if (expected < 0) {
+        const take = Math.min(4 - header.length, part.length - offset);
+        header = Buffer.concat([header, part.subarray(offset, offset + take)]); offset += take;
+        if (header.length < 4) continue;
+        expected = header.readUInt32LE(0);
+        if (expected > MAX_NATIVE_MESSAGE_BYTES) { rejectOversized(); return; }
+        bodyChunks = []; bodyBytes = 0;
+        if (expected === 0) {
+          let response: unknown; try { response = await handleClipperMessage(decodeNativeMessage(header), config); } catch (error) { response = { ok: false, error: error instanceof Error ? error.message : '保存失败' }; }
+          output.write(encodeNativeMessage(response)); header = Buffer.alloc(0); expected = -1;
+        }
+        continue;
+      }
+      const take = Math.min(expected - bodyBytes, part.length - offset);
+      if (take > 0) { bodyChunks.push(part.subarray(offset, offset + take)); bodyBytes += take; offset += take; }
+      if (bodyBytes < expected) continue;
+      const frame = Buffer.concat([header, ...bodyChunks]);
+      let response: unknown; try { response = await handleClipperMessage(decodeNativeMessage(frame), config); } catch (error) { response = { ok: false, error: error instanceof Error ? error.message : '保存失败' }; }
+      output.write(encodeNativeMessage(response)); header = Buffer.alloc(0); expected = -1; bodyChunks = []; bodyBytes = 0;
+    }
   }
+  if (header.length > 0 || expected >= 0) output.write(encodeNativeMessage({ ok: false, error: '消息格式无效' }));
 }
