@@ -7,7 +7,7 @@ import type { ExtractionService } from '../../src/server/services/extraction-ser
 import type { ReadService } from '../../src/server/services/read-service.js';
 import type { AssistantEvent } from '../../src/server/assistant/types.js';
 
-function fixture(message = '总结这个文件', archived = false, selectedRange = { startPage: 2, endPage: 2 }) {
+function fixture(message = '总结这个文件', archived = false, selectedRange = { startPage: 2, endPage: 2 }, propose = false) {
   const id = randomUUID(), operationId = randomUUID(), path = '01图书馆/来自个人/2026-09/资料/资料.md';
   const attachment: Attachment = { id, name: '资料.pdf', mediaType: 'application/pdf', size: 20, sha256: 'a'.repeat(64), status: 'ready', pageCount: 3, textBytes: 30, createdAt: '2026-09-10', updatedAt: '2026-09-10' };
   const marker = (page: number) => `<!-- xiaozhao-page:${attachment.sha256}:${page} -->`;
@@ -21,10 +21,11 @@ function fixture(message = '总结这个文件', archived = false, selectedRange
   };
   const read = { getDocumentDetail: vi.fn(async () => ({ path, title: '资料', markdown, versionMarker: { rawSha256: 'c'.repeat(64) } })) };
   const prepareAssistant = vi.fn(async () => ({ token: randomUUID(), materialPath: path, title: '资料', messages: [{ role: 'user', content: '第二页面证据' }] }));
+  const proposeArchive = vi.fn(async (request: unknown) => ({ state: 'pending', id, request }));
   const events: AssistantEvent[] = []; const controller = new AbortController();
   const tools = createAssistantTools({ readService: read as unknown as ReadService, extractionService: { prepareAssistant, acceptAssistant: vi.fn() } as unknown as ExtractionService,
-    attachmentService: port as unknown as AttachmentService, attachments: [{ id, ...selectedRange }], userMessage: message, scope: 'current', model: 'test', signal: controller.signal, emit: event => events.push(event) });
-  return { id, path, markdown, marker, port, read, events, prepareAssistant, controller, run: (name: string, value: unknown) => tools.find(tool => tool.name === name)!.execute(value) };
+    attachmentService: port as unknown as AttachmentService, ...(propose ? { proposeArchive } : {}), attachments: [{ id, ...selectedRange }], userMessage: message, scope: 'current', model: 'test', signal: controller.signal, emit: event => events.push(event) });
+  return { id, path, markdown, marker, port, read, events, prepareAssistant, proposeArchive, controller, run: (name: string, value: unknown) => tools.find(tool => tool.name === name)!.execute(value) };
 }
 
 it('checks selected IDs and pages before reading original content', async () => {
@@ -55,9 +56,10 @@ it('a reading turn cannot archive or prepare candidates even if a tool tries', a
   expect(f.port.archive).not.toHaveBeenCalled(); expect(f.prepareAssistant).not.toHaveBeenCalled();
 });
 it('an explicit archive produces a real receipt without starting extraction', async () => {
-  const f = fixture('把它归档');
-  expect(await f.run('archive_attachment', { id: f.id })).toMatchObject({ state: 'archived', materialPath: f.path });
-  expect(f.events.find(event => event.type === 'action')).toMatchObject({ action: { type: 'archive', materialPath: f.path, status: 'archived' } });
+  const f = fixture('把它归档', false, { startPage: 2, endPage: 2 }, true);
+  expect(await f.run('archive_attachment', { id: f.id })).toMatchObject({ state: 'pending', id: f.id });
+  expect(f.proposeArchive).toHaveBeenCalledWith({ id: f.id, selection: { id: f.id, startPage: 2, endPage: 2 }, fields: undefined }, expect.any(AbortSignal));
+  expect(f.port.archive).not.toHaveBeenCalled();
   expect(f.prepareAssistant).not.toHaveBeenCalled();
 });
 it('prepares selected pages only after source preservation and binds the full source revision', async () => {

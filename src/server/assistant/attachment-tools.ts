@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AttachmentSelection } from '../../shared/api/attachments.js';
-import { attachmentArchiveRequestSchema } from '../../shared/api/attachments.js';
+import { attachmentArchiveRequestSchema, type AttachmentArchiveRequest } from '../../shared/api/attachments.js';
 import type { AssistantSource } from '../../shared/api/assistant.js';
 import { PublicApiError } from '../../shared/api/errors.js';
 import type { AttachmentService } from '../attachments/service.js';
@@ -14,10 +14,16 @@ import type { AssistantEvent, AssistantTool } from './types.js';
 const readInput = z.strictObject({ id: z.uuid(), page: z.number().int().positive().optional(), offset: z.number().int().nonnegative().default(0), length: z.number().int().min(1).max(12_000).default(8000) });
 const prepareInput = z.strictObject({ id: z.uuid(), readingState: z.enum(['未看', '已看']).default('未看') });
 type AttachmentPort = Pick<AttachmentService, 'get' | 'readPages' | 'archive'>;
+export type AttachmentArchiveProposalRequest = {
+  id: string;
+  selection: { id: string; startPage: number; endPage: number };
+  fields?: AttachmentArchiveRequest['fields'];
+};
 
 /** Combines file and vault tools while keeping file scope and write intent outside the model. */
 export function createAssistantTools(input: {
   readService: ReadService; extractionService?: ExtractionService; attachmentService?: AttachmentPort;
+  proposeArchive?: (request: AttachmentArchiveProposalRequest, signal?: AbortSignal) => Promise<unknown>;
   attachments: AttachmentSelection[]; userMessage: string; scope: 'brain' | 'current'; contextPath?: string;
   model: string; signal: AbortSignal; emit(event: AssistantEvent): void;
 }): AssistantTool[] {
@@ -90,9 +96,10 @@ export function createAssistantTools(input: {
     } };
   }
   async function archive(request: z.infer<typeof attachmentArchiveRequestSchema>) {
-    const { attachment } = chosen(request.id);
+    const { attachment, startPage, endPage } = chosen(request.id);
     if (!intent.archive) throw new PublicApiError('ASSISTANT_INTENT_REQUIRED', '本轮用户没有明确要求归档或提炼附件，请先回答当前问题；如需保存，请用户直接说“归档这个文件”。', 403);
     input.emit({ type: 'attachment-archive-started', attachmentId: request.id });
+    if (input.proposeArchive) return input.proposeArchive({ id: request.id, selection: { id: request.id, startPage, endPage }, fields: request.fields }, input.signal);
     const result = await port().archive(request, input.signal);
     if (result.state !== 'archived') throw new PublicApiError('ATTACHMENT_ARCHIVE_REVIEW', '归档仍需核验，已保存恢复记录；请在附件卡片继续归档。', 409);
     rememberPath(request.id, result.materialPath);
@@ -134,7 +141,11 @@ export function createAssistantTools(input: {
       await requireSelectedText(id);
       const result = await archive({ id });
       active();
-      return brainTools.find(candidate => candidate.name === 'prepare_extraction')!.execute({ path: result.materialPath, readingState });
+      if (!result || typeof result !== 'object' || typeof (result as { materialPath?: unknown }).materialPath !== 'string') {
+        throw new PublicApiError('ATTACHMENT_ARCHIVE_REVIEW', '归档计划已生成，完成提炼前需要先确认归档。', 409);
+      }
+      const materialPath = (result as { materialPath: string }).materialPath;
+      return brainTools.find(candidate => candidate.name === 'prepare_extraction')!.execute({ path: materialPath, readingState });
     })
   ];
 }

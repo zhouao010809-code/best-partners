@@ -6,7 +6,7 @@ import { PublicApiError } from '../../shared/api/errors.js';
 import { sha256Bytes } from '../vault/raw-bytes.js';
 import { createAttachmentFiles } from './private-store.js';
 import { parseAttachment } from './parser.js';
-import { createAttachmentArchive, type AttachmentArchivePort } from './archive.js';
+import { createAttachmentArchive, type AttachmentArchivePort, type AttachmentArchivePreview } from './archive.js';
 
 const storedSchema = z.object({ attachment: attachmentSchema, groupId: z.uuid(), archivePlan: z.unknown().optional() });
 export type StoredAttachment = z.infer<typeof storedSchema>;
@@ -101,7 +101,8 @@ export function createAttachmentService(input: { directory: string; archive?: At
     ready: async () => { for (const item of records.values()) if (item.attachment.status === 'processing') schedule(item.attachment.id); },
     upload, get, list: (ids?: string[]) => ids ? ids.map(get) : [...records.keys()].map(get).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), readOriginal, readPages, retry, cancel,
     waitForParsing: async (id: string) => { await running.get(id)?.done; },
-    archive: (request: AttachmentArchiveRequest, signal?: AbortSignal): Promise<AttachmentArchiveResult> => { if (closed) fail('ATTACHMENT_CLOSED', '应用正在关闭。'); return archiver.archive(request, signal); },
+    preview: (request: AttachmentArchiveRequest, signal?: AbortSignal): Promise<AttachmentArchivePreview> => { if (closed) fail('ATTACHMENT_CLOSED', '应用正在关闭。'); return archiver.preview(request, signal); },
+    archive: (request: AttachmentArchiveRequest, signal?: AbortSignal, expected?: AttachmentArchivePreview): Promise<AttachmentArchiveResult> => { if (closed) fail('ATTACHMENT_CLOSED', '应用正在关闭。'); return archiver.archive(request, signal, expected); },
     close: async () => { closed = true; for (const active of running.values()) active.controller.abort(); await Promise.allSettled([...running.values()].map(item => item.done)); await archiver.close(); }
   };
 }

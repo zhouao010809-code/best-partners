@@ -8,7 +8,7 @@ import { createTextPdf, createPasswordPdf, createChinesePdf } from '../helpers/p
 import { createPersonalIntakeFixture } from '../helpers/personal-intake-fixture.js';
 import { openPersonalArchive } from '../../src/server/archive/sandbox-native.js';
 import { createIntakeService } from '../../src/server/services/intake-service.js';
-import { readFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, unlinkSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseLibraryNote } from '../../src/server/rules/library-schema.js';
 const cleanups: (() => Promise<void>)[] = [];
@@ -80,7 +80,8 @@ it('archives a real PDF through native intake, preserves pages and reuses the op
   await service.close(); const reopened = createAttachmentService({ directory: f.directory, archive: { port, intakeService } }); await reopened.ready(); cleanups.push(() => reopened.close());
   expect((await reopened.archive({ id: uploaded.id })).operationId).toBe(result.operationId); expect(port.listRecovery()).toEqual(journals);
   const duplicate = await reopened.upload({ name: 'a second name.pdf', bytes: pdf, uploadId: randomUUID(), groupId: randomUUID() }); await reopened.waitForParsing(duplicate.id);
-  expect(await reopened.archive({ id: duplicate.id })).toMatchObject({ operationId: result.operationId, materialPath: result.materialPath, duplicate: true }); expect(port.listRecovery()).toEqual(journals);
+  expect(await reopened.preview({ id: duplicate.id })).toMatchObject({ attachmentId: duplicate.id, duplicate: true, target: result.target, existing: { id: duplicate.id, operationId: result.operationId } });
+  expect(await reopened.archive({ id: duplicate.id })).toMatchObject({ id: duplicate.id, operationId: result.operationId, materialPath: result.materialPath, duplicate: true }); expect(port.listRecovery()).toEqual(journals);
   const revisedPdf = createTextPdf(['DIFFERENT CONTENT']), revised = await reopened.upload({ name: 'source.pdf', bytes: revisedPdf, uploadId: randomUUID(), groupId: randomUUID() }); await reopened.waitForParsing(revised.id);
   const revision = await reopened.archive({ id: revised.id }); expect(revision.state).toBe('archived'); expect(revision.target).not.toBe(result.target); expect(revision.target).toContain(revised.sha256.slice(0, 8));
   expect(readFileSync(join(vault.root, result.target, '附件/原件.pdf'))).toEqual(pdf); expect(readFileSync(join(vault.root, revision.target, '附件/原件.pdf'))).toEqual(revisedPdf);
@@ -92,6 +93,32 @@ it('archives a real PDF through native intake, preserves pages and reuses the op
   await expect(reopened.archive({ id: uploaded.id })).rejects.toThrow('原件');
   const missingOriginalCopy = await reopened.upload({ name: 'third.pdf', bytes: pdf, uploadId: randomUUID(), groupId: randomUUID() }); await reopened.waitForParsing(missingOriginalCopy.id);
   await expect(reopened.archive({ id: missingOriginalCopy.id })).rejects.toThrow('原件'); expect(port.listRecovery()).toEqual(afterVersionJournals);
+});
+it('previews an archive without changing the ledger, staging, vault, or original bytes', async () => {
+  const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
+  const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
+  const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
+  await f.service.close();
+  const service = createAttachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => service.close());
+  const original = Buffer.from('preview me\n');
+  const uploaded = await service.upload({ name: 'preview.txt', bytes: original, uploadId: randomUUID(), groupId: randomUUID() });
+  await service.waitForParsing(uploaded.id);
+  const beforeFiles = readdirSync(f.directory).sort(); const beforeRecovery = port.listRecovery();
+  const first = await service.preview({ id: uploaded.id });
+  expect(first).toMatchObject({ attachmentId: uploaded.id, attachmentSha256: uploaded.sha256, attachmentName: 'preview.txt', mainName: expect.any(String), target: expect.stringContaining('01图书馆/来自个人/'), duplicate: false });
+  expect(first.mainSha256).toMatch(/^[a-f0-9]{64}$/u);
+  expect(service.get(uploaded.id).archive).toBeUndefined();
+  expect(service.readOriginal(uploaded.id).bytes).toEqual(original);
+  expect(readdirSync(f.directory).sort()).toEqual(beforeFiles); expect(port.listRecovery()).toEqual(beforeRecovery);
+  writeFileSync(join(f.directory, `${uploaded.id}.text.json`), JSON.stringify({ parser: 'fixture', pages: [{ page: 1, text: 'preview changed' }] }));
+  const second = await service.preview({ id: uploaded.id });
+  expect(second.mainSha256).not.toBe(first.mainSha256);
+  expect(service.get(uploaded.id).archive).toBeUndefined();
+  expect(service.readOriginal(uploaded.id).bytes).toEqual(original);
+  expect(port.listRecovery()).toEqual(beforeRecovery);
+  expect(port.stat(first.target)).toBeNull();
+  await expect(service.archive({ id: uploaded.id }, undefined, first)).rejects.toThrow('重新生成预览');
+  expect(service.get(uploaded.id).archive).toBeUndefined(); expect(port.listRecovery()).toEqual(beforeRecovery); expect(port.stat(first.target)).toBeNull();
 });
 it('retains uploaded Markdown bytes and its source metadata when creating the derived archive note', async () => {
   const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
