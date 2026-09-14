@@ -134,6 +134,18 @@ describe('SkillsPage', () => {
     expect(screen.getByText('当前还没有可浏览的 Skill。')).toBeVisible();
   });
 
+  it('does not show an empty success state when a refresh fails after an empty read', async () => {
+    const user = userEvent.setup();
+    list.mockResolvedValueOnce(ok({ items: [] }));
+    list.mockResolvedValueOnce(failed('刷新 Skill 目录失败。'));
+    renderPage();
+
+    expect(await screen.findByText('当前还没有可浏览的 Skill。')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: '刷新 Skill 库' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('刷新 Skill 目录失败。');
+    expect(screen.queryByText('当前还没有可浏览的 Skill。')).not.toBeInTheDocument();
+  });
+
   it('reports a clear unavailable state when this connection has no skill API', async () => {
     runtime.api = {};
     renderPage();

@@ -196,7 +196,7 @@ export function SkillsPage() {
           {showListState?.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取本地 Skill 目录。' }} />}
           {showListState?.status === 'refreshing' && <PageState state={{ status: 'refreshing', message: '正在刷新本地 Skill 目录。' }} />}
           {showListState?.status === 'failed' && <div className="skills-list__error"><PageState state={showListState.state} /><button type="button" onClick={refresh}>重新读取 Skill 库</button>{showListState.state.message === '当前连接不提供 Skill 库。' && <p>请使用支持本地文件 Skill 的桌面连接。</p>}</div>}
-          {listData !== undefined && listData.items.length === 0 && <div className="skills-empty"><PageState state={{ status: 'empty', message: '在 .claude/skills 下添加 Skill 文件夹' }} /><h3>当前还没有可浏览的 Skill。</h3><p>每个 Skill 文件夹需要包含一个 <code>SKILL.md</code>。</p></div>}
+          {listResource.status === 'ready' && listData !== undefined && listData.items.length === 0 && <div className="skills-empty"><PageState state={{ status: 'empty', message: '在 .claude/skills 下添加 Skill 文件夹' }} /><h3>当前还没有可浏览的 Skill。</h3><p>每个 Skill 文件夹需要包含一个 <code>SKILL.md</code>。</p></div>}
           {listData !== undefined && listData.items.length > 0 && <section className="skills-grid" aria-label="Skill 列表">{listData.items.map((skill) => <article className="skills-card" key={skill.id}>
             <div className="skills-card__topline"><span className="skills-card__dot" aria-hidden="true" /><code>LOCAL SKILL</code></div>
             <h3>{skill.name}</h3>
