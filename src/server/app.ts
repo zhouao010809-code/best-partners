@@ -41,6 +41,8 @@ import { registerIntakeTrashRoutes } from './api/routes/intake-trash.js';
 import { registerAssistantRoutes } from './api/routes/assistant.js';
 import { createAssistantService } from './assistant/service.js';
 import { createAssistantTools } from './assistant/attachment-tools.js';
+import { createAssistantActionPlanService } from './assistant/action-plan-service.js';
+import { createAssistantActionPlanStore } from './assistant/action-plan-store.js';
 import type { AssistantAdapter } from './assistant/types.js';
 import type { AttachmentService } from './attachments/service.js';
 import { registerAttachmentRoutes } from './api/routes/attachments.js';
@@ -203,8 +205,18 @@ export function buildServer(options: BuildServerOptions = {}) {
       operationIdFactory: operationId,
       jobIdFactory: options.readApi.jobIdFactory ?? randomUUID
     });
+  const actionPlans = options.readApi && options.attachmentService
+    ? createAssistantActionPlanService({
+      store: createAssistantActionPlanStore(options.readApi.database),
+      attachmentService: options.attachmentService
+    })
+    : undefined;
+  // Keep startup recovery explicit at the composition boundary; reconciliation
+  // is idempotent and never writes files.
+  actionPlans?.recover();
   const assistant = options.assistantAdapters && options.readApi && readService
     ? createAssistantService({ database: options.readApi.database, adapters: options.assistantAdapters,
+      ...(actionPlans ? { actionPlans } : {}),
       ...(options.attachmentService ? { resolveAttachment: (id: string) => options.attachmentService!.get(id) } : {}),
       createTools: context => createAssistantTools({ ...context, readService,
         ...(options.attachmentService ? { attachmentService: options.attachmentService } : {}),

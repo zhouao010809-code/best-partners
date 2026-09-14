@@ -70,12 +70,14 @@ export function createAttachmentArchive(input: {
     return `原件.${attachment.mediaType === 'application/pdf' ? 'pdf' : attachment.mediaType === 'text/markdown' ? 'md' : 'txt'}`;
   }
 
-  function verifyArchivedOriginal(port: PersonalArchivePort, attachment: Attachment): void {
+  function verifyArchivedOriginal(port: PersonalArchivePort, attachment: Attachment, problemCode = 'ATTACHMENT_ARCHIVE_ORIGINAL_CHANGED'): void {
     const archive = attachment.archive;
     const name = originalName(attachment);
     try {
       if (!archive?.target || sha256Bytes(port.read(`${archive.target}/附件/${name}`)) !== attachment.sha256) throw Error('changed');
-    } catch { fail('ATTACHMENT_ARCHIVE_ORIGINAL_CHANGED', '已归档原件缺失或已变化，请先恢复或核对原件；未重复创建。'); }
+    } catch { fail(problemCode, problemCode === 'ATTACHMENT_ARCHIVE_COMMITTED_ORIGINAL_CHANGED'
+      ? '归档已取得操作回执，但原件校验未完成；恢复记录已保留，请继续核验。'
+      : '已归档原件缺失或已变化，请先恢复或核对原件；未重复创建。'); }
   }
 
   function publish(staged: ReturnType<typeof planIntakeMain>, id: string, originalFileName: string, original: Buffer, port: PersonalArchivePort): void {
@@ -243,7 +245,13 @@ export function createAttachmentArchive(input: {
           signal?.throwIfAborted();
           publish(staged, plan.intakeName, fileName, original, port);
         }
-        if (!port.read(`${source}/${plan.mainName}`).equals(staged.bytes) || !port.read(`${source}/附件/${fileName}`).equals(original)) fail('ATTACHMENT_ARCHIVE_CHANGED', '暂存资料包发生变化，未继续归档。');
+        // At this point the package may already have been published. A
+        // mismatch is therefore not an ordinary pre-write stale result: keep
+        // it recoverable so the caller cannot present it as a clean no-write
+        // conflict or silently retry a partially published package.
+        if (!port.read(`${source}/${plan.mainName}`).equals(staged.bytes) || !port.read(`${source}/附件/${fileName}`).equals(original)) {
+          fail('ATTACHMENT_ARCHIVE_INCOMPLETE', '暂存资料包发生变化，归档进入恢复状态；未继续归档。');
+        }
         plan.published = true; item.archivePlan = plan; input.persist(item);
         // This is the execution-only boundary. Preview never calls these methods.
         const intakePreview = await intakeService.preview({ name: plan.intakeName, mainName: plan.mainName, fields: plan.fields } satisfies IntakePreviewRequest);
@@ -251,7 +259,7 @@ export function createAttachmentArchive(input: {
         outcome = await intakeService.commit(intakePreview.token, signal);
       }
       item.attachment.archive = { state: outcome.state === 'archived' ? 'archived' : 'needs-review', operationId: outcome.id, target: outcome.target, materialPath: `${outcome.target}/${plan.mainName}`, indexed: outcome.indexed };
-      if (outcome.state === 'archived') verifyArchivedOriginal(port, item.attachment);
+      if (outcome.state === 'archived') verifyArchivedOriginal(port, item.attachment, 'ATTACHMENT_ARCHIVE_COMMITTED_ORIGINAL_CHANGED');
       input.persist(item);
       return storedResult(item.attachment, false);
     } catch (error) {

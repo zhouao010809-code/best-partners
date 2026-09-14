@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
 import { createAssistantTools } from '../../src/server/assistant/attachment-tools.js';
 import type { Attachment } from '../../src/shared/api/attachments.js';
+import type { AssistantPlanAction } from '../../src/shared/api/assistant.js';
 import type { AttachmentService } from '../../src/server/attachments/service.js';
 import type { ExtractionService } from '../../src/server/services/extraction-service.js';
 import type { ReadService } from '../../src/server/services/read-service.js';
@@ -21,7 +22,11 @@ function fixture(message = '总结这个文件', archived = false, selectedRange
   };
   const read = { getDocumentDetail: vi.fn(async () => ({ path, title: '资料', markdown, versionMarker: { rawSha256: 'c'.repeat(64) } })) };
   const prepareAssistant = vi.fn(async () => ({ token: randomUUID(), materialPath: path, title: '资料', messages: [{ role: 'user', content: '第二页面证据' }] }));
-  const proposeArchive = vi.fn(async (request: unknown) => ({ state: 'pending', id, request }));
+  const proposeArchive = vi.fn(async (_request: unknown): Promise<AssistantPlanAction> => ({
+    id, type: 'plan', kind: 'archive', label: '确认归档', status: 'pending', attachmentId: id, sourceTitle: attachment.name,
+    sourceSha256: attachment.sha256, targetPath: '01图书馆/来自个人/2026-09/资料', mainName: '原文.md', summary: '等待确认',
+    createdAt: '2026-09-10T00:00:00.000Z', expiresAt: '2026-09-10T00:10:00.000Z'
+  }));
   const events: AssistantEvent[] = []; const controller = new AbortController();
   const tools = createAssistantTools({ readService: read as unknown as ReadService, extractionService: { prepareAssistant, acceptAssistant: vi.fn() } as unknown as ExtractionService,
     attachmentService: port as unknown as AttachmentService, ...(propose ? { proposeArchive } : {}), attachments: [{ id, ...selectedRange }], userMessage: message, scope: 'current', model: 'test', signal: controller.signal, emit: event => events.push(event) });
@@ -57,10 +62,21 @@ it('a reading turn cannot archive or prepare candidates even if a tool tries', a
 });
 it('an explicit archive produces a real receipt without starting extraction', async () => {
   const f = fixture('把它归档', false, { startPage: 2, endPage: 2 }, true);
-  expect(await f.run('archive_attachment', { id: f.id })).toMatchObject({ state: 'pending', id: f.id });
+  expect(await f.run('archive_attachment', { id: f.id })).toMatchObject({ status: 'awaiting_confirmation', actionId: f.id });
   expect(f.proposeArchive).toHaveBeenCalledWith({ id: f.id, selection: { id: f.id, startPage: 2, endPage: 2 }, fields: undefined }, expect.any(AbortSignal));
   expect(f.port.archive).not.toHaveBeenCalled();
   expect(f.prepareAssistant).not.toHaveBeenCalled();
+});
+it('deduplicates concurrent archive proposals for the same attachment in one model turn', async () => {
+  const f = fixture('把它归档', false, { startPage: 2, endPage: 2 }, true);
+  const [first, second] = await Promise.all([
+    f.run('archive_attachment', { id: f.id }),
+    f.run('archive_attachment', { id: f.id })
+  ]);
+  expect(first).toEqual(second);
+  expect(f.proposeArchive).toHaveBeenCalledOnce();
+  expect(f.events.filter(event => event.type === 'action')).toHaveLength(1);
+  expect(f.port.archive).not.toHaveBeenCalled();
 });
 it('prepares selected pages only after source preservation and binds the full source revision', async () => {
   const f = fixture('把它提炼成知识候选');

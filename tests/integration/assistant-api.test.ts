@@ -53,6 +53,18 @@ it('exposes provider choices without starting inference and returns unavailable 
   await empty.close();
 });
 
+it('protects action-plan confirmation with the existing CSRF contract and strict UUID bodies', async () => {
+  const f = await fixture();
+  const planId = randomUUID();
+  const clientRequestId = randomUUID();
+  expect((await f.app.inject({ method: 'POST', url: `/api/v1/assistant/action-plans/${planId}/confirm`, headers: { host, origin }, payload: { clientRequestId } })).statusCode).toBe(401);
+  expect((await f.app.inject({ method: 'POST', url: `/api/v1/assistant/action-plans/${planId}/confirm`, headers: { ...f.headers, 'x-csrf-token': 'bad' }, payload: { clientRequestId } })).statusCode).toBe(403);
+  expect((await f.app.inject({ method: 'POST', url: `/api/v1/assistant/action-plans/${planId}/confirm`, headers: f.headers, payload: { clientRequestId, extra: true } })).statusCode).toBe(400);
+  const unavailable = await f.app.inject({ method: 'POST', url: `/api/v1/assistant/action-plans/${planId}/confirm`, headers: f.headers, payload: { clientRequestId } });
+  expect(unavailable.statusCode).toBe(503);
+  expect(unavailable.json().error.code).toBe('ASSISTANT_ACTION_UNAVAILABLE');
+});
+
 it('stops and persists the active answer before closing the state kernel', async () => {
   const f = await fixture(true); f.run.mockImplementation(() => new Promise(() => {}));
   const response = await f.app.inject({ method: 'POST', url: '/api/v1/assistant/messages', headers: f.headers,

@@ -2,13 +2,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Attachment, AttachmentSelection } from '../../shared/api/attachments.js';
 import { ATTACHMENT_MAX_GROUP_BYTES } from '../../shared/api/attachments.js';
 import type Database from 'better-sqlite3';
-import { assistantConversationSchema, assistantSendSchema, type AssistantArchiveAction, type AssistantConversation, type AssistantSend, type AssistantHistoryPage, type AssistantHistoryQuery } from '../../shared/api/assistant.js';
+import { assistantConversationSchema, assistantSendSchema, type AssistantArchiveAction, type AssistantConversation, type AssistantSend, type AssistantHistoryPage, type AssistantHistoryQuery, type AssistantPlanAction } from '../../shared/api/assistant.js';
 import { listAssistantHistory } from './history.js';
 import { PublicApiError } from '../../shared/api/errors.js';
 import { ASSISTANT_MAX_SOURCES, type AssistantAdapter, type AssistantEvent, type AssistantTool } from './types.js';
 import { contextTitle, finishMessage, refreshReviewAction } from './presentation.js';
 import { ASSISTANT_CONVERSATION_MESSAGES, ASSISTANT_HISTORY_MESSAGES, ASSISTANT_OUTPUT_RESERVE_TOKENS, assertAssistantContextBudget, estimateAssistantContext } from './context-budget.js';
 import { finishAssistantUsage, recordAssistantUsage } from './usage.js';
+import type { AssistantActionPlanService, ProposeArchiveInput } from './action-plan-service.js';
 
 const SYSTEM = `你是最佳拍档中的“问问”，用简体中文协助用户理解、检索和提炼本地资料。
 围绕当前请求使用业务工具。知识优先检索标题和召回字段，按相关性、使用状态、有效性选择正文；通常定论优先于已优化，再到AI总结，默认不读取过时内容。
@@ -17,7 +18,12 @@ const SYSTEM = `你是最佳拍档中的“问问”，用简体中文协助用�
 普通问答用少数必要正文。用户要求提炼/整理成候选时，先prepare_extraction再submit_candidates，只有工具返回成功才说候选已保存。正式入库通过返回的审阅入口由用户确认，聊天中回复“入库”或编号不会执行正式保存；用户要求入库时引导打开对应审阅入口，不承诺聊天内保存。不要声称已写入正式知识。不得执行任意文件、命令、删除或规则修改。
 当前模型与工具有限制时明确说明，不能切换成其他模型来冒充完成。回答清楚简洁，复杂任务先简短说明再使用工具。`;
 
-type ToolFactoryInput = { scope: 'brain' | 'current'; contextPath?: string; model: string; attachments: AttachmentSelection[]; userMessage: string; signal: AbortSignal; emit(event: AssistantEvent): void };
+type ToolFactoryInput = {
+  scope: 'brain' | 'current'; contextPath?: string; model: string; attachments: AttachmentSelection[]; userMessage: string;
+  signal: AbortSignal; emit(event: AssistantEvent): void; conversationId: string; messageId: string;
+  proposeArchive?: (request: Omit<ProposeArchiveInput, 'conversationId' | 'messageId' | 'attachmentId'> & { id: string }) => Promise<AssistantPlanAction>;
+  markActionPending?: () => void;
+};
 export interface AssistantService {
   providers(): Promise<{ providers: Awaited<ReturnType<AssistantAdapter['describe']>>[] }>;
   login(id: string): Promise<{ authUrl?: string; message: string }>;
@@ -25,10 +31,12 @@ export interface AssistantService {
   get(id: string): AssistantConversation;
   send(input: AssistantSend): Promise<AssistantConversation>;
   stop(id: string): AssistantConversation;
+  confirmAction(planId: string, clientRequestId: string): Promise<AssistantConversation>;
+  cancelAction(planId: string, clientRequestId: string): AssistantConversation;
   close(): Promise<void>;
 }
 
-export function createAssistantService(input: { database: Database.Database; adapters: AssistantAdapter[]; createTools(input: ToolFactoryInput): AssistantTool[]; resolveAttachment?: (id: string) => Attachment; timeoutMs?: number }): AssistantService {
+export function createAssistantService(input: { database: Database.Database; adapters: AssistantAdapter[]; createTools(input: ToolFactoryInput): AssistantTool[]; resolveAttachment?: (id: string) => Attachment; actionPlans?: AssistantActionPlanService; timeoutMs?: number }): AssistantService {
   const db = input.database;
   const adapters = new Map(input.adapters.map(adapter => [adapter.id, adapter]));
   const running = new Map<string, { controller: AbortController; done: Promise<void>; flush(): void }>();
@@ -44,7 +52,12 @@ export function createAssistantService(input: { database: Database.Database; ada
     if (!row) throw new PublicApiError('ASSISTANT_NOT_FOUND', '没有找到这段对话。', 404);
     const conversation = assistantConversationSchema.parse(JSON.parse(row.payload));
     for (const [index, message] of conversation.messages.entries()) {
-      message.actions = message.actions.map(action => refreshReviewAction(db, action));
+      message.actions = message.actions.map(action => {
+        const refreshed = refreshReviewAction(db, action);
+        if (refreshed.type !== 'plan' || !input.actionPlans) return refreshed;
+        try { return input.actionPlans.project(refreshed.id, conversation.id) ?? refreshed; }
+        catch { return refreshed; }
+      });
       const userMessage = conversation.messages[index - 1];
       if (message.role !== 'assistant' || userMessage?.role !== 'user' || !input.resolveAttachment) continue;
       for (const attachmentId of message.attachmentArchives ?? []) {
@@ -176,9 +189,17 @@ export function createAssistantService(input: { database: Database.Database; ada
       abortHandler = () => reject(new Error('ABORTED'));
       controller.signal.addEventListener('abort', abortHandler, { once: true });
     });
+    const actionPending = { value: false };
     const done = Promise.resolve().then(async () => {
       try {
-        const tools = input.createTools({ scope: request.scope, model: request.model, attachments, userMessage: request.message, ...(request.contextPath ? { contextPath: request.contextPath } : {}), signal: controller.signal, emit });
+        const tools = input.createTools({ scope: request.scope, model: request.model, attachments, userMessage: request.message,
+          ...(request.contextPath ? { contextPath: request.contextPath } : {}), signal: controller.signal, emit,
+          conversationId: conversation.id, messageId: answer.id,
+          ...(input.actionPlans ? {
+            proposeArchive: requestInput => input.actionPlans!.proposeArchive({ conversationId: conversation.id, messageId: answer.id,
+              attachmentId: requestInput.id, selection: requestInput.selection, ...(requestInput.fields === undefined ? {} : { fields: requestInput.fields }) }),
+            markActionPending: () => { actionPending.value = true; }
+          } : {}) });
         const availableHistory = conversation.messages.slice(0, -1);
         const selectedHistory = availableHistory.slice(-ASSISTANT_HISTORY_MESSAGES);
         const history = selectedHistory.map(message => {
@@ -204,14 +225,23 @@ export function createAssistantService(input: { database: Database.Database; ada
             ...(selectedHistory[0] ? { firstMessageId: selectedHistory[0].id, lastMessageId: selectedHistory.at(-1)!.id } : {}) } };
         changed(); assertAssistantContextBudget(estimate);
         await Promise.race([adapter.run({ model: request.model, ...(request.effort ? { effort: request.effort } : {}), system, messages: history, tools,
-          ...(model.capacity ? { capacity: model.capacity } : {}), outputReserveTokens, signal: controller.signal, emit }), cancelled]);
+          ...(model.capacity ? { capacity: model.capacity } : {}), outputReserveTokens, signal: controller.signal, emit,
+          shouldStopAfterTool: () => actionPending.value }), cancelled]);
         if (!controller.signal.aborted) {
           conversation.status = 'idle';
           if (!answer.text.trim() && !answer.actions.length) { conversation.status = 'failed'; conversation.problem = '模型没有返回可用回答，请重试。'; }
         }
       } catch (error) {
-        conversation.status = controller.signal.aborted && !timedOut ? 'stopped' : 'failed';
-        conversation.problem = timedOut ? '本次任务等待较久，已停止；可缩小问题后重试。' : controller.signal.aborted ? '已停止。已生成的内容保留在这里。' : error instanceof PublicApiError ? error.message : 'AI 请求未完成，请检查连接后重试。';
+        if (actionPending.value && !controller.signal.aborted && !timedOut) {
+          // The durable plan is already usable even if the provider fails
+          // while composing its explanatory follow-up.
+          conversation.status = 'idle';
+          delete conversation.problem;
+          if (!answer.text.trim()) answer.text = '归档计划已生成，请在下方确认；尚未写入资料。';
+        } else {
+          conversation.status = controller.signal.aborted && !timedOut ? 'stopped' : 'failed';
+          conversation.problem = timedOut ? '本次任务等待较久，已停止；可缩小问题后重试。' : controller.signal.aborted ? '已停止。已生成的内容保留在这里。' : error instanceof PublicApiError ? error.message : 'AI 请求未完成，请检查连接后重试。';
+        }
       } finally {
         clearTimeout(timeout); controller.signal.removeEventListener('abort', abortHandler);
         // A failed SDK stream can leave tools in flight. Revoke their signal
@@ -246,6 +276,18 @@ export function createAssistantService(input: { database: Database.Database; ada
       const conversation = get(id);
       if (job) { job.controller.abort(); conversation.status = 'stopped'; conversation.problem = '已停止。已生成的内容保留在这里。'; for (const message of conversation.messages) finishMessage(message, 'stopped', new Date().toISOString()); save(conversation); }
       return conversation;
+    },
+    async confirmAction(planId, clientRequestId) {
+      if (!input.actionPlans) throw new PublicApiError('ASSISTANT_ACTION_UNAVAILABLE', '当前问问暂时不能安全执行归档，请更新桌面应用后重试。', 503);
+      const record = input.actionPlans.getRecord(planId);
+      await input.actionPlans.confirm({ planId, conversationId: record.conversationId, clientRequestId });
+      return get(record.conversationId);
+    },
+    cancelAction(planId, clientRequestId) {
+      if (!input.actionPlans) throw new PublicApiError('ASSISTANT_ACTION_UNAVAILABLE', '当前问问暂时不能安全执行归档，请更新桌面应用后重试。', 503);
+      const record = input.actionPlans.getRecord(planId);
+      input.actionPlans.cancel({ planId, conversationId: record.conversationId, clientRequestId });
+      return get(record.conversationId);
     },
     async close() {
       closed = true;

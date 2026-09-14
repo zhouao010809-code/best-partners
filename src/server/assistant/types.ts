@@ -2,10 +2,13 @@ import type { AssistantProvider, AssistantSource, AssistantAction, AssistantUsag
 
 export const ASSISTANT_MAX_SOURCES = 50;
 
+export type AssistantToolEffect = 'read' | 'propose-write';
+
 export interface AssistantTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  effect?: AssistantToolEffect;
   execute(input: unknown): Promise<unknown>;
 }
 export type AssistantEvent = { type: 'text'; text: string } | { type: 'activity'; text: string } | { type: 'source'; source: AssistantSource } | { type: 'action'; action: AssistantAction }
@@ -23,6 +26,7 @@ export interface AssistantRunInput {
   outputReserveTokens?: number;
   signal: AbortSignal;
   emit(event: AssistantEvent): void;
+  shouldStopAfterTool?: () => boolean;
 }
 export interface AssistantAdapter {
   readonly id: string;

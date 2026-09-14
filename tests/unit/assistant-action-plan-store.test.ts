@@ -50,6 +50,35 @@ describe('assistant action plan store', () => {
     expect(() => f.store.markRunning(second.id, 'shared-request', 'fingerprint-1')).toThrowError(expect.objectContaining({ code: 'ASSISTANT_ACTION_CONFLICT' }));
   });
 
+  it('persists cancellation idempotency and rejects cross-plan reuse', () => {
+    const f = fixture(); const first = create(f).plan; const second = create(f).plan;
+    f.store.markCancelledWithRequest!(first.id, 'cancel-1', 'cancel-fp');
+    expect(f.store.findConfirmationRecord('cancel-1')).toMatchObject({ id: first.id, status: 'cancelled', confirmFingerprint: 'cancel-fp' });
+    expect(f.store.markCancelledWithRequest!(first.id, 'cancel-1', 'cancel-fp')).toEqual(f.store.get(first.id));
+    expect(() => f.store.markCancelledWithRequest!(second.id, 'cancel-1', 'cancel-fp')).toThrowError(expect.objectContaining({ code: 'ASSISTANT_ACTION_CONFLICT' }));
+  });
+
+  it('checks expiry inside durable cancellation and exposes server records for reconciliation', () => {
+    const f = fixture(); const plan = create(f).plan;
+    expect(f.store.listServerRecords()).toHaveLength(1);
+    f.advance(4_000_000);
+    expect(() => f.store.markCancelledWithRequest!(plan.id, 'cancel-expired', 'cancel-fp')).toThrowError(expect.objectContaining({ code: 'ASSISTANT_ACTION_EXPIRED' }));
+    expect(f.store.get(plan.id).status).toBe('stale');
+  });
+
+  it('retains a recovery result on failed plans and can reconcile them to completed', () => {
+    const f = fixture(); const plan = create(f).plan;
+    const resultActionId = `archive:${randomUUID()}:${f.payload.attachmentId}`;
+    const result = { id: f.payload.attachmentId, state: 'needs-review', operationId: randomUUID(), materialPath: `${f.payload.targetPath}`, target: f.payload.targetPath, indexed: false, duplicate: false };
+    f.store.markRunning(plan.id, 'request-1', 'fingerprint-1');
+    f.store.markFailedWithResult(plan.id, 'ASSISTANT_ACTION_RECOVERY_REQUIRED: pending review', resultActionId, result);
+    expect(f.store.getServerRecord(plan.id)).toMatchObject({ status: 'failed', recoveryRequired: true, resultActionId, resultPayload: result });
+    const archived = { ...result, state: 'archived' as const };
+    const completed = f.store.markRecoveredCompleted(plan.id, resultActionId, archived);
+    expect(completed.status).toBe('completed');
+    expect(f.store.markRecoveredCompleted(plan.id, resultActionId, archived)).toEqual(completed);
+  });
+
   it('guards terminal transitions and recovers expired/abandoned plans', () => {
     const { f, plan } = create(); f.store.markRunning(plan.id, 'request-1', 'fingerprint-1'); f.store.markFailed(plan.id, 'failed');
     expect(() => f.store.markCompleted(plan.id, randomUUID())).toThrow(/already resolved|已经处理/u);

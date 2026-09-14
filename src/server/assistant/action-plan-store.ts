@@ -23,6 +23,7 @@ export const archivePlanPayloadSchema = z.strictObject({
   targetPath: z.string().min(1).max(4096),
   mainName: z.string().min(1).max(255),
   mainSha256: sha256,
+  duplicate: z.boolean().optional(),
   duplicateOf: z.uuid().optional()
 });
 export type ArchivePlanPayload = z.infer<typeof archivePlanPayloadSchema>;
@@ -123,6 +124,8 @@ export type AssistantActionPlanRecord = {
   recoveryRequired: boolean;
   action: AssistantPlanAction;
 };
+/** Internal lifecycle name retained for service/tests; never serialize this record. */
+export type AssistantActionPlan = AssistantActionPlanRecord;
 
 export interface AssistantActionPlanStore {
   create(input: CreateAssistantActionPlanInput): AssistantPlanAction;
@@ -130,13 +133,23 @@ export interface AssistantActionPlanStore {
   get(id: string): AssistantPlanAction;
   /** Server-only record for the confirmation service. */
   getServerRecord(id: string, conversationId?: string): AssistantActionPlanRecord;
+  /** Server-only scan used during startup reconciliation. */
+  listServerRecords(): AssistantActionPlanRecord[];
   listForConversation(conversationId: string): AssistantPlanAction[];
   listServerRecordsForConversation(conversationId: string): AssistantActionPlanRecord[];
   markRunning(id: string, confirmRequestId: string, confirmFingerprint: string): AssistantPlanAction;
   markCompleted(id: string, resultActionId: string, resultPayload?: unknown): AssistantPlanAction;
   markFailed(id: string, problem: string): AssistantPlanAction;
+  /** Persist a failed outcome while retaining a native/recovery result. */
+  markFailedWithResult(id: string, problem: string, resultActionId?: string, resultPayload?: unknown): AssistantPlanAction;
+  /** Reconcile a durable attachment receipt after a process restart. */
+  markRecoveredCompleted(id: string, resultActionId: string, resultPayload: unknown): AssistantPlanAction;
   markCancelled(id: string, problem?: string): AssistantPlanAction;
+  /** Persist cancellation idempotency in the same transition as the terminal state. */
+  markCancelledWithRequest?(id: string, confirmRequestId: string, confirmFingerprint: string, problem?: string): AssistantPlanAction;
   markStale(id: string, problem?: string): AssistantPlanAction;
+  /** Used when archive revalidation detects a source change after pending->running. */
+  markStaleRunning?(id: string, problem?: string): AssistantPlanAction;
   findConfirmation(confirmRequestId: string): AssistantPlanAction | undefined;
   findConfirmationRecord(confirmRequestId: string): AssistantActionPlanRecord | undefined;
   assertConfirmationRequest(id: string, confirmRequestId: string, confirmFingerprint: string): AssistantPlanAction;
@@ -223,6 +236,41 @@ export function createAssistantActionPlanStore(database: Database.Database, now:
     return readRecord(id).action;
   }).immediate();
 
+  const recoverCompleted = (id: string, resultActionId: string, resultPayload: unknown): AssistantPlanAction => database.transaction(() => {
+    const current = readRecord(id);
+    if (current.status === 'completed') {
+      if (current.resultActionId === resultActionId) return current.action;
+      throw resolved();
+    }
+    const recoverable = current.status === 'running' || (current.status === 'failed' && current.recoveryRequired);
+    if (!recoverable) throw resolved();
+    if (!z.string().min(1).max(255).safeParse(resultActionId).success) throw invalid('结果动作编号无效。');
+    const serialized = serializeResult(resultPayload);
+    database.prepare('UPDATE assistant_action_plans SET status=\'completed\',updated_at=?,problem=NULL,result_action_id=?,result_payload=? WHERE id=? AND status IN (\'running\',\'failed\')')
+      .run(now().toISOString(), resultActionId, serialized, id);
+    return readRecord(id).action;
+  }).immediate();
+
+  const failWithResult = (id: string, problem: string, resultActionId?: string, resultPayload?: unknown): AssistantPlanAction => database.transaction(() => {
+    const current = readRecord(id);
+    if (current.status === 'failed' && current.recoveryRequired) {
+      if (resultActionId !== undefined && current.resultActionId !== undefined && current.resultActionId !== resultActionId) throw resolved();
+      if (problem.length > 2000) throw invalid('问题描述过长。');
+      if (resultActionId !== undefined && !z.string().min(1).max(255).safeParse(resultActionId).success) throw invalid('结果动作编号无效。');
+      const serialized = serializeResult(resultPayload);
+      database.prepare('UPDATE assistant_action_plans SET updated_at=?,problem=?,result_action_id=COALESCE(?,result_action_id),result_payload=COALESCE(?,result_payload) WHERE id=? AND status=\'failed\'')
+        .run(now().toISOString(), problem, resultActionId ?? null, serialized, id);
+      return readRecord(id).action;
+    }
+    if (current.status !== 'running') throw resolved();
+    if (resultActionId !== undefined && !z.string().min(1).max(255).safeParse(resultActionId).success) throw invalid('结果动作编号无效。');
+    if (problem.length > 2000) throw invalid('问题描述过长。');
+    const serialized = serializeResult(resultPayload);
+    database.prepare('UPDATE assistant_action_plans SET status=\'failed\',updated_at=?,problem=?,result_action_id=?,result_payload=? WHERE id=? AND status=\'running\'')
+      .run(now().toISOString(), problem, resultActionId ?? null, serialized, id);
+    return readRecord(id).action;
+  }).immediate();
+
   return {
     create(input) {
       const parsed = createInputSchema.parse(input);
@@ -240,6 +288,9 @@ export function createAssistantActionPlanStore(database: Database.Database, now:
     },
     get(id) { return readRecord(id).action; },
     getServerRecord(id, conversationId) { return readRecord(id, conversationId); },
+    listServerRecords() {
+      return (database.prepare('SELECT * FROM assistant_action_plans ORDER BY created_at,id').all() as Row[]).map(parseRow);
+    },
     listForConversation(conversationId) {
       return (database.prepare('SELECT * FROM assistant_action_plans WHERE conversation_id=? ORDER BY created_at,id').all(conversationId) as Row[]).map(row => parseRow(row).action);
     },
@@ -274,8 +325,36 @@ export function createAssistantActionPlanStore(database: Database.Database, now:
     },
     markCompleted(id, resultActionId, resultPayload) { return updateTerminal(id, 'running', 'completed', undefined, resultActionId, resultPayload); },
     markFailed(id, problem) { return updateTerminal(id, 'running', 'failed', problem); },
+    markFailedWithResult(id, problem, resultActionId, resultPayload) { return failWithResult(id, problem, resultActionId, resultPayload); },
+    markRecoveredCompleted(id, resultActionId, resultPayload) { return recoverCompleted(id, resultActionId, resultPayload); },
     markCancelled(id, problem) { return updateTerminal(id, 'pending', 'cancelled', problem); },
+    markCancelledWithRequest(id, requestId, requestFingerprint, problem) {
+      const outcome = database.transaction((): { action: AssistantPlanAction; expired: boolean } => {
+        const current = readRecord(id);
+        if (current.status !== 'pending') {
+          if (current.confirmRequestId === requestId) {
+            if (current.confirmFingerprint !== requestFingerprint) throw conflict();
+            if (current.status === 'cancelled') return { action: current.action, expired: false };
+          }
+          throw resolved();
+        }
+        if (Date.parse(current.expiresAt) <= now().getTime()) {
+          database.prepare('UPDATE assistant_action_plans SET status=\'stale\',updated_at=?,problem=? WHERE id=? AND status=\'pending\'')
+            .run(now().toISOString(), '确认已过期，未执行归档。', id);
+          return { action: readRecord(id).action, expired: true };
+        }
+        const existingConfirmation = database.prepare('SELECT id FROM assistant_action_plans WHERE confirm_request_id=?').get(requestId) as { id: string } | undefined;
+        if (existingConfirmation && existingConfirmation.id !== id) throw conflict();
+        if (problem !== undefined && problem.length > 2000) throw invalid('问题描述过长。');
+        database.prepare('UPDATE assistant_action_plans SET status=\'cancelled\',updated_at=?,problem=?,confirm_request_id=?,confirm_fingerprint=? WHERE id=? AND status=\'pending\'')
+          .run(now().toISOString(), problem ?? null, requestId, requestFingerprint, id);
+        return { action: readRecord(id).action, expired: false };
+      }).immediate();
+      if (outcome.expired) throw expired();
+      return outcome.action;
+    },
     markStale(id, problem) { return updateTerminal(id, 'pending', 'stale', problem); },
+    markStaleRunning(id, problem) { return updateTerminal(id, 'running', 'stale', problem); },
     findConfirmation(requestId) {
       const row = database.prepare('SELECT * FROM assistant_action_plans WHERE confirm_request_id=?').get(requestId) as Row | undefined;
       return row ? parseRow(row).action : undefined;

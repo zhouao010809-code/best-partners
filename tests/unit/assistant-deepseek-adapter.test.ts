@@ -48,6 +48,22 @@ describe('DeepSeek assistant adapter', () => {
     expect(JSON.stringify(input.events)).not.toContain('Find relevant evidence.');
   });
 
+  it('forces a text-only step after a proposed write so the model cannot call the write tool twice', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    let pending = false;
+    const archive = vi.fn(async () => { pending = true; return { status: 'awaiting_confirmation', actionId: 'plan-1' }; });
+    const fetch = vi.fn(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return bodies.length === 1
+        ? completion([{ delta: { tool_calls: [{ index: 0, id: 'archive-call-1', type: 'function', function: { name: 'archive_attachment', arguments: '{}' } }] } }, { delta: {}, finish_reason: 'tool_calls' }])
+        : completion([{ delta: { content: '已生成归档计划，请确认。' } }, { delta: {}, finish_reason: 'stop' }]);
+    }) as typeof globalThis.fetch;
+    const input = request({ shouldStopAfterTool: () => pending, tools: [{ name: 'archive_attachment', effect: 'propose-write', description: 'archive', inputSchema: { type: 'object' }, execute: archive }] });
+    await createDeepSeekAssistantAdapter({ credentials, fetch }).run(input);
+    expect(archive).toHaveBeenCalledOnce();
+    expect(bodies[1]?.tools).toBeUndefined();
+  });
+
   it('does not downgrade the selected Flash or custom compatible model id', async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetch = vi.fn(async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return completion([{ delta: { content: '完成。' }, finish_reason: 'stop' }]); }) as typeof globalThis.fetch;

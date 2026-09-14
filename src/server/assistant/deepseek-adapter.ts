@@ -107,16 +107,24 @@ export function createDeepSeekAssistantAdapter(input: { credentials: ModelCreden
       const provider = createDeepSeek({ apiKey: key, baseURL: `https://${DEEPSEEK_HOST}`, fetch });
       const capacity = request.capacity ?? deepSeekModelCapacity(request.model);
       const outputReserveTokens = Math.min(request.outputReserveTokens ?? ASSISTANT_OUTPUT_RESERVE_TOKENS, capacity?.maxOutputTokens ?? ASSISTANT_OUTPUT_RESERVE_TOKENS);
+      let proposedWrite = false;
+      const tools = Object.fromEntries(request.tools.map((entry) => [entry.name, tool({ description: entry.description, inputSchema: jsonSchema(entry.inputSchema),
+        execute: async (value) => { request.signal.throwIfAborted(); const result = await entry.execute(value); if (entry.effect === 'propose-write') proposedWrite = true; return result; } })]));
       const agent = new ToolLoopAgent({
         model: provider(request.model), instructions: request.system,
-        tools: Object.fromEntries(request.tools.map((entry) => [entry.name, tool({ description: entry.description, inputSchema: jsonSchema(entry.inputSchema),
-          execute: async (value) => { request.signal.throwIfAborted(); return entry.execute(value); } })])),
+        tools,
         stopWhen: isStepCount(16), maxRetries: 0, maxOutputTokens: outputReserveTokens,
         prepareStep: ({ messages }) => {
           request.signal.throwIfAborted();
           const estimate = estimateAssistantContext({ system: request.system, messages, tools: request.tools, outputReserveTokens, ...(capacity ? { capacity } : {}) });
           request.emit({ type: 'context-estimate', estimate });
           assertAssistantContextBudget(estimate);
+          // Once a proposed write has completed, the next model step is
+          // explanatory text only. This also covers providers that batch
+          // multiple tool calls into one step; the tool-side proposal gate
+          // prevents duplicate plans before this hook runs.
+          const proposed = proposedWrite && request.shouldStopAfterTool?.() === true;
+          return proposed ? { activeTools: [], toolChoice: 'none' } : undefined;
         },
         ...(knownV4(request.model) ? { providerOptions: { deepseek: { thinking: { type: 'enabled' }, reasoningEffort: request.effort ?? 'max' } } } : {}),
         onToolExecutionStart: ({ toolCall }) => {
