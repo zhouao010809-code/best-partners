@@ -53,6 +53,7 @@ export function SkillsPage() {
   const listControllerRef = useRef<AbortController | null>(null);
   const detailControllerRef = useRef<AbortController | null>(null);
   const selectedButtonRef = useRef<HTMLButtonElement | null>(null);
+  const detailRetryButtonRef = useRef<HTMLButtonElement | null>(null);
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const refresh = useCallback(() => {
@@ -123,6 +124,10 @@ export function SkillsPage() {
     return () => controller.abort();
   }, [detailRetryToken, selected, skillsApi]);
 
+  useEffect(() => {
+    if (detailResource?.status === 'failed') detailRetryButtonRef.current?.focus({ preventScroll: true });
+  }, [detailResource]);
+
   const listData = resourceData(listResource);
   const showListState = pageStateForResource(listResource);
   const detailData = detailResource?.status === 'ready' ? detailResource.data : undefined;
@@ -181,7 +186,7 @@ export function SkillsPage() {
             <code>版本 {(displayedSkill?.revision ?? selected.revision).slice(0, 8)}</code>
           </div>
           {detailResource?.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取 Skill 方法。' }} />}
-          {detailResource?.status === 'failed' && <div className="skills-detail__error"><PageState state={detailResource.state} /><button type="button" onClick={retryDetail}>重新读取 Skill 方法</button></div>}
+          {detailResource?.status === 'failed' && <div className="skills-detail__error"><PageState state={detailResource.state} /><button ref={detailRetryButtonRef} type="button" onClick={retryDetail}>重新读取 Skill 方法</button></div>}
           {detailResource?.status === 'ready' && <>
             <div className="skills-detail__readonly"><FileText size={15} />以下内容来自本地 <code>SKILL.md</code>，当前仅供阅读。</div>
             <section className="skills-detail__body" aria-label="Skill 方法正文"><SafeMarkdown>{detailResource.data.markdown}</SafeMarkdown></section>
