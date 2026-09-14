@@ -25,8 +25,7 @@ test('native clipper runner rejects symlink intermediate directories', async () 
   const vaultRoot = await mkdtemp(join(tmpdir(), 'xiaozhao-clipper-symlink-'));
   try {
     await mkdir(join(vaultRoot, 'outside', '小兆clipper'), { recursive: true });
-    await mkdir(join(vaultRoot, '01图书馆'), { recursive: true });
-    await symlink(join(vaultRoot, 'outside'), join(vaultRoot, '01图书馆', 'alias'));
+    await symlink(join(vaultRoot, 'outside'), join(vaultRoot, '01图书馆'));
     const config = { version: 1 as const, vaultRoot, token: 't'.repeat(32), extensionId: CLIPPER_EXTENSION_ID };
     const payload = { packetId: 'symlink-packet', title: '测试剪藏', url: 'https://example.com', content: '测试正文', clippedAt: '2026-09-14T00:00:00.000Z' };
     await expect(handleClipperMessage({ extensionId: CLIPPER_EXTENSION_ID, token: config.token, payload }, config)).rejects.toThrow('保存位置无效');
