@@ -7,5 +7,8 @@ contextBridge.exposeInMainWorld('xiaozhaoDesktop', Object.freeze({
   chooseVaultDirectory: () => ipcRenderer.invoke('desktop:choose-vault-directory'),
   getVaultInfo: () => ipcRenderer.invoke('desktop:get-vault-info'),
   openVaultDirectory: () => ipcRenderer.invoke('desktop:open-vault-directory'),
-  revealDocument: (relativePath) => ipcRenderer.invoke('desktop:reveal-document', relativePath)
+  revealDocument: (relativePath) => ipcRenderer.invoke('desktop:reveal-document', relativePath),
+  openClipperInstall: () => ipcRenderer.invoke('desktop:open-clipper-install'),
+  installClipperHost: () => ipcRenderer.invoke('desktop:install-clipper-host'),
+  getClipperStatus: (test) => ipcRenderer.invoke('desktop:clipper-status', test)
 } satisfies XiaozhaoDesktopApi));

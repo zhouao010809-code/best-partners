@@ -24,6 +24,7 @@ import {
   type PageResource
 } from './pageSupport.js';
 import '../styles/dashboard-desk.css';
+import { DistributionChecklist } from '../components/first-run/DistributionChecklist.js';
 
 const PAGE_LIMIT = 200;
 
@@ -361,6 +362,7 @@ export function DashboardPage() {
           {runtime.api.intake && <Link className="dashboard-next-card" to="/intake"><span>整理新收件</span><strong>把收藏放进大脑</strong><small>核对信息，预览后归档</small><ArrowUpRight aria-hidden="true" /></Link>}
         </div>
       </nav>}
+      {typeof window !== 'undefined' && window.xiaozhaoDesktop?.installClipperHost && <DistributionChecklist />}
       <div className="dashboard-workspace">
       <section className="dashboard-materials" aria-labelledby="materials-title">
         <header className="dashboard-section-heading">

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron';
+import { promises as fs } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createInitialVault, loadDesktopSettings, resolveInitialVaultSettings, saveDesktopSettings, validateDesktopVault } from './settings-store.js';
 import { createDesktopWindowPolicy } from './window-policy.js';
@@ -12,6 +13,8 @@ import { changeDesktopVault } from './vault-selection.js';
 import { createDesktopVaultNavigation } from './vault-navigation.js';
 import { validateAssistantLoginUrl } from './assistant-login.js';
 import { runClipperHost } from './clipper-host.js';
+import { clipperPaths, installClipperHost, readClipperBridgeConfig } from './clipper-installer.js';
+import { createBridgeConfig } from './clipper-installer.js';
 
 app.setName('最佳拍档');
 let started: StartedServer | undefined;
@@ -149,6 +152,25 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('desktop:reveal-document', async (event, relativePath: unknown) => {
     assertMainSender(event);
     await navigation.revealDocument(relativePath);
+  });
+  const clipperConfigPath = join(userDataDir, 'clipper-bridge.json');
+  ipcMain.handle('desktop:open-clipper-install', async (event) => {
+    assertMainSender(event);
+    const readme = join(process.resourcesPath, 'clipper-extension', 'README.md');
+    await shell.openPath(readme);
+  });
+  ipcMain.handle('desktop:install-clipper-host', async (event) => {
+    assertMainSender(event);
+    await installClipperHost({ executablePath: process.execPath, configPath: clipperConfigPath, vaultRoot: settings.vaultRoot });
+  });
+  ipcMain.handle('desktop:clipper-status', async (event) => {
+    assertMainSender(event);
+    try {
+      const config = await readClipperBridgeConfig(clipperConfigPath);
+      const paths = clipperPaths();
+      const installed = await Promise.all(Object.values(paths).map(async (path) => fs.lstat(path).then(stat => stat.isFile()).catch(() => false))).then(values => values.some(Boolean));
+      return { installed, connected: installed && config.vaultRoot === settings.vaultRoot };
+    } catch { return { installed: false, connected: false, message: '尚未安装浏览器收藏插件。' }; }
   });
   ipcMain.handle('desktop:choose-vault-directory', async (event) => {
     assertMainSender(event);
