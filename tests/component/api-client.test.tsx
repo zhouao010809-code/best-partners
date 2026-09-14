@@ -68,6 +68,14 @@ describe('read console API facade', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/skills/skill%2Fwith%20space', expect.objectContaining({ method: 'GET', signal }));
   });
 
+  it('preserves the Skill catalog unavailable code for the workspace to explain', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+      error: { code: 'SKILL_CATALOG_UNAVAILABLE', message: 'Skill catalog is unavailable.', operationId: 'skill-read-1' }
+    }, 503));
+    const result = await createBrowserReadConsoleApi(fetchMock).skills!.list();
+    expect(result).toMatchObject({ ok: false, code: 'SKILL_CATALOG_UNAVAILABLE', state: { status: 'operation-error' } });
+  });
+
   it('requests library directories with bounded declared filters and validates their complete counts', async () => {
     const page = { mode: 'source', path: '来自B站/2026-09', breadcrumbs: [{ path: '', label: '全部资料' }],
       folders: [], items: [], total: 0, directTotal: 0, unclassifiedCount: 0, indexVersion: 7 };

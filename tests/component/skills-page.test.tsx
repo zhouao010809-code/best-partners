@@ -101,6 +101,31 @@ describe('SkillsPage', () => {
     expect(list).toHaveBeenCalledTimes(2);
   });
 
+  it('turns the catalog unavailable response into a clear local-connection message', async () => {
+    list.mockResolvedValueOnce({
+      ok: false,
+      code: 'SKILL_CATALOG_UNAVAILABLE',
+      state: { status: 'operation-error', message: 'Skill catalog is unavailable.' }
+    });
+    renderPage();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('当前连接不提供 Skill 库。');
+    expect(screen.getByText('请使用支持本地文件 Skill 的桌面连接。')).toBeVisible();
+  });
+
+  it('retries a detail read without changing the selected skill', async () => {
+    const user = userEvent.setup();
+    get.mockResolvedValueOnce(failed('本地 Skill 方法暂时无法读取。'));
+    get.mockResolvedValueOnce(ok(detail));
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: '查看方法：公众号排版发布' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('本地 Skill 方法暂时无法读取。');
+    await user.click(screen.getByRole('button', { name: '重新读取 Skill 方法' }));
+    expect(await screen.findByText('先检查素材，再生成排版。')).toBeVisible();
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
   it('explains where to add a skill when the catalog is empty', async () => {
     list.mockResolvedValue(ok({ items: [] }));
     renderPage();

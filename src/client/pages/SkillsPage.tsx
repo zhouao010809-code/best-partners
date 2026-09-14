@@ -24,6 +24,7 @@ function unavailableState(): ClientFailureState {
 
 function failureState<T>(result: ApiClientResult<T>, fallback: string): ClientFailureState {
   if (!result.ok && !isCancelled(result)) {
+    if (result.code === 'SKILL_CATALOG_UNAVAILABLE') return unavailableState();
     return {
       status: result.state.status,
       message: result.state.message || fallback
@@ -47,6 +48,7 @@ export function SkillsPage() {
   const [listResource, setListResource] = useState<PageResource<SkillsPageData>>({ status: 'loading' });
   const [selected, setSelected] = useState<SkillSummary>();
   const [detailResource, setDetailResource] = useState<DetailResource>();
+  const [detailRetryToken, setDetailRetryToken] = useState(0);
   const [refreshToken, setRefreshToken] = useState(0);
   const listControllerRef = useRef<AbortController | null>(null);
   const detailControllerRef = useRef<AbortController | null>(null);
@@ -119,10 +121,12 @@ export function SkillsPage() {
         if (!controller.signal.aborted) setDetailResource({ status: 'failed', state: { status: 'disconnected', message: 'Skill 方法暂时无法读取，请重试。' } });
       });
     return () => controller.abort();
-  }, [selected, skillsApi]);
+  }, [detailRetryToken, selected, skillsApi]);
 
   const listData = resourceData(listResource);
   const showListState = pageStateForResource(listResource);
+  const detailData = detailResource?.status === 'ready' ? detailResource.data : undefined;
+  const displayedSkill = detailData ?? selected;
 
   function openDetail(skill: SkillSummary, trigger: HTMLButtonElement): void {
     selectedButtonRef.current = trigger;
@@ -136,10 +140,7 @@ export function SkillsPage() {
   }
 
   function retryDetail(): void {
-    if (selected === undefined) return;
-    const current = selected;
-    setSelected(undefined);
-    queueMicrotask(() => setSelected(current));
+    if (selected !== undefined) setDetailRetryToken((value) => value + 1);
   }
 
   return (
@@ -174,16 +175,16 @@ export function SkillsPage() {
           <div className="skills-detail__heading">
             <div>
               <p className="skills-page__eyebrow">SKILL / METHOD NOTE</p>
-              <h2 id="skill-detail-title" ref={detailHeadingRef} tabIndex={-1}>{selected.name}</h2>
-              <p>{selected.description}</p>
+              <h2 id="skill-detail-title" ref={detailHeadingRef} tabIndex={-1}>{displayedSkill?.name ?? selected.name}</h2>
+              <p>{displayedSkill?.description ?? selected.description}</p>
             </div>
-            <code>版本 {selected.revision.slice(0, 8)}</code>
+            <code>版本 {(displayedSkill?.revision ?? selected.revision).slice(0, 8)}</code>
           </div>
           {detailResource?.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取 Skill 方法。' }} />}
           {detailResource?.status === 'failed' && <div className="skills-detail__error"><PageState state={detailResource.state} /><button type="button" onClick={retryDetail}>重新读取 Skill 方法</button></div>}
           {detailResource?.status === 'ready' && <>
             <div className="skills-detail__readonly"><FileText size={15} />以下内容来自本地 <code>SKILL.md</code>，当前仅供阅读。</div>
-            <div className="skills-detail__body" aria-label="Skill 方法正文"><SafeMarkdown>{detailResource.data.markdown}</SafeMarkdown></div>
+            <section className="skills-detail__body" aria-label="Skill 方法正文"><SafeMarkdown>{detailResource.data.markdown}</SafeMarkdown></section>
             <section className="skills-references" aria-labelledby="skill-references-title">
               <h3 id="skill-references-title">同目录参考文件</h3>
               {detailResource.data.references.length > 0 ? <ul>{detailResource.data.references.map((reference) => <li key={reference}><code>{reference}</code></li>)}</ul> : <p>这个 Skill 没有额外参考文件。</p>}
@@ -196,12 +197,12 @@ export function SkillsPage() {
           {showListState?.status === 'refreshing' && <PageState state={{ status: 'refreshing', message: '正在刷新本地 Skill 目录。' }} />}
           {showListState?.status === 'failed' && <div className="skills-list__error"><PageState state={showListState.state} /><button type="button" onClick={refresh}>重新读取 Skill 库</button>{showListState.state.message === '当前连接不提供 Skill 库。' && <p>请使用支持本地文件 Skill 的桌面连接。</p>}</div>}
           {listData !== undefined && listData.items.length === 0 && <div className="skills-empty"><PageState state={{ status: 'empty', message: '在 .claude/skills 下添加 Skill 文件夹' }} /><h3>当前还没有可浏览的 Skill。</h3><p>每个 Skill 文件夹需要包含一个 <code>SKILL.md</code>。</p></div>}
-          {listData !== undefined && listData.items.length > 0 && <div className="skills-grid" aria-label="Skill 列表">{listData.items.map((skill) => <article className="skills-card" key={skill.id}>
+          {listData !== undefined && listData.items.length > 0 && <section className="skills-grid" aria-label="Skill 列表">{listData.items.map((skill) => <article className="skills-card" key={skill.id}>
             <div className="skills-card__topline"><span className="skills-card__dot" aria-hidden="true" /><code>LOCAL SKILL</code></div>
             <h3>{skill.name}</h3>
             <p>{skill.description}</p>
             <div className="skills-card__footer"><code>版本 {skill.revision.slice(0, 8)}</code><button type="button" onClick={(event) => openDetail(skill, event.currentTarget)} aria-label={`查看方法：${skill.name}`}>查看方法<ArrowLeft size={14} aria-hidden="true" /></button></div>
-          </article>)}</div>}
+          </article>)}</section>}
         </>
       )}
     </section>

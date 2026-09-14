@@ -438,6 +438,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .skills-card:hover {
+    transform: none;
+  }
+
   .skills-card,
   .skills-page__refresh,
   .skills-list__error button,

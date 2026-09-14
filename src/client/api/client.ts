@@ -279,7 +279,7 @@ async function requestApi<T>(options: ApiRequestOptions<T>): Promise<ApiClientRe
       ok: false,
       state: { status: failureStatus(code), message },
       operationId,
-      ...(options.path.startsWith('/api/v1/assistant/') || options.path.startsWith('/api/v1/ingestion/') || options.path.startsWith('/api/v1/trash') || options.path.startsWith('/api/v1/intake-trash') || options.path.startsWith('/api/v1/knowledge/') && ['KNOWLEDGE_IN_TRASH', 'KNOWLEDGE_DELETED'].includes(code) || ['SESSION_REQUIRED', 'CSRF_INVALID'].includes(code) ? { code } : {})
+      ...(options.path.startsWith('/api/v1/assistant/') || options.path.startsWith('/api/v1/ingestion/') || options.path.startsWith('/api/v1/trash') || options.path.startsWith('/api/v1/intake-trash') || options.path.startsWith('/api/v1/skills') || options.path.startsWith('/api/v1/knowledge/') && ['KNOWLEDGE_IN_TRASH', 'KNOWLEDGE_DELETED'].includes(code) || ['SESSION_REQUIRED', 'CSRF_INVALID'].includes(code) ? { code } : {})
     };
   }
 
