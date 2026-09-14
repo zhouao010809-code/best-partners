@@ -44,6 +44,12 @@ describe('assistant action plan store', () => {
     expect(() => f.store.markRunning(plan.id, 'request-1', 'fingerprint-2')).toThrow(/confir|确认/u);
   });
 
+  it('rejects a confirmation id already attached to another plan', () => {
+    const f = fixture(); const first = create(f).plan; const second = create(f).plan;
+    f.store.markRunning(first.id, 'shared-request', 'fingerprint-1');
+    expect(() => f.store.markRunning(second.id, 'shared-request', 'fingerprint-1')).toThrowError(expect.objectContaining({ code: 'ASSISTANT_ACTION_CONFLICT' }));
+  });
+
   it('guards terminal transitions and recovers expired/abandoned plans', () => {
     const { f, plan } = create(); f.store.markRunning(plan.id, 'request-1', 'fingerprint-1'); f.store.markFailed(plan.id, 'failed');
     expect(() => f.store.markCompleted(plan.id, randomUUID())).toThrow(/already resolved|已经处理/u);

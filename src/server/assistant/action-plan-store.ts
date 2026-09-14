@@ -263,6 +263,8 @@ export function createAssistantActionPlanStore(database: Database.Database, now:
             .run(now().toISOString(), '确认已过期，未执行归档。', id);
           return { action: readRecord(id).action, expired: true };
         }
+        const existingConfirmation = database.prepare('SELECT id FROM assistant_action_plans WHERE confirm_request_id=?').get(requestId) as { id: string } | undefined;
+        if (existingConfirmation && existingConfirmation.id !== id) throw conflict();
         database.prepare('UPDATE assistant_action_plans SET status=\'running\',confirm_request_id=?,confirm_fingerprint=?,updated_at=? WHERE id=? AND status=\'pending\'')
           .run(requestId, requestFingerprint, now().toISOString(), id);
         return { action: readRecord(id).action, expired: false };
