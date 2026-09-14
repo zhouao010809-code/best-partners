@@ -31,6 +31,20 @@ it('posts explicit stop and login requests to their own protected endpoints', as
   expect(fetcher).toHaveBeenNthCalledWith(3, '/api/v1/assistant/providers/deepseek/login', expect.objectContaining({ method: 'POST', body: '{}' }));
 });
 
+it('confirms and cancels action plans with the same UUID as body and idempotency key', async () => {
+  const requestId = '447a699b-eae1-49d5-bd52-45a57f45e997';
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(ok({ csrfToken: 'a'.repeat(43) }))
+    .mockResolvedValueOnce(ok(conversation))
+    .mockResolvedValueOnce(ok(conversation));
+  const service = createBrowserReadConsoleApi(fetcher).assistant!;
+  await service.confirmAction('73c8cd22-39f0-4574-a1b5-d2b034949543', requestId);
+  await service.cancelAction('73c8cd22-39f0-4574-a1b5-d2b034949543', requestId);
+  expect(fetcher.mock.calls[1]![0]).toBe('/api/v1/assistant/action-plans/73c8cd22-39f0-4574-a1b5-d2b034949543/confirm');
+  expect(fetcher.mock.calls[1]![1]).toMatchObject({ headers: { 'x-csrf-token': 'a'.repeat(43), 'idempotency-key': requestId }, body: JSON.stringify({ clientRequestId: requestId }) });
+  expect(fetcher.mock.calls[2]![0]).toBe('/api/v1/assistant/action-plans/73c8cd22-39f0-4574-a1b5-d2b034949543/cancel');
+});
+
 it('uploads a binary File with stable batch and upload ids through CSRF without JSON encoding', async () => {
   const id = '73c8cd22-39f0-4574-a1b5-d2b034949543'; const groupId = 'de5d2436-dd14-4f6c-9282-ea1ffde199c1';
   const attachment = { id, name: '资料.pdf', mediaType: 'application/pdf', size: 3, sha256: 'a'.repeat(64), textBytes: 0, status: 'processing', createdAt: '2026-09-10', updatedAt: '2026-09-10' };

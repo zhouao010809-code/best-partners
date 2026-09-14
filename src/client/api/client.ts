@@ -126,6 +126,8 @@ export interface ReadConsoleApi {
     get(id: string, signal?: AbortSignal): Promise<ApiClientResult<AssistantConversation>>;
     send(input: AssistantSend): Promise<ApiClientResult<AssistantConversation>>;
     stop(id: string): Promise<ApiClientResult<AssistantConversation>>;
+    confirmAction(id: string, clientRequestId: string): Promise<ApiClientResult<AssistantConversation>>;
+    cancelAction(id: string, clientRequestId: string): Promise<ApiClientResult<AssistantConversation>>;
     login(providerId: string): Promise<ApiClientResult<{ authUrl?: string | undefined; message: string }>>;
   };
   listKnowledgeCatalog?(query: KnowledgeCatalogQuery, signal?: AbortSignal): Promise<ApiClientResult<KnowledgeCatalogPage>>;
@@ -426,6 +428,8 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
       get: (id, signal) => requestData(fetcher, `/api/v1/assistant/conversations/${encodeURIComponent(id)}`, assistantConversationResponseSchema, getInit(signal)),
       send: (input) => postWithCsrf('/api/v1/assistant/messages', assistantConversationResponseSchema, input),
       stop: (id) => postWithCsrf(`/api/v1/assistant/conversations/${encodeURIComponent(id)}/stop`, assistantConversationResponseSchema, {}),
+      confirmAction: (id, clientRequestId) => postWithCsrf(`/api/v1/assistant/action-plans/${encodeURIComponent(id)}/confirm`, assistantConversationResponseSchema, { clientRequestId }, clientRequestId),
+      cancelAction: (id, clientRequestId) => postWithCsrf(`/api/v1/assistant/action-plans/${encodeURIComponent(id)}/cancel`, assistantConversationResponseSchema, { clientRequestId }, clientRequestId),
       login: (id) => postWithCsrf(`/api/v1/assistant/providers/${encodeURIComponent(id)}/login`, assistantLoginResponseSchema, {})
     },
     trash: {

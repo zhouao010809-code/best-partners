@@ -17,7 +17,7 @@ function deferred<T>() {
 const provider: AssistantProvider = { id: 'deepseek', name: 'DeepSeek', status: 'ready', defaultModel: 'deepseek-v4-pro', defaultEffort: 'high', models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', reasoningEfforts: ['high', 'max'], recommended: true }, { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', reasoningEfforts: [] }] };
 const secondary: AssistantProvider = { id: 'secondary-provider', name: '备用服务', status: 'ready', defaultModel: 'secondary-model-v1', defaultEffort: 'ultra', models: [{ id: 'secondary-model-v1', name: '备用模型 V1', reasoningEfforts: ['high', 'ultra'], recommended: true }] };
 const conversation: AssistantConversation = { id: '11c7a1d4-7cbf-4e92-9c64-ad175aa17d18', title: '学习方法', createdAt: '2026-09-09T06:00:00Z', updatedAt: '2026-09-09T06:00:01Z', status: 'idle', providerId: 'deepseek', model: 'deepseek-v4-pro', effort: 'high', scope: 'brain', messages: [{ id: 'm1', role: 'user', text: '帮我找到学习方法', sources: [], actions: [] }, { id: 'm2', role: 'assistant', text: '先提出一个**具体问题**。[S1]', model: 'deepseek-v4-pro', sources: [{ id: 'S1', path: '02知识库/09学习/学习方法.md', title: '学习方法' }], actions: [{ id: 'a1', type: 'review', label: '审阅知识候选', runId: 'run-123' }] }] };
-const service = { providers: vi.fn(), history: vi.fn(), get: vi.fn(), send: vi.fn(), stop: vi.fn(), login: vi.fn() };
+const service = { providers: vi.fn(), history: vi.fn(), get: vi.fn(), send: vi.fn(), stop: vi.fn(), confirmAction: vi.fn(), cancelAction: vi.fn(), login: vi.fn() };
 const api = { assistant: service } as unknown as ReadConsoleApi;
 function Harness({ path = '/knowledge?path=02知识库%2F09学习%2F学习方法.md', dataRevision = 0 }: { path?: string; dataRevision?: number }) {
   const [open, setOpen] = useState(true); const [running, setRunning] = useState(false); const [width, setWidth] = useState(430);
@@ -42,6 +42,30 @@ it('uses provider recommendations, sends the selected context, and links real so
   expect(await screen.findByText('具体问题')).toBeVisible();
   expect(screen.getByRole('link', { name: 'S1 学习方法' })).toHaveAttribute('href', '/knowledge?path=02%E7%9F%A5%E8%AF%86%E5%BA%93%2F09%E5%AD%A6%E4%B9%A0%2F%E5%AD%A6%E4%B9%A0%E6%96%B9%E6%B3%95.md');
   expect(screen.getByRole('link', { name: '审阅知识候选' })).toHaveAttribute('href', '/extractions/run-123');
+});
+
+it('confirms an archive plan through the panel and retains it when the API fails', async () => {
+  const plan = {
+    id: '6f9c3b4e-9c3f-4d7a-8c5f-1a8e0e5f2f66', type: 'plan' as const, kind: 'archive' as const, label: '准备归档', status: 'pending' as const,
+    attachmentId: '7f9c3b4e-9c3f-4d7a-8c5f-1a8e0e5f2f66', sourceTitle: '资料.txt', sourceSha256: 'a'.repeat(64),
+    targetPath: '01图书馆/来自个人/2026-09/资料', mainName: '原文.md', summary: '归档计划', createdAt: '2026-09-15T00:00:00.000Z', expiresAt: '2026-09-15T00:30:00.000Z'
+  };
+  const pending = { ...conversation, messages: [...conversation.messages, { id: 'm3', role: 'assistant' as const, text: '', sources: [], actions: [plan] }] };
+  const completed = { ...pending, messages: pending.messages.map(message => message.id === 'm3' ? { ...message, actions: [{ id: 'archive:op:file', type: 'archive' as const, label: '打开归档资料', attachmentId: plan.attachmentId, materialPath: `${plan.targetPath}/${plan.mainName}`, materialTitle: plan.sourceTitle, operationId: 'op', status: 'archived' as const }] } : message) };
+  service.send.mockResolvedValueOnce(ok(pending)); service.confirmAction.mockResolvedValueOnce({ ok: false, state: { status: 'operation-error', message: '确认服务暂不可用' } }).mockResolvedValueOnce(ok(completed));
+  const user = userEvent.setup(); render(<Harness />);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  await user.type(screen.getByLabelText('发送给问问的消息'), '请归档这个文件{Enter}');
+  await user.click(await screen.findByRole('button', { name: '确认归档' }));
+  await user.click(screen.getByRole('button', { name: '最终确认归档' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('确认服务暂不可用');
+  expect(screen.getByRole('article', { name: '待确认的归档计划' })).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '确认归档' }));
+  await user.click(screen.getByRole('button', { name: '最终确认归档' }));
+  await waitFor(() => expect(service.confirmAction).toHaveBeenCalledTimes(2));
+  expect(service.confirmAction.mock.calls[0]![0]).toBe(plan.id);
+  expect(service.confirmAction.mock.calls[0]![1]).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(await screen.findByText('资料已保存到档案库。')).toBeVisible();
 });
 
 it('keeps the exact request id for an explicitly retried unknown send and never retries automatically', async () => {
