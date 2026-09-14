@@ -30,7 +30,16 @@ export const assistantArchiveActionSchema = z.object({
   materialPath: z.string(), materialTitle: z.string(), operationId: z.string(),
   status: z.literal('archived'), duplicate: z.boolean().optional(), indexed: z.boolean().optional()
 });
-export const assistantActionSchema = z.discriminatedUnion('type', [assistantReviewActionSchema, assistantArchiveActionSchema]);
+const sha256 = z.string().regex(/^[0-9a-f]{64}$/u);
+export const assistantPlanActionSchema = z.strictObject({
+  id: z.uuid(), type: z.literal('plan'), kind: z.literal('archive'), label: z.string(),
+  status: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled', 'stale']),
+  attachmentId: z.uuid(), sourceTitle: z.string().max(255), sourceSha256: sha256,
+  targetPath: z.string().min(1).max(4096), mainName: z.string().min(1).max(255),
+  summary: z.string().max(2000), createdAt: z.string(), expiresAt: z.string(),
+  resultActionId: z.uuid().optional(), problem: z.string().optional()
+});
+export const assistantActionSchema = z.discriminatedUnion('type', [assistantReviewActionSchema, assistantArchiveActionSchema, assistantPlanActionSchema]);
 export const assistantStepSchema = z.object({ id: z.string(), toolName: z.string(), label: z.string(), status: z.enum(['running', 'completed', 'failed', 'stopped']), startedAt: z.string(), finishedAt: z.string().optional() });
 export const assistantMessageSchema = z.object({
   id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(), sources: z.array(assistantSourceSchema), actions: z.array(assistantActionSchema), activity: z.string().optional(), model: z.string().optional(),
@@ -66,6 +75,7 @@ export type AssistantStep = z.infer<typeof assistantStepSchema>;
 export type AssistantAction = z.infer<typeof assistantActionSchema>;
 export type AssistantReviewAction = z.infer<typeof assistantReviewActionSchema>;
 export type AssistantArchiveAction = z.infer<typeof assistantArchiveActionSchema>;
+export type AssistantPlanAction = z.infer<typeof assistantPlanActionSchema>;
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 export type AssistantConversation = z.infer<typeof assistantConversationSchema>;
 export type AssistantSend = z.infer<typeof assistantSendSchema>;

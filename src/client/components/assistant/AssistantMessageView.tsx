@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowRight, Check, Copy, FileText, MessageCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import type { AssistantMessage, AssistantSource, AssistantReviewAction, AssistantArchiveAction } from '../../../shared/api/assistant.js';
+import type { AssistantMessage, AssistantSource, AssistantReviewAction, AssistantArchiveAction, AssistantPlanAction } from '../../../shared/api/assistant.js';
 import { attachmentContentHref } from './AttachmentPicker.js';
 import { SafeMarkdown } from '../SafeMarkdown.js';
 
@@ -33,6 +33,10 @@ function SourceLink({ source, children }: { source: AssistantSource; children: R
 function ArchiveCard({ action }: { action: AssistantArchiveAction }) {
   return <section className="assistant-task-card" aria-label="文件归档结果"><div className="assistant-task-card__heading"><strong>{action.materialTitle}</strong><span>{action.duplicate ? '已在档案库' : '已归档'}</span></div><p>{action.indexed === false ? '原件已保存，索引待更新。' : '资料已保存到档案库。'}</p><div className="assistant-task-card__footer"><a href={attachmentContentHref(action.attachmentId)} download={action.materialTitle}>下载原件</a><Link className="assistant-review" to={assistantSourceHref(action.materialPath)}><Check /><span>查看归档资料</span><ArrowRight /></Link></div></section>;
 }
+function PlanCard({ action }: { action: AssistantPlanAction }) {
+  const status = action.status === 'pending' ? '待确认' : action.status === 'running' ? '执行中' : action.status === 'completed' ? '已完成' : action.status === 'failed' ? '执行失败' : action.status === 'cancelled' ? '已取消' : '已过期';
+  return <section className="assistant-task-card" aria-label="归档计划"><div className="assistant-task-card__heading"><strong>{action.label}</strong><span>{status}</span></div><p>{action.problem ?? action.summary}</p><div className="assistant-task-card__footer"><small>资料来源：{action.sourceTitle}</small><a href={assistantSourceHref(action.targetPath)}><Check /><span>查看目标路径</span><ArrowRight /></a></div></section>;
+}
 
 export function AssistantMessageView({ message, onFollowUp }: { message: AssistantMessage; onFollowUp: (text: string) => void }) {
   const [copied, setCopied] = useState(false);
@@ -50,7 +54,11 @@ export function AssistantMessageView({ message, onFollowUp }: { message: Assista
     {message.attachments?.length ? <div className="assistant-message__attachments">{message.attachments.map(file => <a key={file.id} href={attachmentContentHref(file.id)} download={file.name}><FileText size={12} />{file.name}{file.startPage || file.endPage ? ` · 第 ${file.startPage ?? 1}–${file.endPage ?? file.pageCount} 页` : ''}</a>)}</div> : null}
     {message.text && <SafeMarkdown renderCitation={id => { const source = sources.get(id); return source ? <Citation source={source} /> : undefined; }}>{message.text}</SafeMarkdown>}
     {message.sources.length > 0 && <details className="assistant-sources"><summary>相关资料 · {message.sources.length}</summary><div>{message.sources.map(source => <SourceLink key={source.id} source={source}><span>{source.id}</span><FileText /><span>{source.title}</span><small>{source.kind === 'read' ? '已读取' : source.kind === 'search' ? '检索结果' : '历史引用'}</small></SourceLink>)}</div></details>}
-    {message.actions.map(action => action.type === 'archive' ? <ArchiveCard key={action.id} action={action} /> : <ReviewCard key={action.id} action={action} />)}
+    {message.actions.map(action => action.type === 'archive'
+      ? <ArchiveCard key={action.id} action={action} />
+      : action.type === 'plan'
+        ? <PlanCard key={action.id} action={action} />
+        : <ReviewCard key={action.id} action={action} />)}
     {message.role === 'assistant' && message.text && <div className="assistant-answer-tools"><button type="button" className="assistant-icon-button" aria-label={copied ? '已复制回答' : '复制回答'} title={copied ? '已复制' : '复制回答'} onClick={() => void copy()}>{copied ? <Check /> : <Copy />}</button><button type="button" className="assistant-text-button" onMouseDown={event => event.preventDefault()} onClick={() => onFollowUp(selection ? `请进一步解释这段内容：\n\n“${selection}”` : '请举一个具体例子，说明这个观点怎么用。')}><MessageCircle />{selection ? '追问选中段落' : '继续追问'}</button>{copyError && <span role="status">复制失败，可选中文字复制。</span>}</div>}
   </article>;
 }

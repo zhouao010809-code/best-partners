@@ -22,7 +22,8 @@ function initialMigrations(): readonly Migration[] {
     { version: 11, sql: readFileSync(bundledMigrationPath('011_personal_trash_delete.sql'), 'utf8') },
     { version: 12, sql: readFileSync(bundledMigrationPath('012_assistant_conversations.sql'), 'utf8') },
     { version: 14, sql: readFileSync(bundledMigrationPath('014_assistant_drafts.sql'), 'utf8') },
-    { version: 15, sql: readFileSync(bundledMigrationPath('015_extraction_source_range.sql'), 'utf8') }
+    { version: 15, sql: readFileSync(bundledMigrationPath('015_extraction_source_range.sql'), 'utf8') },
+    { version: 16, sql: readFileSync(bundledMigrationPath('016_assistant_action_plans.sql'), 'utf8') }
   ];
 }
 
