@@ -9,12 +9,27 @@ export type ClipperHostConfig = { vaultRoot: string; token: string; extensionId:
 function fail(message: string): never { throw new Error(message); }
 function isMissing(error: unknown): boolean { return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT'; }
 function isInside(root: string, candidate: string): boolean { return candidate === root || candidate.startsWith(`${root}${sep}`); }
-async function assertNoSymlinkPath(path: string): Promise<void> {
-  // Each vault component is checked at the point it is entered by
-  // safeRealDirectory. Do not walk system ancestors (/var, /tmp on macOS),
-  // which are commonly symlink aliases and outside the configured vault.
-  const stat = await fs.lstat(path).catch((error) => { if (isMissing(error)) fail('保存位置无效'); throw error; });
-  if (stat.isSymbolicLink()) fail('保存位置无效');
+async function assertNoSymlinkPath(path: string, boundary?: string): Promise<void> {
+  // Check every component beneath the configured boundary, not only the final
+  // directory. Walking only the final path would allow a symlink such as
+  // `01图书馆 -> /outside` to escape the vault before realpath containment is
+  // checked.
+  const normalizedPath = resolve(path);
+  const normalizedBoundary = boundary === undefined ? undefined : resolve(boundary);
+  if (normalizedBoundary !== undefined && !isInside(normalizedBoundary, normalizedPath)) fail('保存位置无效');
+  const relative = normalizedBoundary === undefined ? normalizedPath : normalizedPath.slice(normalizedBoundary.length).replace(/^[/\\]/, '');
+  const components = relative ? relative.split(/[\\/]+/u) : [];
+  let current = normalizedBoundary ?? normalizedPath.slice(0, normalizedPath.indexOf(sep) + 1);
+  if (normalizedBoundary === undefined) {
+    const stat = await fs.lstat(normalizedPath).catch((error) => { if (isMissing(error)) fail('保存位置无效'); throw error; });
+    if (stat.isSymbolicLink()) fail('保存位置无效');
+    return;
+  }
+  for (const component of components) {
+    current = join(current, component);
+    const stat = await fs.lstat(current).catch((error) => { if (isMissing(error)) fail('保存位置无效'); throw error; });
+    if (stat.isSymbolicLink()) fail('保存位置无效');
+  }
 }
 
 export function encodeNativeMessage(value: unknown): Buffer {
@@ -40,7 +55,7 @@ async function assertPrivateConfig(path: string): Promise<void> {
   const stat = await fs.lstat(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.size > 16_384) fail('Native host 配置权限无效');
 }
 async function safeRealDirectory(path: string, root?: string): Promise<string> {
-  await assertNoSymlinkPath(path);
+  await assertNoSymlinkPath(path, root);
   const stat = await fs.lstat(path).catch((error) => { if (isMissing(error)) fail('保存位置无效'); throw error; });
   if (!stat.isDirectory() || stat.isSymbolicLink()) fail('保存位置无效'); const real = await fs.realpath(path);
   if (root !== undefined && !isInside(root, real)) fail('保存位置无效'); return real;
