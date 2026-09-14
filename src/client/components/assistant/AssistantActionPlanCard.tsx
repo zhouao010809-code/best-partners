@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Check, FileText, LoaderCircle, RotateCcw, ShieldAlert, X } from 'lucide-react';
 import type { AssistantPlanAction } from '../../../shared/api/assistant.js';
 
@@ -34,6 +34,7 @@ export function AssistantActionPlanCard({ action, onResolved, onCancelled, onReg
   const [details, setDetails] = useState(false);
   const confirmTrigger = useRef<HTMLButtonElement>(null);
   const dialogHeading = useRef<HTMLHeadingElement>(null);
+  const dialogHeadingId = useId();
 
   useEffect(() => {
     if (!confirming) return;
@@ -97,8 +98,8 @@ export function AssistantActionPlanCard({ action, onResolved, onCancelled, onReg
       {onRegenerate && terminal && action.status !== 'completed' && <button type="button" className="assistant-action-plan__regenerate" disabled={busy} onClick={onRegenerate}><RotateCcw aria-hidden="true" />重新生成计划</button>}
     </div>
     {details && <div className="assistant-action-plan__details-body"><p>{action.summary}</p><p>目标文件：{action.targetPath}/{action.mainName}</p><p>计划编号：{action.id}</p></div>}
-    {confirming && <div className="assistant-action-plan__backdrop" role="presentation"><div className="assistant-action-plan__dialog" role="dialog" aria-modal="true" aria-labelledby="assistant-plan-confirm-title">
-      <h2 id="assistant-plan-confirm-title" ref={dialogHeading} tabIndex={-1}>确认归档</h2>
+    {confirming && <div className="assistant-action-plan__backdrop" role="presentation"><div className="assistant-action-plan__dialog" role="dialog" aria-modal="true" aria-labelledby={dialogHeadingId}>
+      <h2 id={dialogHeadingId} ref={dialogHeading} tabIndex={-1}>确认归档</h2>
       <p>将把《{action.sourceTitle}》归档到：</p><code>{action.targetPath}/{action.mainName}</code>
       <p className="assistant-action-plan__dialog-note">确认后才会写入资料；原件会保留，目标路径由本地服务提供。</p>
       {duplicate && <p className="assistant-action-plan__warning"><ShieldAlert aria-hidden="true" />这份内容已有归档，确认后复用已有资料。</p>}
