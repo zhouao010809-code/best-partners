@@ -28,6 +28,7 @@ import {
 
 const PROJECT_STATUSES = ['active', 'acceptance', 'draft', 'paused', 'completed', 'archived'] as const;
 type ProjectStatus = CompanyProjectConfig['status'];
+const confirmationFlights = new WeakMap<Database.Database, Map<string, Promise<ProjectConfirmResult>>>();
 
 export interface CompanyProjectWorkspace {
   readonly id: string;
@@ -525,13 +526,29 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return { run: runProjection(result.row), project: result.project };
   }
 
-  async function confirmProject(runIdInput: string, input: ProjectConfirmInput): Promise<ProjectConfirmResult> {
-    const runId = assertId(runIdInput, 'run_id');
+  async function confirmProjectInternal(runId: string, input: ProjectConfirmInput): Promise<ProjectConfirmResult> {
     const loaded = await readRun(runId);
     const run = loaded.row;
     if (run.state === 'confirmed') {
-      const operationId = makeOperationId();
-      return { project: loaded.project, run: runProjection(run), operationId };
+      assertStatus(input.status);
+      const name = assertName(input.name);
+      if (input.sourceSha256 !== run.source_sha256) fail('COMPANY_SOURCE_HASH_MISMATCH', 'Source hash does not match proposal');
+      const projectId = assertId(run.project_id!, 'project_id');
+      const previous = findProject.get(projectId, options.workspace.id) as ProjectRow | undefined;
+      if (previous === undefined) fail('COMPANY_PROJECT_NOT_FOUND', 'Project not found', 404);
+      await assertPublishedConfiguration(join(options.workspace.projectsPath, projectId), projectConfig({
+        project: previous,
+        name,
+        ...(input.clientName === undefined ? {} : { clientName: input.clientName }),
+        status: input.status,
+        sourceRoot: runProjection(run).proposal.sourceRoot,
+        projectRoot: join(options.workspace.projectsPath, projectId),
+        selectedSkillIds: input.selectedSkillIds ?? runProjection(run).proposal.selectedSkillIds,
+        ...(input.serviceStart === undefined ? {} : { serviceStart: input.serviceStart }),
+        ...(input.serviceEnd === undefined ? {} : { serviceEnd: input.serviceEnd }),
+        now: run.updated_at
+      }));
+      return { project: loaded.project, run: runProjection(run), operationId: run.operation_id };
     }
     if (run.state !== 'proposed') fail('COMPANY_PROJECT_DRAFT_NOT_RESUMABLE', 'Project draft is not resumable', 409);
     assertStatus(input.status);
@@ -602,9 +619,34 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
         } catch (error) {
           if (hasCode(error, 'EEXIST')) {
-            fail('COMPANY_PROJECT_ROOT_CONFLICT', 'Project destination was claimed by another publish', 409);
+            const claimed = await lstat(finalRoot).catch(() => undefined);
+            const previous = findProject.get(projectId, options.workspace.id) as ProjectRow | undefined;
+            if (
+              claimed !== undefined
+              && claimed.isDirectory()
+              && !claimed.isSymbolicLink()
+              && previous !== undefined
+              && await isCompletePublishedTree(finalRoot, runProjection(run).proposal)
+            ) {
+              await assertPublishedConfiguration(finalRoot, projectConfig({
+                project: previous,
+                name,
+                ...(input.clientName === undefined ? {} : { clientName: input.clientName }),
+                status: input.status,
+                sourceRoot: runProjection(run).proposal.sourceRoot,
+                projectRoot: finalRoot,
+                selectedSkillIds: input.selectedSkillIds ?? runProjection(run).proposal.selectedSkillIds,
+                ...(input.serviceStart === undefined ? {} : { serviceStart: input.serviceStart }),
+                ...(input.serviceEnd === undefined ? {} : { serviceEnd: input.serviceEnd }),
+                now: timestamp
+              }));
+              published = true;
+              await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
+            } else {
+              fail('COMPANY_PROJECT_ROOT_CONFLICT', 'Project destination was claimed by another publish', 409);
+            }
           }
-          throw error;
+          if (!published) throw error;
         }
       }
 
@@ -633,24 +675,57 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           projectId,
           options.workspace.id
         );
-        options.database.prepare(`
+        const runUpdate = options.database.prepare(`
           UPDATE company_project_ingestion_runs
-          SET state = 'confirmed', updated_at = ?
+          SET state = 'confirmed', operation_id = ?, updated_at = ?
           WHERE id = ? AND state = 'proposed'
-        `).run(timestamp, runId);
+        `).run(operationId, timestamp, runId);
+        if (runUpdate.changes !== 1) {
+          const current = findRun.get(runId) as RunRow | undefined;
+          if (current?.state === 'confirmed') {
+            return { alreadyConfirmed: true as const, operationId: current.operation_id };
+          }
+          fail('COMPANY_CONFIRMATION_IN_PROGRESS', 'Project confirmation is already being finalized', 409);
+        }
         options.database.prepare(`
           INSERT INTO company_project_events (id, project_id, actor_id, operation_id, event_type, payload_json, created_at)
           VALUES (?, ?, ?, ?, 'project_confirmed', ?, ?)
         `).run(makeId(), projectId, actorId, operationId, safeJson({ runId, sourceSha256: run.source_sha256, status: input.status }), timestamp);
+        return { alreadyConfirmed: false as const, operationId };
       });
-      transaction.immediate();
+      const result = transaction.immediate();
       await options.refreshIndex?.();
       const updatedProject = findProject.get(projectId, options.workspace.id) as ProjectRow;
       const updatedRun = findRun.get(runId) as RunRow;
-      return { project: projection(updatedProject), run: runProjection(updatedRun), operationId };
+      return {
+        project: projection(updatedProject),
+        run: runProjection(updatedRun),
+        operationId: result.operationId
+      };
     } catch (error) {
       if (!published) await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
       throw error;
+    }
+  }
+
+  async function confirmProject(runIdInput: string, input: ProjectConfirmInput): Promise<ProjectConfirmResult> {
+    const runId = assertId(runIdInput, 'run_id');
+    let flights = confirmationFlights.get(options.database);
+    if (flights === undefined) {
+      flights = new Map();
+      confirmationFlights.set(options.database, flights);
+    }
+    const existing = flights.get(runId);
+    if (existing !== undefined) {
+      await existing;
+      return confirmProjectInternal(runId, input);
+    }
+    const current = confirmProjectInternal(runId, input);
+    flights.set(runId, current);
+    try {
+      return await current;
+    } finally {
+      if (flights.get(runId) === current) flights.delete(runId);
     }
   }
 

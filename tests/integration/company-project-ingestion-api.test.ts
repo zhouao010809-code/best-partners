@@ -18,6 +18,7 @@ async function fixture(): Promise<{
   root: string;
   source: string;
   workspace: Awaited<ReturnType<typeof ensureCompanyWorkspace>>;
+  database: NormalStateKernel['db'];
   service: ProjectService;
 }> {
   const root = await mkdtemp(join(tmpdir(), 'company-project-service-'));
@@ -40,7 +41,7 @@ async function fixture(): Promise<{
   });
   await writeFile(join(source, '机构介绍.md'), '# 机构名称：明德培训\n服务开始：2026-09-01\n');
   await writeFile(join(source, '课程表.md'), '周一 试听课');
-  return { root, source, workspace, service };
+  return { root, source, workspace, database: kernel.db, service };
 }
 
 describe('company project service', () => {
@@ -91,5 +92,25 @@ describe('company project service', () => {
     expect(second.run.id).toBe(first.run.id);
     expect(second.reused).toBe(true);
     expect((await service.list()).filter(project => project.id === first.project.id)).toHaveLength(1);
+  });
+
+  it('confirms one concurrent run once and reuses the persisted operation id', async () => {
+    const { source, service, database } = await fixture();
+    const draft = await service.scan({ sourceRoot: source });
+    const input = {
+      sourceSha256: draft.proposal.sourceSha256,
+      name: '明德培训教育代运营',
+      clientName: '明德培训',
+      status: 'active' as const,
+      actorId: 'operator-1'
+    };
+    const results = await Promise.all([
+      service.confirm(draft.run.id, input),
+      service.confirm(draft.run.id, input)
+    ]);
+    expect(new Set(results.map(result => result.operationId)).size).toBe(1);
+    expect(database.prepare(`
+      SELECT COUNT(*) AS count FROM company_project_events WHERE project_id = ? AND event_type = 'project_confirmed'
+    `).get(results[0]!.project.id)).toEqual({ count: 1 });
   });
 });
