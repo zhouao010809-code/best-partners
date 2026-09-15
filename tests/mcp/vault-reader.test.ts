@@ -1,4 +1,6 @@
-import { readFile, truncate, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createVaultReader } from '../../mcp-server/vault-reader.js';
 import {
@@ -13,6 +15,31 @@ afterEach(async () => {
 });
 
 describe('VaultReader safety and bounded reads', () => {
+  it('rejects a root that is missing a required brain section', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'xiaozhao-brain-mcp-incomplete-'));
+    try {
+      await mkdir(join(root, '01图书馆'));
+      await expect(createVaultReader(root)).rejects.toMatchObject({ code: 'INVALID_ROOT' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a required section symlink that points outside the vault', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'xiaozhao-brain-mcp-section-'));
+    const outside = await mkdtemp(join(tmpdir(), 'xiaozhao-brain-mcp-outside-'));
+    try {
+      await Promise.all(['00大脑规则', '02知识库', '03大讲堂'].map((name) => mkdir(join(root, name))));
+      await symlink(outside, join(root, '01图书馆'));
+      await expect(createVaultReader(root)).rejects.toMatchObject({ code: 'INVALID_ROOT' });
+    } finally {
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(outside, { recursive: true, force: true })
+      ]);
+    }
+  });
+
   it('reads a knowledge note and preserves hash, body, and line metadata', async () => {
     const fixture = await createBrainFixture(); fixtures.push(fixture);
     const reader = await createVaultReader(fixture.root);
