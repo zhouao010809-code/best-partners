@@ -19,31 +19,41 @@ function assertRootInput(value: string, label: string): void {
   if (!value || value.includes('\0') || value.includes('\\')) throw new Error(`Invalid ${label}`);
 }
 
-async function canonicalExistingAncestor(path: string): Promise<string> {
+async function canonicalExistingAncestor(path: string, label: 'workspace' | 'state'): Promise<string> {
   let current = resolve(path);
   const missing: string[] = [];
   while (true) {
+    let info;
     try {
-      const info = await lstat(current);
-      if (info.isSymbolicLink()) {
-        if (missing.length === 0) throw new Error('Configured workspace/state root must not be a symlink');
-        const canonical = await realpath(current);
-        return join(canonical, ...missing.reverse());
-      }
-      if (!info.isDirectory()) throw new Error('Workspace/state path is not a directory');
-      const canonical = await realpath(current);
-      if (missing.length === 0) {
-        const parentCanonical = await realpath(dirname(current));
-        if (canonical !== join(parentCanonical, basename(current))) throw new Error('Configured workspace/state root must not be a symlink');
-      }
-      return join(canonical, ...missing.reverse());
+      info = await lstat(current);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error(`Unable to inspect ${label} path`, { cause: error });
       const parent = dirname(current);
       if (parent === current) throw new Error('No existing ancestor for workspace path');
       missing.push(current.slice(parent.length + 1));
       current = parent;
+      continue;
     }
+    if (info.isSymbolicLink()) {
+      if (missing.length === 0) throw new Error(`Configured ${label} root must not be a symlink`);
+      try {
+        return join(await realpath(current), ...missing.reverse());
+      } catch (error) {
+        throw new Error(`Unable to resolve ${label} ancestor`, { cause: error });
+      }
+    }
+    if (!info.isDirectory()) throw new Error(`${label} path is not a directory`);
+    let canonical: string;
+    try {
+      canonical = await realpath(current);
+    } catch (error) {
+      throw new Error(`Unable to resolve ${label} ancestor`, { cause: error });
+    }
+    if (missing.length === 0) {
+      const parentCanonical = await realpath(dirname(current));
+      if (canonical !== join(parentCanonical, basename(current))) throw new Error(`Configured ${label} root must not be a symlink`);
+    }
+    return join(canonical, ...missing.reverse());
   }
 }
 
@@ -68,8 +78,8 @@ export async function resolveCompanyWorkspace(workspaceRoot: string | CompanyWor
   const [configuredRoot, configuredState] = workspaceArguments(workspaceRoot, stateDirectory);
   assertRootInput(configuredRoot, 'workspace root');
   assertRootInput(configuredState, 'state directory');
-  const root = await canonicalExistingAncestor(configuredRoot);
-  const state = await canonicalExistingAncestor(configuredState);
+  const root = await canonicalExistingAncestor(configuredRoot, 'workspace');
+  const state = await canonicalExistingAncestor(configuredState, 'state');
   assertOutsideState(root, state);
   return {
     rootPath: root,

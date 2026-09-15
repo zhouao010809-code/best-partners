@@ -1,6 +1,6 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { assertCompanyRelativePath, ensureCompanyWorkspace, resolveCompanyWorkspace } from '../../src/server/company/company-paths.js';
 
@@ -41,6 +41,13 @@ describe('company workspace paths', () => {
     const first = await resolveCompanyWorkspace(root, join(base, 'state'));
     await ensureCompanyWorkspace(root, join(base, 'state'));
     expect(await resolveCompanyWorkspace(root, join(base, 'state'))).toEqual(first);
+  });
+
+  it('rejects a dangling ancestor symlink instead of treating it as a missing path', async () => {
+    const base = await fixture();
+    const alias = join(base, 'alias');
+    await symlink(join(base, 'missing-target'), alias);
+    await expect(resolveCompanyWorkspace(join(alias, 'workspace'), join(base, 'state'))).rejects.toThrow();
   });
 
   it.each(['../escape', 'a/..', './x', 'projects/../../escape', '/absolute', '\\absolute', 'projects\\x', 'nul\0x'])('rejects unsafe relative path %s', path => {
