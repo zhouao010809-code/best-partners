@@ -87,9 +87,13 @@ describe('company LAN authority and namespace security', () => {
       host: '192.168.1.20', port: 4399
     });
     expect(() => resolveCompanyListenOptions({ COMPANY_HOST: '0.0.0.0', COMPANY_PORT: '4399' })).toThrow();
-    for (const host of ['0:0:0:0:0:0:0:0', '[::]', '::0', '[::ffff:0.0.0.0]', '::ffff:0:0']) {
+    for (const host of [
+      '0:0:0:0:0:0:0:0', '[::]', '::0', '[::ffff:0.0.0.0]', '::ffff:0:0',
+      '000.000.000.000', '0', '0.0', '0x0'
+    ]) {
       expect(() => resolveCompanyListenOptions({ COMPANY_HOST: host, COMPANY_PORT: '4399' })).toThrow(host);
     }
+    expect(resolveCompanyListenOptions({ COMPANY_HOST: '[fe80::1]', COMPANY_PORT: '4399' })).toEqual({ host: 'fe80::1', port: 4399 });
     expect(resolveCompanyListenOptions({ COMPANY_HOST: '192.168.1.20', COMPANY_PORT: '4399' }).host).toBe('192.168.1.20');
     expect(resolveCompanyListenOptions({ COMPANY_HOST: 'mac-mini.local', COMPANY_PORT: '4399' }).host).toBe('mac-mini.local');
     expect(() => resolveCompanyListenOptions({ COMPANY_HOST: '192.168.1.20' })).toThrow('COMPANY_PORT');

@@ -107,6 +107,10 @@ export function isValidCompanyHost(host: string): boolean {
   if (WILDCARD_HOSTS.has(stripped.value) || isUnspecifiedIp(stripped.value)) return false;
   if (stripped.value.includes(':')) return expandIpv6(stripped.value) !== undefined;
   if (parseIpv4(stripped.value) !== undefined) return true;
+  // Node's resolver accepts numeric shorthand such as `0`, `0.0`, and `0x0`
+  // as the wildcard address. Do not let malformed numeric hosts bypass the
+  // explicit non-wildcard binding policy.
+  if (/^[0-9.]+$/u.test(stripped.value) || /^0x[0-9a-f]+$/iu.test(stripped.value)) return false;
   return /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/u.test(stripped.value);
 }
 
