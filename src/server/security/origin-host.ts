@@ -1,5 +1,3 @@
-import { isIP } from 'node:net';
-
 export const EXPECTED_HTTP_HOST = '127.0.0.1:4317';
 const EXPECTED_HTTP_URL = new URL(`http://${EXPECTED_HTTP_HOST}`);
 
@@ -20,35 +18,65 @@ export interface CompanyListenOptions {
 
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '::0', '*']);
 
-function isUnspecifiedIp(host: string): boolean {
-  const value = host.replace(/^\[|\]$/gu, '');
-  const version = isIP(value);
-  if (version === 4) return value === '0.0.0.0';
-  if (version !== 6) return false;
-  const groups = value.split('::');
-  const left = groups[0] ? groups[0].split(':') : [];
-  const right = groups.length > 1 && groups[1] ? groups[1].split(':') : [];
-  const expandDotted = (parts: string[]): string[] | false => {
-    const dotted = parts.at(-1);
-    if (!dotted?.includes('.')) return parts;
-    const octets = dotted.split('.').map(Number);
-    if (octets.length !== 4 || octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
-    const [first, second, third, fourth] = octets;
-    if (first === undefined || second === undefined || third === undefined || fourth === undefined) return false;
-    return [...parts.slice(0, -1), ((first << 8) | second).toString(16), ((third << 8) | fourth).toString(16)];
+function stripIpv6Brackets(host: string): { value: string; bracketed: boolean } | undefined {
+  const starts = host.startsWith('[');
+  const ends = host.endsWith(']');
+  if (starts !== ends) return undefined;
+  return starts ? { value: host.slice(1, -1), bracketed: true } : { value: host, bracketed: false };
+}
+
+function parseIpv4(value: string): readonly [number, number, number, number] | undefined {
+  const parts = value.split('.');
+  if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/u.test(part))) return undefined;
+  const octets = parts.map(Number);
+  if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) return undefined;
+  const [first, second, third, fourth] = octets;
+  if (first === undefined || second === undefined || third === undefined || fourth === undefined) return undefined;
+  return [first, second, third, fourth];
+}
+
+function expandIpv6(value: string): readonly number[] | undefined {
+  if (value.includes('%')) return undefined;
+  const sections = value.split('::');
+  if (sections.length > 2) return undefined;
+  const parseSection = (section: string): number[] | undefined => {
+    if (section === '') return [];
+    const parts = section.split(':');
+    if (parts.some(part => part === '')) return undefined;
+    const groups: number[] = [];
+    for (const [index, part] of parts.entries()) {
+      if (part.includes('.')) {
+        if (index !== parts.length - 1) return undefined;
+        const octets = parseIpv4(part);
+        if (octets === undefined) return undefined;
+        groups.push((octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]);
+      } else {
+        if (!/^[0-9a-f]{1,4}$/iu.test(part)) return undefined;
+        groups.push(Number.parseInt(part, 16));
+      }
+    }
+    return groups;
   };
-  const expandedLeft = expandDotted(left);
-  const expandedRight = expandDotted(right);
-  if (expandedLeft === false || expandedRight === false) return false;
-  const expanded = groups.length === 2
-    ? [...expandedLeft, ...Array(8 - expandedLeft.length - expandedRight.length).fill('0'), ...expandedRight]
-    : expandedLeft;
-  if (expanded.length !== 8) return false;
-  const zero = (group: string) => /^0+$/u.test(group);
-  if (expanded.every(zero)) return true;
-  return expanded.slice(0, 5).every(zero)
-    && expanded[5]?.toLowerCase() === 'ffff'
-    && zero(expanded[6] ?? '') && zero(expanded[7] ?? '');
+  const left = parseSection(sections[0] ?? '');
+  const right = sections.length === 2 ? parseSection(sections[1] ?? '') : [];
+  if (left === undefined || right === undefined) return undefined;
+  if (sections.length === 1) return left.length === 8 ? left : undefined;
+  const missing = 8 - left.length - right.length;
+  return missing > 0 ? [...left, ...Array(missing).fill(0), ...right] : undefined;
+}
+
+function isUnspecifiedIp(host: string): boolean {
+  const stripped = stripIpv6Brackets(host);
+  if (stripped === undefined) return false;
+  const value = stripped.value;
+  const ipv4 = parseIpv4(value);
+  if (ipv4 !== undefined) return ipv4.every(octet => octet === 0);
+  if (!value.includes(':')) return false;
+  const groups = expandIpv6(value);
+  if (groups === undefined) return false;
+  if (groups.every(group => group === 0)) return true;
+  return groups.slice(0, 5).every(group => group === 0)
+    && groups[5] === 0xffff && groups[6] === 0 && groups[7] === 0;
 }
 
 function readPort(value: string | undefined, name: string): number {
@@ -67,20 +95,24 @@ export function resolveCompanyListenOptions(env: NodeJS.ProcessEnv): CompanyList
       ? 'COMPANY_HOST must be an explicit non-wildcard host'
       : `COMPANY_HOST ${host} must be an explicit non-wildcard host`);
   }
-  return { host, port: readPort(env.COMPANY_PORT, 'COMPANY_PORT') };
+  const stripped = stripIpv6Brackets(host);
+  if (stripped === undefined) throw new Error('COMPANY_HOST must be an explicit non-wildcard host');
+  return { host: stripped.value, port: readPort(env.COMPANY_PORT, 'COMPANY_PORT') };
 }
 
 export function isValidCompanyHost(host: string): boolean {
-  return host.length > 0
-    && !WILDCARD_HOSTS.has(host)
-    && !isUnspecifiedIp(host)
-    && !/[\s/\\]/u.test(host);
+  const stripped = stripIpv6Brackets(host);
+  if (stripped === undefined || stripped.value.length === 0 || /[\s/\\%]/u.test(stripped.value)) return false;
+  if (stripped.bracketed && !stripped.value.includes(':')) return false;
+  if (WILDCARD_HOSTS.has(stripped.value) || isUnspecifiedIp(stripped.value)) return false;
+  if (stripped.value.includes(':')) return expandIpv6(stripped.value) !== undefined;
+  if (parseIpv4(stripped.value) !== undefined) return true;
+  return /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/u.test(stripped.value);
 }
 
 export function companyHttpOrigin(options: CompanyListenOptions): string {
-  const host = options.host.includes(':') && !options.host.startsWith('[')
-    ? `[${options.host}]`
-    : options.host;
+  const normalizedHost = stripIpv6Brackets(options.host)?.value ?? options.host;
+  const host = normalizedHost.includes(':') ? `[${normalizedHost}]` : normalizedHost;
   return `http://${host}:${options.port}`;
 }
 
