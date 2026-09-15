@@ -1,0 +1,84 @@
+import { readFile, truncate, writeFile } from 'node:fs/promises';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createVaultReader } from '../../mcp-server/vault-reader.js';
+import {
+  createBrainFixture,
+  KNOWLEDGE_PATH,
+  SOURCE_PATH
+} from './fixtures.js';
+
+const fixtures: Array<Awaited<ReturnType<typeof createBrainFixture>>> = [];
+afterEach(async () => {
+  await Promise.all(fixtures.splice(0).map((fixture) => fixture.cleanup()));
+});
+
+describe('VaultReader safety and bounded reads', () => {
+  it('reads a knowledge note and preserves hash, body, and line metadata', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const reader = await createVaultReader(fixture.root);
+    const result = await reader.readKnowledge(KNOWLEDGE_PATH);
+    expect(result.path).toBe(KNOWLEDGE_PATH);
+    expect(result.record.title).toBe('证据方法');
+    expect(result.body).toContain('正文也提到证据链');
+    expect(result.rawSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(result.lineCount).toBeGreaterThan(0);
+    expect(result.truncated).toBe(false);
+  });
+
+  it.each([
+    '/etc/passwd',
+    '02知识库/../01图书馆/个人/原始证据.md',
+    '02知识库\\决策\\证据方法.md',
+    '02知识库/决策/\0.md',
+    '02知识库/.隐藏.md',
+    '02知识库/决策/证据方法.txt',
+    '03大讲堂/任意.md'
+  ])('rejects unsafe path %s without echoing it', async (path) => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const reader = await createVaultReader(fixture.root);
+    await expect(reader.readMarkdown(path)).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+    await expect(reader.readMarkdown(path)).rejects.not.toThrow(path);
+  });
+
+  it('rejects a symlink that resolves outside the vault', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    if (!fixture.outsideSymlinkPath) return;
+    const reader = await createVaultReader(fixture.root);
+    await expect(reader.readMarkdown(fixture.outsideSymlinkPath)).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+  });
+
+  it('marks bounded reads as truncated without changing the source file', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const before = await readFile(`${fixture.root}/${SOURCE_PATH}`);
+    const reader = await createVaultReader(fixture.root);
+    const result = await reader.readSource(SOURCE_PATH, 32);
+    expect(result.truncated).toBe(true);
+    expect(result.bytes).toBeLessThanOrEqual(32);
+    expect(await readFile(`${fixture.root}/${SOURCE_PATH}`)).toEqual(before);
+  });
+
+  it('rejects a physically huge file before reading or parsing it', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const hugePath = '01图书馆/个人/过大.md';
+    await writeFile(`${fixture.root}/${hugePath}`, '');
+    await truncate(`${fixture.root}/${hugePath}`, 16 * 1024 * 1024 + 1);
+    const reader = await createVaultReader(fixture.root);
+    await expect(reader.readMarkdown(hugePath)).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
+  });
+
+  it('finds source evidence with one-based original line numbers', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const reader = await createVaultReader(fixture.root);
+    const result = await reader.findEvidence(SOURCE_PATH, '逐字核验', 8);
+    expect(result.passages).toHaveLength(1);
+    expect(result.passages[0]).toMatchObject({ startLine: 17, endLine: 17 });
+    expect(result.passages[0]?.excerpt).toContain('逐字核验');
+  });
+
+  it('returns no fabricated evidence and keeps evidence scoped to sources', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const reader = await createVaultReader(fixture.root);
+    await expect(reader.findEvidence(SOURCE_PATH, '不存在的证据')).resolves.toMatchObject({ passages: [] });
+    await expect(reader.findEvidence(KNOWLEDGE_PATH, '证据')).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+  });
+});

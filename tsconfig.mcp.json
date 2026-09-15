@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "mcp-server/**/*.ts",
+    "tests/mcp/**/*.ts",
+    "src/server/rules/**/*.ts",
+    "src/server/vault/raw-bytes.ts",
+    "src/shared/domain/**/*.ts",
+    "src/shared/api/schemas.ts"
+  ]
+}

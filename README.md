@@ -124,6 +124,28 @@ flowchart LR
 
 ## 在这台 Mac 上使用
 
+### 给 Codex 使用独立的只读 MCP
+
+如果希望让 Codex 直接检索这套“大脑”，可以单独注册本地 `brain-mcp`。它通过 STDIO 读取 `01图书馆` 和 `02知识库` 的 Markdown，只提供搜索、阅读和来源证据；它不会接入“问问”、不会调用 DeepSeek、不会写入文件，也不提供 HTTP/URL 入口。
+
+在 Node.js 22.12+ 的 worktree 中先配置真实大脑路径：
+
+```sh
+export XIAOZHAO_VAULT_ROOT="/Users/ao/我的大脑"
+npm run mcp:dev
+```
+
+要让 Codex CLI 持久使用它，在本项目目录执行：
+
+```sh
+codex mcp add xiaozhao-brain \
+  --env XIAOZHAO_VAULT_ROOT=/Users/ao/我的大脑 \
+  -- npx tsx /Users/ao/Desktop/AO/04AI应用/xiaozhao-brain-console/.worktrees/desktop-read/mcp-server/index.ts
+codex mcp list
+```
+
+把命令中的 worktree 和大脑路径改成你机器上的实际绝对路径。第一版不自动把 MCP 放进 Electron DMG；删除 Codex 配置不会影响 App 内“问问”。完整工具边界和验收记录见 [独立只读 brain-mcp 设计](docs/superpowers/specs/2026-09-14-brain-mcp-readonly-design.md)。
+
 构建产物位于 `dist/desktop/最佳拍档-darwin-arm64/最佳拍档.app`，可以双击打开。当前仅针对 Apple Silicon Mac 构建；Release 中的预览 DMG 尚未完成 Developer ID 签名和 Apple 公证。
 
 首次启动尝试读取之前保存的位置，否则使用当前用户主目录下的 `我的大脑`。没有可用位置时会先让你选择“创建我的大脑”或“选择已有文件夹”；创建时只在你选定的保存位置建立最小目录和五份初始规则文件，不移动现有资料。位置无效时会弹出文件夹选择框。有效文件夹需要包含 `00大脑规则`、`01图书馆`、`02知识库`、`03大讲堂` 及当前规定的五份规则文件；不接受符号链接。
