@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -33,9 +33,9 @@ it('lists one-level folders, preserves empty folders, and moves without changing
   const before = await service.list();
   expect(before.folders).toEqual([{ id: expect.stringMatching(/^[a-f0-9]{64}$/), name: 'writing', skillCount: 1 }]);
   const writer = before.items.find((item) => item.name === 'writer')!;
-  const bytes = await (await import('node:fs/promises')).readFile(join(root, 'writing', 'writer', 'SKILL.md'));
+  const bytes = await readFile(join(root, 'writing', 'writer', 'SKILL.md'));
   await service.move(writer.id, null);
-  await expect((await import('node:fs/promises')).readFile(join(root, 'writer', 'SKILL.md'))).resolves.toEqual(bytes);
+  await expect(readFile(join(root, 'writer', 'SKILL.md'))).resolves.toEqual(bytes);
   await expect(service.get(writer.id)).resolves.toMatchObject({ id: writer.id, folderId: null, folderName: null });
 });
 
@@ -47,6 +47,49 @@ it('rejects invalid and duplicate folder operations', async () => {
   await service.createFolder('docs');
   await expect(service.createFolder('docs')).rejects.toMatchObject({ code: 'SKILL_FOLDER_CONFLICT' });
   await expect(service.move('a'.repeat(64), null)).rejects.toMatchObject({ code: 'SKILL_NOT_FOUND' });
+});
+
+it('resolves only validated direct SKILL.md sources and rejects destination conflicts', async () => {
+  const root = await fixture();
+  const service = createSkillCatalogService({ skillsRoot: root });
+  await service.createFolder('docs');
+  await skill(root, 'writer', '# Root writer');
+  const docs = (await service.list()).folders.find((folder) => folder.name === 'docs')!;
+  const rootWriter = (await service.list()).items.find((item) => item.name === 'writer' && item.folderId === null)!;
+  await expect(service.resolveSource(rootWriter.id)).resolves.toBe(await realpath(join(root, 'writer', 'SKILL.md')));
+  await skill(join(root, 'docs'), 'writer', '# Folder writer');
+  await expect(service.list()).rejects.toMatchObject({ code: 'SKILL_LAYOUT_CONFLICT', statusCode: 409 });
+  await rm(join(root, 'docs', 'writer'), { recursive: true, force: true });
+  await mkdir(join(root, 'docs', 'writer'));
+  await expect(service.move(rootWriter.id, docs.id)).rejects.toMatchObject({
+    code: 'SKILL_FOLDER_CONFLICT',
+    statusCode: 409
+  });
+  await expect(readFile(join(root, 'writer', 'SKILL.md'))).resolves.toEqual(Buffer.from('# Root writer'));
+});
+
+it('creates the configured catalog root when the .claude and skills directories are absent', async () => {
+  const vault = await fixture();
+  const service = createSkillCatalogService({ skillsRoot: join(vault, '.claude', 'skills') });
+  await expect(service.createFolder('empty')).resolves.toMatchObject({
+    name: 'empty',
+    skillCount: 0
+  });
+  await expect(service.list()).resolves.toMatchObject({
+    folders: [expect.objectContaining({ name: 'empty', skillCount: 0 })],
+    items: []
+  });
+});
+
+it('ignores symlinked custom folders and does not traverse them', async () => {
+  const root = await fixture();
+  const outside = await fixture();
+  await skill(outside, 'outside', '# Outside');
+  await symlink(outside, join(root, 'linked-folder'));
+  await expect(createSkillCatalogService({ skillsRoot: root }).list()).resolves.toEqual({
+    folders: [],
+    items: []
+  });
 });
 
 it('discovers only safe direct skills, keeps ids opaque, and returns bounded detail', async () => {
