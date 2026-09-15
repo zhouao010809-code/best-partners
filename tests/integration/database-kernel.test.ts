@@ -204,7 +204,7 @@ describe('SQLite state kernel', () => {
     expect(tableColumns('company_sessions')).toEqual(['id_hash', 'user_id', 'expires_at', 'created_at', 'last_seen_at']);
     expect(tableColumns('company_projects')).toEqual(['id', 'workspace_id', 'name', 'client_name', 'status', 'project_root', 'source_root', 'config_sha256', 'confidence_json', 'created_at', 'updated_at']);
     expect(tableColumns('company_project_ingestion_runs')).toEqual(['id', 'project_id', 'source_sha256', 'state', 'proposal_json', 'operation_id', 'created_at', 'updated_at']);
-    expect(tableColumns('company_project_events')).toEqual(['id', 'project_id', 'actor_id', 'event_type', 'payload_json', 'created_at']);
+    expect(tableColumns('company_project_events')).toEqual(['id', 'project_id', 'actor_id', 'operation_id', 'event_type', 'payload_json', 'created_at']);
 
     const now = '2026-09-16T00:00:00.000Z';
     kernel.db.prepare('INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
@@ -214,18 +214,26 @@ describe('SQLite state kernel', () => {
     kernel.db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run('user-1', 'workspace-1', 'Owner', 'owner', 'salt', 'hash', now, now);
     expect(() => kernel.db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(null, 'workspace-1', 'No ID', 'operator', 'salt', 'hash', now, now)).toThrow(/NOT NULL/);
+    expect(() => kernel.db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run('user-2', 'workspace-1', 'Reviewer', 'reviewer', 'salt', 'hash', now, now)).not.toThrow();
     kernel.db.prepare('INSERT INTO company_projects (id, workspace_id, name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run('project-1', 'workspace-1', 'Project', 'draft', '/srv/workspace/projects/p1', '/srv/workspace/incoming/p1', 'sha', '{}', now, now);
     expect(() => kernel.db.prepare('INSERT INTO company_projects (id, workspace_id, name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run('project-2', 'workspace-1', 'Duplicate root', 'active', '/srv/workspace/projects/p1', '/srv/workspace/incoming/p2', 'sha2', '{}', now, now)).toThrow(/UNIQUE/);
     const insertRun = kernel.db.prepare('INSERT INTO company_project_ingestion_runs (id, project_id, source_sha256, state, proposal_json, operation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    insertRun.run('run-1', 'project-1', 'source-sha', 'scanning', '{}', 'op-1', now, now);
-    expect(() => insertRun.run('run-2', 'project-1', 'source-sha', 'proposed', '{}', 'op-2', now, now)).toThrow(/UNIQUE/);
-    insertRun.run('run-3', 'project-1', 'source-sha', 'failed', '{}', 'op-3', now, now);
-    expect(() => insertRun.run('run-4', 'project-1', 'source-sha', 'not-a-state', '{}', 'op-4', now, now)).toThrow(/CHECK/);
-    expect(() => kernel.db.prepare('INSERT INTO company_project_events (id, project_id, actor_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run('event-1', 'missing-project', null, 'system', '{}', now)).toThrow(/FOREIGN KEY/);
+    insertRun.run('run-1', null, 'source-sha', 'scanning', '{}', 'op-1', now, now);
+    kernel.db.prepare('UPDATE company_project_ingestion_runs SET project_id = ? WHERE id = ?').run('project-1', 'run-1');
+    expect(() => insertRun.run('run-2', null, 'source-sha', 'proposed', '{}', 'op-2', now, now)).toThrow(/UNIQUE/);
+    insertRun.run('run-3', 'project-1', 'source-sha', 'confirmed', '{}', 'op-3', now, now);
+    insertRun.run('run-4', 'project-1', 'source-sha', 'failed', '{}', 'op-4', now, now);
+    insertRun.run('run-5', 'project-1', 'source-sha', 'superseded', '{}', 'op-5', now, now);
+    insertRun.run('run-6', 'project-1', 'source-sha', 'confirmed', '{}', 'op-6', now, now);
+    expect(() => insertRun.run('run-7', 'project-1', 'source-sha', 'not-a-state', '{}', 'op-7', now, now)).toThrow(/CHECK/);
+    expect(() => kernel.db.prepare('INSERT INTO company_project_events (id, project_id, actor_id, operation_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('event-1', 'missing-project', null, 'op-missing', 'system', '{}', now)).toThrow(/FOREIGN KEY/);
+    kernel.db.prepare('INSERT INTO company_project_events (id, project_id, actor_id, operation_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('event-2', 'project-1', 'user-1', 'op-event', 'system', '{}', now);
     expect(kernel.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_runs'").get())
       .toEqual({ name: 'extraction_runs' });
   });
