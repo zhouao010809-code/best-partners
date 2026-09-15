@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -29,6 +29,18 @@ describe('company workspace paths', () => {
     await expect(readFile(join(workspaceRoot, 'incoming'))).rejects.toThrow();
     await ensureCompanyWorkspace(workspaceRoot, join(base, 'state'));
     await expect(realpath(join(workspaceRoot, 'incoming'))).resolves.toBe(join(await realpath(base), 'workspace', 'incoming'));
+    const before = await resolveCompanyWorkspace(workspaceRoot, join(base, 'state'));
+    expect(before).toEqual(await resolveCompanyWorkspace(workspaceRoot, join(base, 'state')));
+  });
+
+  it('canonicalizes an ancestor symlink and keeps resolution stable before and after creation', async () => {
+    const base = await fixture();
+    const alias = join(base, 'alias');
+    await symlink(base, alias);
+    const root = join(alias, 'workspace');
+    const first = await resolveCompanyWorkspace(root, join(base, 'state'));
+    await ensureCompanyWorkspace(root, join(base, 'state'));
+    expect(await resolveCompanyWorkspace(root, join(base, 'state'))).toEqual(first);
   });
 
   it.each(['../escape', 'a/..', './x', 'projects/../../escape', '/absolute', '\\absolute', 'projects\\x', 'nul\0x'])('rejects unsafe relative path %s', path => {
@@ -47,5 +59,23 @@ describe('company workspace paths', () => {
     const state = join(base, 'state');
     await expect(resolveCompanyWorkspace(state, state)).rejects.toThrow();
     await expect(resolveCompanyWorkspace(join(state, 'workspace'), state)).rejects.toThrow();
+    await expect(resolveCompanyWorkspace(join(base, 'workspace'), join(base, 'workspace', 'state'))).rejects.toThrow();
+  });
+
+  it('corrects private directory modes and rejects unsafe existing children', async () => {
+    const base = await fixture();
+    const root = join(base, 'workspace');
+    await mkdir(root, { recursive: true, mode: 0o755 });
+    await mkdir(join(root, 'incoming'), { mode: 0o755 });
+    await writeFile(join(root, 'projects'), 'not a directory');
+    await expect(ensureCompanyWorkspace(root, join(base, 'state'))).rejects.toThrow();
+    await rm(join(root, 'projects'));
+    await symlink(base, join(root, 'projects'));
+    await expect(ensureCompanyWorkspace(root, join(base, 'state'))).rejects.toThrow();
+    await rm(join(root, 'projects'));
+    await mkdir(join(root, 'projects'), { mode: 0o755 });
+    await ensureCompanyWorkspace(root, join(base, 'state'));
+    expect((await lstat(root)).mode & 0o777).toBe(0o700);
+    expect((await lstat(join(root, 'incoming'))).mode & 0o777).toBe(0o700);
   });
 });

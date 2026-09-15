@@ -15,5 +15,8 @@ describe('company project contracts', () => {
     const unknown: ProjectFieldEvidence = { confidence: 'unknown', evidencePaths: [] };
     expect(unknown.value).toBeUndefined();
     expect(() => assertProjectFieldEvidence({ confidence: 'unknown', value: '确定值', evidencePaths: [] })).toThrow();
+    expect(() => assertProjectFieldEvidence({ confidence: {}, evidencePaths: [] })).toThrow();
+    expect(() => assertProjectFieldEvidence({ confidence: 'confirmed', evidencePaths: ['ok', 1] })).toThrow();
+    expect(() => assertProjectFieldEvidence({ confidence: 'unknown', evidencePaths: 'not-an-array' })).toThrow();
   });
 });

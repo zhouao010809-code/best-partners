@@ -30,7 +30,10 @@ export type ProjectFieldEvidence =
 export function assertProjectFieldEvidence(value: unknown): asserts value is ProjectFieldEvidence {
   if (value === null || typeof value !== 'object') throw new Error('Invalid project field evidence');
   const candidate = value as { confidence?: unknown; value?: unknown; evidencePaths?: unknown };
-  if (!['confirmed', 'inferred', 'unknown'].includes(String(candidate.confidence)) || !Array.isArray(candidate.evidencePaths)) {
+  if (candidate.confidence !== 'confirmed' && candidate.confidence !== 'inferred' && candidate.confidence !== 'unknown') {
+    throw new Error('Invalid project field evidence');
+  }
+  if (!Array.isArray(candidate.evidencePaths) || !candidate.evidencePaths.every(path => typeof path === 'string')) {
     throw new Error('Invalid project field evidence');
   }
   if (candidate.confidence === 'unknown' && 'value' in candidate) throw new Error('Unknown evidence cannot contain a value');

@@ -1,5 +1,6 @@
-import { access, lstat, mkdir, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { ensurePrivateDirectory } from '../db/permissions.js';
 
 export interface CompanyWorkspacePaths {
   readonly rootPath: string;
@@ -24,11 +25,17 @@ async function canonicalExistingAncestor(path: string): Promise<string> {
   while (true) {
     try {
       const info = await lstat(current);
-      if (!info.isDirectory()) throw new Error('Workspace path is not a directory');
+      if (info.isSymbolicLink()) {
+        if (missing.length === 0) throw new Error('Configured workspace/state root must not be a symlink');
+        const canonical = await realpath(current);
+        return join(canonical, ...missing.reverse());
+      }
+      if (!info.isDirectory()) throw new Error('Workspace/state path is not a directory');
       const canonical = await realpath(current);
-      // A configured existing root must not itself be a symlink. System-level
-      // aliases (for example /tmp -> /private/tmp) are canonicalized safely.
-      if (missing.length === 0 && canonical !== current) throw new Error('Workspace path contains a symlink');
+      if (missing.length === 0) {
+        const parentCanonical = await realpath(dirname(current));
+        if (canonical !== join(parentCanonical, basename(current))) throw new Error('Configured workspace/state root must not be a symlink');
+      }
       return join(canonical, ...missing.reverse());
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -40,9 +47,13 @@ async function canonicalExistingAncestor(path: string): Promise<string> {
   }
 }
 
+function sameOrContainedBy(parent: string, candidate: string): boolean {
+  const rel = relative(parent, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
 function assertOutsideState(workspace: string, state: string): void {
-  const rel = relative(state, workspace);
-  if (rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))) {
+  if (sameOrContainedBy(state, workspace) || sameOrContainedBy(workspace, state)) {
     throw new Error('Company workspace must be outside the SQLite state directory');
   }
 }
@@ -71,15 +82,9 @@ export async function resolveCompanyWorkspace(workspaceRoot: string | CompanyWor
 
 export async function ensureCompanyWorkspace(workspaceRoot: string | CompanyWorkspaceOptions, stateDirectory?: string): Promise<CompanyWorkspacePaths> {
   const paths = await resolveCompanyWorkspace(workspaceRoot, stateDirectory);
-  await mkdir(paths.rootPath, { recursive: true, mode: 0o700 });
+  ensurePrivateDirectory(paths.rootPath);
   for (const child of [paths.incomingPath, paths.projectsPath, paths.skillsPath, paths.systemPath]) {
-    try {
-      const info = await lstat(child);
-      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Company workspace child is unsafe');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      await mkdir(child, { mode: 0o700 });
-    }
+    ensurePrivateDirectory(child);
   }
   return paths;
 }
