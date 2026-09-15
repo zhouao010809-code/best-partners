@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import { buildServer } from '../../src/server/app.js';
 import { createCompanyRuntime } from '../../src/server/company/company-runtime.js';
 
@@ -33,7 +34,20 @@ describe('runtime mode boundary', () => {
     expect(bootstrap.json().data.runtimeMode).toBe('company');
     expect(companyRoute.statusCode).toBe(200);
     expect(companyRoute.json()).toEqual({ data: { items: [] }, version: 1 });
-    expect(companyRuntime.workspace.rootPath).toBe('/srv/company-workspace');
+    expect(companyRuntime.workspace).toEqual({
+      id: 'company',
+      displayName: 'Company workspace',
+      rootPath: '/srv/company-workspace',
+      incomingPath: join('/srv/company-workspace', 'incoming'),
+      projectsPath: join('/srv/company-workspace', 'projects'),
+      skillsPath: join('/srv/company-workspace', 'skills'),
+      systemPath: join('/srv/company-workspace', 'system')
+    });
+    expect(companyRuntime.paths.rootPath).toBe('/srv/company-workspace');
+    expect(companyRuntime.paths.resolve('projects')).toBe(join('/srv/company-workspace', 'projects'));
+    expect(companyRuntime.database).toEqual({ kind: 'company' });
+    expect(await companyRuntime.auth.authenticate({})).toBeUndefined();
+    expect(await companyRuntime.projects.list()).toEqual([]);
     expect(companyRuntime).not.toHaveProperty('vaultRealRoot');
     expect(companyRuntime).not.toHaveProperty('gateway');
   });

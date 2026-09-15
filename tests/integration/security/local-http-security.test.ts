@@ -78,9 +78,11 @@ async function bootstrap(server: TestServer): Promise<{ cookie: string; csrfToke
     headers: hostHeaders()
   });
   expect(response.statusCode).toBe(200);
+  const body = response.json<{ data: { csrfToken: string; runtimeMode: 'personal' } }>();
+  expect(body.data.runtimeMode).toBe('personal');
   return {
     cookie: sessionCookie(response),
-    csrfToken: response.json<{ data: { csrfToken: string } }>().data.csrfToken
+    csrfToken: body.data.csrfToken
   };
 }
 
@@ -195,9 +197,12 @@ describe('signed session and bound CSRF protection', () => {
     expect(setCookie).toEqual(expect.stringMatching(/HttpOnly/i));
     expect(setCookie).toEqual(expect.stringMatching(/SameSite=Strict/i));
     expect(setCookie).toEqual(expect.stringMatching(/Path=\//i));
-    const body = response.json<{ data: { csrfToken: string }; version: number }>();
+    const body = response.json<{ data: { csrfToken: string; runtimeMode: 'personal' }; version: number }>();
     expect(body).toEqual({
-      data: { csrfToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) },
+      data: {
+        csrfToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+        runtimeMode: 'personal'
+      },
       version: 1
     });
     expect(String(setCookie)).not.toContain(body.data.csrfToken);

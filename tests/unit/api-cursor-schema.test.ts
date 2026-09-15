@@ -101,18 +101,19 @@ describe('read-console shared schemas', () => {
 
   it('exports strict bootstrap schemas with an exact base64url-43 CSRF token', () => {
     const token = 'A'.repeat(43);
+    const personalBootstrap = { csrfToken: token, runtimeMode: 'personal' as const };
 
-    expect(bootstrapDataSchema.safeParse({ csrfToken: token }).success).toBe(true);
-    expect(bootstrapDataSchema.safeParse({ csrfToken: 'A'.repeat(42) }).success).toBe(false);
-    expect(bootstrapDataSchema.safeParse({ csrfToken: `${'A'.repeat(42)}+` }).success).toBe(false);
-    expect(bootstrapDataSchema.safeParse({ csrfToken: `${token}=` }).success).toBe(false);
-    expect(bootstrapDataSchema.safeParse({ csrfToken: token, extra: true }).success).toBe(false);
+    expect(bootstrapDataSchema.safeParse(personalBootstrap).success).toBe(true);
+    expect(bootstrapDataSchema.safeParse({ ...personalBootstrap, csrfToken: 'A'.repeat(42) }).success).toBe(false);
+    expect(bootstrapDataSchema.safeParse({ ...personalBootstrap, csrfToken: `${'A'.repeat(42)}+` }).success).toBe(false);
+    expect(bootstrapDataSchema.safeParse({ ...personalBootstrap, csrfToken: `${token}=` }).success).toBe(false);
+    expect(bootstrapDataSchema.safeParse({ ...personalBootstrap, extra: true }).success).toBe(false);
     expect(bootstrapResponseSchema.safeParse({
-      data: { csrfToken: token },
+      data: personalBootstrap,
       version: API_VERSION
     }).success).toBe(true);
     expect(bootstrapResponseSchema.safeParse({
-      data: { csrfToken: token },
+      data: personalBootstrap,
       version: API_VERSION,
       extra: true
     }).success).toBe(false);
