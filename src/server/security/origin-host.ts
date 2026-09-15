@@ -11,6 +11,59 @@ export interface LoopbackListenOptions {
   readonly port: number;
 }
 
+export interface CompanyListenOptions {
+  readonly host: string;
+  readonly port: number;
+}
+
+const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '::0', '*']);
+
+function readPort(value: string | undefined, name: string): number {
+  if (value === undefined || !/^[1-9][0-9]{0,4}$/u.test(value)) {
+    throw new Error(`${name} must be a TCP port`);
+  }
+  const port = Number(value);
+  if (port > 65535) throw new Error(`${name} must be a TCP port`);
+  return port;
+}
+
+export function resolveCompanyListenOptions(env: NodeJS.ProcessEnv): CompanyListenOptions {
+  const host = env.COMPANY_HOST;
+  if (host === undefined || !isValidCompanyHost(host)) {
+    throw new Error('COMPANY_HOST must be an explicit non-wildcard host');
+  }
+  return { host, port: readPort(env.COMPANY_PORT, 'COMPANY_PORT') };
+}
+
+export function isValidCompanyHost(host: string): boolean {
+  return host.length > 0
+    && !WILDCARD_HOSTS.has(host)
+    && !/[\s/\\]/u.test(host);
+}
+
+export function companyHttpOrigin(options: CompanyListenOptions): string {
+  const host = options.host.includes(':') && !options.host.startsWith('[')
+    ? `[${options.host}]`
+    : options.host;
+  return `http://${host}:${options.port}`;
+}
+
+export function isAllowedCompanyHost(
+  host: string | undefined,
+  options: CompanyListenOptions
+): boolean {
+  const expectedHost = companyHttpOrigin(options).slice('http://'.length);
+  return host === expectedHost;
+}
+
+export function isAllowedCompanyOrigin(
+  origin: string | undefined,
+  options: CompanyListenOptions,
+  originRequired = false
+): boolean {
+  return origin === undefined ? !originRequired : origin === companyHttpOrigin(options);
+}
+
 export function resolveLoopbackListenOptions(env: NodeJS.ProcessEnv): LoopbackListenOptions {
   const host = env.APP_HOST ?? LOOPBACK_HTTP_HOST;
   if (host !== LOOPBACK_HTTP_HOST) {

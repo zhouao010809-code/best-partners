@@ -49,6 +49,7 @@ import { registerAttachmentRoutes } from './api/routes/attachments.js';
 import { createAssistantDraftService } from './assistant/draft-service.js';
 import { registerAssistantDraftRoutes } from './api/routes/assistant-drafts.js';
 import { registerSkillRoutes } from './api/routes/skills.js';
+import { registerCompanyAuthRoutes } from './api/routes/company-auth.js';
 import type { SkillCatalogService } from './services/skill-catalog.js';
 import type { CompanyRuntimeMode } from '../shared/company/workspace.js';
 import { createCompanyRuntime, type CompanyRuntime } from './company/company-runtime.js';
@@ -248,7 +249,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     .send(safeError('NOT_FOUND', 'Resource not found', operationId())));
 
   app.addHook('onRequest', async (request, reply) => {
-    if (!(options.httpPolicy?.isAllowedHost(request.headers.host) ?? isAllowedHost(request.headers.host))) {
+    const pathname = request.url.split('?', 1)[0] ?? request.url;
+    const isCompanyRoute = runtimeMode === 'company' && pathname.startsWith('/api/company/v1');
+    const policy = options.httpPolicy;
+    if (!(policy?.isAllowedHost(request.headers.host) ?? isAllowedHost(request.headers.host))) {
       return reply.code(421).send(safeError(
         'MISDIRECTED_REQUEST',
         'Request authority rejected',
@@ -257,9 +261,29 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
     const isMutation = MUTATION_METHODS.has(request.method);
     const originRequired = request.method !== 'GET' && request.method !== 'HEAD';
-    if (!(options.httpPolicy?.isAllowedOrigin(request.headers.origin, originRequired)
+    if (!(policy?.isAllowedOrigin(request.headers.origin, originRequired)
       ?? isAllowedOrigin(request.headers.origin, nodeEnv, originRequired))) {
       return reply.code(403).send(safeError('ORIGIN_FORBIDDEN', 'Origin rejected', operationId()));
+    }
+    if (isCompanyRoute) {
+      const isBootstrap = request.method === 'POST' && pathname === '/api/company/v1/auth/bootstrap';
+      const isLogin = request.method === 'POST' && pathname === '/api/company/v1/auth/login';
+      if (isBootstrap || isLogin) return;
+      const companyUser = await companyRuntime?.auth.authenticate({
+        headers: request.headers as unknown as { readonly cookie?: string | string[]; readonly [key: string]: unknown }
+      });
+      if (companyUser === undefined) {
+        return reply.code(401).send(safeError('COMPANY_SESSION_REQUIRED', 'Company session required', operationId()));
+      }
+      if (!isMutation) return;
+      const csrfHeader = request.headers['x-csrf-token'];
+      const token = typeof csrfHeader === 'string' ? csrfHeader : undefined;
+      if (!(await companyRuntime!.auth.verifyCsrf({
+        headers: request.headers as unknown as { readonly cookie?: string | string[]; readonly [key: string]: unknown }
+      }, token))) {
+        return reply.code(403).send(safeError('CSRF_INVALID', 'CSRF token rejected', operationId()));
+      }
+      return;
     }
     if (!isMutation) {
       return;
@@ -298,13 +322,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined });
   registerIndexJobRoutes(app, indexJobs);
   if (companyRuntime !== undefined) {
-    app.get('/api/company/v1/projects', async (_request, reply) => {
-      reply.header('cache-control', 'no-store');
-      return reply.send({
-        data: { items: await companyRuntime.projects.list() },
-        version: API_VERSION
-      });
-    });
+    registerCompanyAuthRoutes(app, companyRuntime);
   }
   app.get('/api/v1/bootstrap', async (request, reply) => {
     let sessionId = sessions.read(request.headers.cookie);

@@ -32,8 +32,7 @@ describe('runtime mode boundary', () => {
 
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json().data.runtimeMode).toBe('company');
-    expect(companyRoute.statusCode).toBe(200);
-    expect(companyRoute.json()).toEqual({ data: { items: [] }, version: 1 });
+    expect(companyRoute.statusCode).toBe(401);
     expect(companyRuntime.workspace).toEqual({
       id: 'company',
       displayName: 'Company workspace',

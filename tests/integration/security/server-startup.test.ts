@@ -5,9 +5,11 @@ const startup = vi.hoisted(() => ({
   createCompanyRuntime: vi.fn(),
   loadConfig: vi.fn(),
   startServer: vi.fn(),
+  openStateKernel: vi.fn(),
   localRest51Gateway: vi.fn(),
   companyRuntime: { workspace: { id: 'company' } },
   companyApp: { listen: vi.fn() },
+  companyKernel: { mode: 'normal', db: { fixture: 'company-db' }, close: vi.fn() },
   gateway: { fixture: 'legacy-gateway' },
   config: {
     appHost: '127.0.0.1', appPort: 4317, appDataDir: '/tmp/xiaozhao-app-data',
@@ -23,6 +25,7 @@ vi.mock('../../../src/server/company/company-runtime.js', () => ({
 }));
 vi.mock('../../../src/server/config.js', () => ({ loadConfig: startup.loadConfig }));
 vi.mock('../../../src/server/start-server.js', () => ({ startServer: startup.startServer }));
+vi.mock('../../../src/server/db/database.js', () => ({ openStateKernel: startup.openStateKernel }));
 vi.mock('../../../src/server/vault/LocalRest51Gateway.js', () => ({
   LocalRest51Gateway: class { constructor(...args: unknown[]) { return startup.localRest51Gateway(...args); } }
 }));
@@ -35,6 +38,7 @@ beforeEach(() => {
   startup.loadConfig.mockReturnValue(startup.config);
   startup.localRest51Gateway.mockReturnValue(startup.gateway);
   startup.startServer.mockResolvedValue({ origin: 'http://127.0.0.1:4317', port: 4317, close: vi.fn() });
+  startup.openStateKernel.mockReturnValue(startup.companyKernel);
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
@@ -64,8 +68,8 @@ describe('legacy CLI startup adapter', () => {
 
   it('starts company mode without loading personal configuration or constructing Local REST', async () => {
     vi.stubEnv('RUNTIME_MODE', 'company');
-    vi.stubEnv('APP_HOST', '127.0.0.1');
-    vi.stubEnv('APP_PORT', '4317');
+    vi.stubEnv('COMPANY_HOST', '192.168.1.20');
+    vi.stubEnv('COMPANY_PORT', '4399');
     vi.stubEnv('COMPANY_WORKSPACE_ROOT', '/srv/company-workspace');
 
     await importEntrypoint();
@@ -73,16 +77,20 @@ describe('legacy CLI startup adapter', () => {
     expect(startup.loadConfig).not.toHaveBeenCalled();
     expect(startup.localRest51Gateway).not.toHaveBeenCalled();
     expect(startup.startServer).not.toHaveBeenCalled();
-    expect(startup.createCompanyRuntime).toHaveBeenCalledWith({
-      workspaceRoot: '/srv/company-workspace'
+    expect(startup.openStateKernel).toHaveBeenCalledWith({
+      appDataDir: expect.stringMatching(/company-state$/u),
+      vaultRealRoot: '/srv/company-workspace'
     });
-    expect(startup.buildServer).toHaveBeenCalledWith({
+    expect(startup.createCompanyRuntime).toHaveBeenCalledWith({
+      workspaceRoot: '/srv/company-workspace', database: startup.companyKernel.db
+    });
+    expect(startup.buildServer).toHaveBeenCalledWith(expect.objectContaining({
       runtimeMode: 'company',
       companyRuntime: startup.companyRuntime
-    });
+    }));
     expect(startup.companyApp.listen).toHaveBeenCalledWith({
-      host: '127.0.0.1',
-      port: 4317
+      host: '192.168.1.20',
+      port: 4399
     });
   });
 

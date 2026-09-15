@@ -1,6 +1,26 @@
+import {
+  companyHttpOrigin,
+  isAllowedCompanyHost,
+  isAllowedCompanyOrigin,
+  isValidCompanyHost,
+  type CompanyListenOptions
+} from './origin-host.js';
+
 export interface HttpPolicy {
   isAllowedHost(host: string | undefined): boolean;
   isAllowedOrigin(origin: string | undefined, originRequired?: boolean): boolean;
+}
+
+export function createCompanyHttpPolicy(options: CompanyListenOptions): HttpPolicy {
+  if (!isValidCompanyHost(options.host) || !Number.isInteger(options.port) || options.port < 1 || options.port > 65535) {
+    throw new Error('INVALID_COMPANY_BINDING');
+  }
+  // Evaluate the origin once so malformed host values fail before the server binds.
+  companyHttpOrigin(options);
+  return {
+    isAllowedHost: host => isAllowedCompanyHost(host, options),
+    isAllowedOrigin: (origin, required = false) => isAllowedCompanyOrigin(origin, options, required)
+  };
 }
 
 export interface LoopbackPolicy extends HttpPolicy {
