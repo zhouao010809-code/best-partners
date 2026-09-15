@@ -74,6 +74,26 @@ function insertRun(
   );
 }
 
+function migrationsThrough017() {
+  const files = [
+    [1, '001_initial.sql'],
+    [2, '002_read_api_jobs.sql'],
+    [8, '008_personal_extraction.sql'],
+    [9, '009_personal_ingestion.sql'],
+    [10, '010_personal_material_management.sql'],
+    [11, '011_personal_trash_delete.sql'],
+    [12, '012_assistant_conversations.sql'],
+    [14, '014_assistant_drafts.sql'],
+    [15, '015_extraction_source_range.sql'],
+    [16, '016_assistant_action_plans.sql'],
+    [17, '017_company_workspace.sql']
+  ] as const;
+  return files.map(([version, filename]) => ({
+    version,
+    sql: readFileSync(new URL(`../../src/server/db/migrations/${filename}`, import.meta.url), 'utf8')
+  }));
+}
+
 describe('SQLite state kernel', () => {
   it('reserves a new database as 0600 before SQLite opens it', async () => {
     const input = makeRoots();
@@ -139,7 +159,7 @@ describe('SQLite state kernel', () => {
     const input = makeRoots();
     const first = requireNormal(input);
 
-    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17].map((version) => ({ version }));
+    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18].map((version) => ({ version }));
     expect(first.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
       .toEqual(expectedVersions);
     const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
@@ -185,6 +205,75 @@ describe('SQLite state kernel', () => {
     const second = requireNormal(input);
     expect(second.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
       .toEqual(expectedVersions);
+  });
+
+  it('upgrades databases recorded at 017 without changing published 017 semantics', () => {
+    const migration017 = readFileSync(
+      new URL('../../src/server/db/migrations/017_company_workspace.sql', import.meta.url),
+      'utf8'
+    );
+    expect(migration017).toContain('id TEXT PRIMARY KEY');
+    expect(migration017).toContain('project_id TEXT NOT NULL REFERENCES company_projects(id) ON DELETE CASCADE');
+    expect(migration017).toContain("WHERE state IN ('scanning', 'proposed', 'confirmed')");
+    expect(migration017).not.toMatch(/CREATE TABLE company_project_events[\s\S]*operation_id TEXT NOT NULL/);
+    expect(migration017).not.toContain('company_project_events_operation_idx');
+
+    const db = new Database(':memory:');
+    try {
+      db.pragma('foreign_keys = ON');
+      applyMigrations(db, migrationsThrough017());
+      expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17].map((version) => ({ version })));
+
+      const now = '2026-09-16T00:00:00.000Z';
+      db.prepare('INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run('workspace-1', 'Workspace', '/srv/workspace', now, now);
+      db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run('user-1', 'workspace-1', 'Owner', 'owner', 'salt', 'hash', now, now);
+      db.prepare('INSERT INTO company_projects (id, workspace_id, name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run('project-1', 'workspace-1', 'Project', 'draft', '/srv/workspace/projects/p1', '/srv/workspace/incoming/p1', 'sha', '{}', now, now);
+      db.prepare('INSERT INTO company_project_ingestion_runs (id, project_id, source_sha256, state, proposal_json, operation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run('run-1', 'project-1', 'source-sha', 'confirmed', '{}', 'op-1', now, now);
+      db.prepare('INSERT INTO company_project_events (id, project_id, actor_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run('event-1', 'project-1', 'user-1', 'system', '{}', now);
+
+      applyMigrations(db);
+      expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+      expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18].map((version) => ({ version })));
+      expect(db.prepare('SELECT project_id, state, operation_id FROM company_project_ingestion_runs WHERE id = ?').get('run-1'))
+        .toEqual({ project_id: 'project-1', state: 'confirmed', operation_id: 'op-1' });
+      expect(db.prepare('SELECT project_id, actor_id, operation_id FROM company_project_events WHERE id = ?').get('event-1'))
+        .toEqual({ project_id: 'project-1', actor_id: 'user-1', operation_id: 'migration-018:event-1' });
+      expect(() => db.prepare('DELETE FROM company_users WHERE id = ?').run('user-1')).toThrow(/FOREIGN KEY/);
+
+      const fresh = new Database(':memory:');
+      try {
+        fresh.pragma('foreign_keys = ON');
+        applyMigrations(fresh);
+        const schema = (database: Database.Database) => database.prepare(`
+          SELECT type, name, sql
+          FROM sqlite_master
+          WHERE (type = 'table' OR type = 'index') AND name LIKE 'company_%'
+          ORDER BY type, name
+        `).all();
+        expect(schema(db)).toEqual(schema(fresh));
+      } finally {
+        fresh.close();
+      }
+
+      const insertRun = db.prepare('INSERT INTO company_project_ingestion_runs (id, project_id, source_sha256, state, proposal_json, operation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      insertRun.run('run-2', null, 'source-sha', 'confirmed', '{}', 'op-2', now, now);
+      insertRun.run('run-3', null, 'source-open', 'scanning', '{}', 'op-3', now, now);
+      expect(() => insertRun.run('run-4', null, 'source-open', 'proposed', '{}', 'op-4', now, now)).toThrow(/UNIQUE/);
+      db.prepare('UPDATE company_project_ingestion_runs SET project_id = ? WHERE id = ?').run('project-1', 'run-3');
+      applyMigrations(db);
+      expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+      expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18].map((version) => ({ version })));
+    } finally {
+      db.close();
+    }
   });
 
   it('rejects a second active run for one material version but permits terminal history', () => {

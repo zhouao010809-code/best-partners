@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 export interface Migration {
   readonly version: number;
   readonly sql: string;
+  readonly requiresForeignKeysOff?: boolean;
 }
 
 function bundledMigrationPath(filename: string): URL {
@@ -24,7 +25,12 @@ function initialMigrations(): readonly Migration[] {
     { version: 14, sql: readFileSync(bundledMigrationPath('014_assistant_drafts.sql'), 'utf8') },
     { version: 15, sql: readFileSync(bundledMigrationPath('015_extraction_source_range.sql'), 'utf8') },
     { version: 16, sql: readFileSync(bundledMigrationPath('016_assistant_action_plans.sql'), 'utf8') },
-    { version: 17, sql: readFileSync(bundledMigrationPath('017_company_workspace.sql'), 'utf8') }
+    { version: 17, sql: readFileSync(bundledMigrationPath('017_company_workspace.sql'), 'utf8') },
+    {
+      version: 18,
+      sql: readFileSync(bundledMigrationPath('018_company_workspace_constraints.sql'), 'utf8'),
+      requiresForeignKeysOff: true
+    }
   ];
 }
 
@@ -48,10 +54,28 @@ export function applyMigrations(
 ): void {
   for (const migration of migrations) {
     if (migrationApplied(db, migration.version)) continue;
-    db.transaction(() => {
-      db.exec(migration.sql);
-      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
-        .run(migration.version, new Date().toISOString());
-    }).immediate();
+    const rebuildsTables = migration.requiresForeignKeysOff === true;
+    let foreignKeysBefore: number | undefined;
+    let legacyAlterTableBefore: number | undefined;
+    try {
+      if (rebuildsTables) {
+        foreignKeysBefore = db.pragma('foreign_keys', { simple: true }) as number;
+        legacyAlterTableBefore = db.pragma('legacy_alter_table', { simple: true }) as number;
+        if (foreignKeysBefore === 1) db.pragma('foreign_keys = OFF');
+        db.pragma('legacy_alter_table = ON');
+      }
+      db.transaction(() => {
+        db.exec(migration.sql);
+        db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
+          .run(migration.version, new Date().toISOString());
+      }).immediate();
+    } finally {
+      if (rebuildsTables) {
+        if (legacyAlterTableBefore !== undefined) {
+          db.pragma(`legacy_alter_table = ${legacyAlterTableBefore === 1 ? 'ON' : 'OFF'}`);
+        }
+        if (foreignKeysBefore === 1) db.pragma('foreign_keys = ON');
+      }
+    }
   }
 }
