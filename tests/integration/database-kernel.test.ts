@@ -205,6 +205,11 @@ describe('SQLite state kernel', () => {
     expect(tableColumns('company_projects')).toEqual(['id', 'workspace_id', 'name', 'client_name', 'status', 'project_root', 'source_root', 'config_sha256', 'confidence_json', 'created_at', 'updated_at']);
     expect(tableColumns('company_project_ingestion_runs')).toEqual(['id', 'project_id', 'source_sha256', 'state', 'proposal_json', 'operation_id', 'created_at', 'updated_at']);
     expect(tableColumns('company_project_events')).toEqual(['id', 'project_id', 'actor_id', 'operation_id', 'event_type', 'payload_json', 'created_at']);
+    expect(kernel.db.prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'index' AND name = 'company_project_events_operation_idx'
+    `).get()).toEqual({ name: 'company_project_events_operation_idx' });
 
     const now = '2026-09-16T00:00:00.000Z';
     kernel.db.prepare('INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
@@ -234,8 +239,36 @@ describe('SQLite state kernel', () => {
       .run('event-1', 'missing-project', null, 'op-missing', 'system', '{}', now)).toThrow(/FOREIGN KEY/);
     kernel.db.prepare('INSERT INTO company_project_events (id, project_id, actor_id, operation_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run('event-2', 'project-1', 'user-1', 'op-event', 'system', '{}', now);
+    expect(() => kernel.db.prepare('DELETE FROM company_users WHERE id = ?').run('user-1')).toThrow(/FOREIGN KEY/);
+    expect(kernel.db.prepare('SELECT actor_id FROM company_project_events WHERE id = ?').get('event-2'))
+      .toEqual({ actor_id: 'user-1' });
     expect(kernel.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_runs'").get())
       .toEqual({ name: 'extraction_runs' });
+  });
+
+  it('rejects NULL identifiers across company projection tables', () => {
+    const kernel = requireNormal(makeRoots());
+    const now = '2026-09-16T00:00:00.000Z';
+
+    kernel.db.prepare('INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run('workspace-1', 'Workspace', '/srv/workspace', now, now);
+    kernel.db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('user-1', 'workspace-1', 'Owner', 'owner', 'salt', 'hash', now, now);
+    kernel.db.prepare('INSERT INTO company_projects (id, workspace_id, name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('project-1', 'workspace-1', 'Project', 'draft', '/srv/workspace/projects/p1', '/srv/workspace/incoming/p1', 'sha', '{}', now, now);
+
+    expect(() => kernel.db.prepare('INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run(null, 'No ID', '/srv/other-workspace', now, now)).toThrow(/NOT NULL/);
+    expect(() => kernel.db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(null, 'workspace-1', 'No ID', 'operator', 'salt', 'hash', now, now)).toThrow(/NOT NULL/);
+    expect(() => kernel.db.prepare('INSERT INTO company_sessions (id_hash, user_id, expires_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)')
+      .run(null, 'user-1', now, now, now)).toThrow(/NOT NULL/);
+    expect(() => kernel.db.prepare('INSERT INTO company_projects (id, workspace_id, name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(null, 'workspace-1', 'No ID', 'draft', '/srv/workspace/projects/p2', '/srv/workspace/incoming/p2', 'sha-2', '{}', now, now)).toThrow(/NOT NULL/);
+    expect(() => kernel.db.prepare('INSERT INTO company_project_ingestion_runs (id, project_id, source_sha256, state, proposal_json, operation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(null, null, 'source-null-id', 'scanning', '{}', 'op-null-id', now, now)).toThrow(/NOT NULL/);
+    expect(() => kernel.db.prepare('INSERT INTO company_project_events (id, project_id, actor_id, operation_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(null, 'project-1', null, 'op-null-id', 'system', '{}', now)).toThrow(/NOT NULL/);
   });
 
   it('rejects duplicate idempotency keys', () => {

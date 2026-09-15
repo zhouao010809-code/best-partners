@@ -71,3 +71,4 @@ CREATE INDEX company_sessions_user_idx ON company_sessions(user_id);
 CREATE INDEX company_projects_workspace_idx ON company_projects(workspace_id);
 CREATE INDEX company_project_ingestion_runs_project_idx ON company_project_ingestion_runs(project_id, created_at);
 CREATE INDEX company_project_events_project_idx ON company_project_events(project_id, created_at);
+CREATE INDEX company_project_events_operation_idx ON company_project_events(operation_id);
