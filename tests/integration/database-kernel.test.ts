@@ -243,6 +243,7 @@ describe('SQLite state kernel', () => {
         .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18].map((version) => ({ version })));
       expect(db.prepare('SELECT project_id, state, operation_id FROM company_project_ingestion_runs WHERE id = ?').get('run-1'))
         .toEqual({ project_id: 'project-1', state: 'confirmed', operation_id: 'op-1' });
+      // 017 had no event operation_id; 018 derives a traceable migration value from the legacy event id.
       expect(db.prepare('SELECT project_id, actor_id, operation_id FROM company_project_events WHERE id = ?').get('event-1'))
         .toEqual({ project_id: 'project-1', actor_id: 'user-1', operation_id: 'migration-018:event-1' });
       expect(() => db.prepare('DELETE FROM company_users WHERE id = ?').run('user-1')).toThrow(/FOREIGN KEY/);
@@ -271,6 +272,44 @@ describe('SQLite state kernel', () => {
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
         .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18].map((version) => ({ version })));
+    } finally {
+      db.close();
+    }
+  });
+
+  it('fails closed before rebuilding 018 when a generated legacy ID collides', () => {
+    const db = new Database(':memory:');
+    try {
+      db.pragma('foreign_keys = ON');
+      applyMigrations(db, migrationsThrough017());
+      const now = '2026-09-16T00:00:00.000Z';
+      db.prepare('INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run('workspace-1', 'Workspace', '/srv/workspace', now, now);
+      const insertUser = db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      insertUser.run(null, 'workspace-1', 'Null ID', 'operator', 'salt', 'hash', now, now);
+      const nullUser = db.prepare('SELECT rowid FROM company_users WHERE display_name = ?').get('Null ID') as { rowid: number };
+      const collisionId = `migration-018:company_users:${nullUser.rowid}`;
+      insertUser.run(collisionId, 'workspace-1', 'Collision ID', 'reviewer', 'salt', 'hash', now, now);
+      const beforeUsers = db.prepare('SELECT id, display_name FROM company_users ORDER BY rowid').all();
+
+      expect(() => applyMigrations(db)).toThrow(/migration 018 legacy ID collision.*company_users/i);
+      expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+      expect(db.pragma('legacy_alter_table', { simple: true })).toBe(0);
+      expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17].map((version) => ({ version })));
+      expect(db.prepare('SELECT id, display_name FROM company_users ORDER BY rowid').all()).toEqual(beforeUsers);
+      expect((db.pragma('table_info(company_users)') as Array<{ name: string; notnull: number; pk: number }>)
+        .find((column) => column.name === 'id')).toMatchObject({ notnull: 0, pk: 1 });
+      expect(db.prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE name LIKE '%_018_old'
+      `).all()).toEqual([]);
+      expect(db.prepare(`
+        SELECT name
+        FROM sqlite_temp_master
+        WHERE type IN ('table', 'trigger') AND name LIKE '%company_migration_018%'
+      `).all()).toEqual([]);
     } finally {
       db.close();
     }

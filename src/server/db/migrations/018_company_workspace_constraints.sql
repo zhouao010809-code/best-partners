@@ -1,3 +1,48 @@
+CREATE TEMP TABLE company_migration_018_ids (
+  table_name TEXT NOT NULL,
+  id TEXT NOT NULL,
+  PRIMARY KEY (table_name, id)
+);
+
+CREATE TEMP TRIGGER company_migration_018_id_collision
+BEFORE INSERT ON company_migration_018_ids
+WHEN EXISTS (
+  SELECT 1
+  FROM company_migration_018_ids
+  WHERE table_name = NEW.table_name AND id = NEW.id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'migration 018 legacy ID collision: ' || NEW.table_name || ':' || NEW.id);
+END;
+
+INSERT INTO company_migration_018_ids (table_name, id)
+SELECT 'company_workspaces', id FROM company_workspaces WHERE id IS NOT NULL
+UNION ALL
+SELECT 'company_workspaces', 'migration-018:company_workspaces:' || rowid FROM company_workspaces WHERE id IS NULL
+UNION ALL
+SELECT 'company_users', id FROM company_users WHERE id IS NOT NULL
+UNION ALL
+SELECT 'company_users', 'migration-018:company_users:' || rowid FROM company_users WHERE id IS NULL
+UNION ALL
+SELECT 'company_sessions', id_hash FROM company_sessions WHERE id_hash IS NOT NULL
+UNION ALL
+SELECT 'company_sessions', 'migration-018:company_sessions:' || rowid FROM company_sessions WHERE id_hash IS NULL
+UNION ALL
+SELECT 'company_projects', id FROM company_projects WHERE id IS NOT NULL
+UNION ALL
+SELECT 'company_projects', 'migration-018:company_projects:' || rowid FROM company_projects WHERE id IS NULL
+UNION ALL
+SELECT 'company_project_ingestion_runs', id FROM company_project_ingestion_runs WHERE id IS NOT NULL
+UNION ALL
+SELECT 'company_project_ingestion_runs', 'migration-018:company_project_ingestion_runs:' || rowid FROM company_project_ingestion_runs WHERE id IS NULL
+UNION ALL
+SELECT 'company_project_events', id FROM company_project_events WHERE id IS NOT NULL
+UNION ALL
+SELECT 'company_project_events', 'migration-018:company_project_events:' || rowid FROM company_project_events WHERE id IS NULL;
+
+DROP TRIGGER company_migration_018_id_collision;
+DROP TABLE company_migration_018_ids;
+
 DROP INDEX IF EXISTS company_users_workspace_idx;
 DROP INDEX IF EXISTS company_sessions_user_idx;
 DROP INDEX IF EXISTS company_projects_workspace_idx;
@@ -15,7 +60,7 @@ CREATE TABLE company_workspaces (
   updated_at TEXT NOT NULL
 );
 INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at)
-SELECT COALESCE(id, 'migration-018:workspace:' || rowid), display_name, root_path, created_at, updated_at
+SELECT COALESCE(id, 'migration-018:company_workspaces:' || rowid), display_name, root_path, created_at, updated_at
 FROM company_workspaces_018_old;
 DROP TABLE company_workspaces_018_old;
 
@@ -32,7 +77,7 @@ CREATE TABLE company_users (
   updated_at TEXT NOT NULL
 );
 INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, disabled, created_at, updated_at)
-SELECT COALESCE(id, 'migration-018:user:' || rowid), workspace_id, display_name, role, password_salt, password_hash, disabled, created_at, updated_at
+SELECT COALESCE(id, 'migration-018:company_users:' || rowid), workspace_id, display_name, role, password_salt, password_hash, disabled, created_at, updated_at
 FROM company_users_018_old;
 DROP TABLE company_users_018_old;
 
@@ -45,7 +90,7 @@ CREATE TABLE company_sessions (
   last_seen_at TEXT NOT NULL
 );
 INSERT INTO company_sessions (id_hash, user_id, expires_at, created_at, last_seen_at)
-SELECT COALESCE(id_hash, 'migration-018:session:' || rowid), user_id, expires_at, created_at, last_seen_at
+SELECT COALESCE(id_hash, 'migration-018:company_sessions:' || rowid), user_id, expires_at, created_at, last_seen_at
 FROM company_sessions_018_old;
 DROP TABLE company_sessions_018_old;
 
@@ -65,7 +110,7 @@ CREATE TABLE company_projects (
   UNIQUE (workspace_id, project_root)
 );
 INSERT INTO company_projects (id, workspace_id, name, client_name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at)
-SELECT COALESCE(id, 'migration-018:project:' || rowid), workspace_id, name, client_name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at
+SELECT COALESCE(id, 'migration-018:company_projects:' || rowid), workspace_id, name, client_name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at
 FROM company_projects_018_old;
 DROP TABLE company_projects_018_old;
 
@@ -81,7 +126,7 @@ CREATE TABLE company_project_ingestion_runs (
   updated_at TEXT NOT NULL
 );
 INSERT INTO company_project_ingestion_runs (id, project_id, source_sha256, state, proposal_json, operation_id, created_at, updated_at)
-SELECT COALESCE(id, 'migration-018:ingestion:' || rowid), project_id, source_sha256, state, proposal_json, operation_id, created_at, updated_at
+SELECT COALESCE(id, 'migration-018:company_project_ingestion_runs:' || rowid), project_id, source_sha256, state, proposal_json, operation_id, created_at, updated_at
 FROM company_project_ingestion_runs_018_old;
 DROP TABLE company_project_ingestion_runs_018_old;
 
@@ -96,10 +141,11 @@ CREATE TABLE company_project_events (
   created_at TEXT NOT NULL
 );
 INSERT INTO company_project_events (id, project_id, actor_id, operation_id, event_type, payload_json, created_at)
-SELECT COALESCE(id, 'migration-018:event:' || rowid),
+-- 017 had no event operation_id; derive a traceable value instead of claiming an old one was preserved.
+SELECT COALESCE(id, 'migration-018:company_project_events:' || rowid),
        project_id,
        actor_id,
-       'migration-018:' || COALESCE(id, 'event-' || rowid),
+       'migration-018:' || COALESCE(id, 'company_project_events:' || rowid),
        event_type,
        payload_json,
        created_at
