@@ -263,7 +263,8 @@ export function successEnvelopeSchema<T extends z.ZodType>(data: T) {
 }
 
 export const bootstrapDataSchema = z.object({
-  csrfToken: csrfTokenSchema
+  csrfToken: csrfTokenSchema,
+  runtimeMode: z.enum(['personal', 'company'])
 }).strict();
 
 export const bootstrapResponseSchema = successEnvelopeSchema(bootstrapDataSchema);

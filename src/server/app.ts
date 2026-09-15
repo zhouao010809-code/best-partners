@@ -50,6 +50,8 @@ import { createAssistantDraftService } from './assistant/draft-service.js';
 import { registerAssistantDraftRoutes } from './api/routes/assistant-drafts.js';
 import { registerSkillRoutes } from './api/routes/skills.js';
 import type { SkillCatalogService } from './services/skill-catalog.js';
+import type { CompanyRuntimeMode } from '../shared/company/workspace.js';
+import { createCompanyRuntime, type CompanyRuntime } from './company/company-runtime.js';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -142,6 +144,8 @@ export interface ReadApiDependencies {
 }
 
 export interface BuildServerOptions {
+  readonly runtimeMode?: CompanyRuntimeMode;
+  readonly companyRuntime?: CompanyRuntime;
   readonly assistantAdapters?: AssistantAdapter[];
   readonly attachmentService?: AttachmentService;
   readonly trashService?: TrashService;
@@ -178,6 +182,11 @@ function createSafeOperationId(factory: () => string): () => string {
 export function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({ logger: false, bodyLimit: MAX_JSON_BODY_BYTES });
   const nodeEnv = process.env.NODE_ENV;
+  const runtimeMode = options.runtimeMode
+    ?? (process.env.RUNTIME_MODE === 'company' ? 'company' : 'personal');
+  const companyRuntime = runtimeMode === 'company'
+    ? options.companyRuntime ?? createCompanyRuntime()
+    : undefined;
   const sessions = createSessionManager();
   const csrf = createCsrfProtector();
   const healthService = options.healthService ?? DEFAULT_HEALTH_SERVICE;
@@ -288,6 +297,15 @@ export function buildServer(options: BuildServerOptions = {}) {
     trash: options.trashService ? () => options.trashService!.list() : undefined,
     intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined });
   registerIndexJobRoutes(app, indexJobs);
+  if (companyRuntime !== undefined) {
+    app.get('/api/company/v1/projects', async (_request, reply) => {
+      reply.header('cache-control', 'no-store');
+      return reply.send({
+        data: { items: await companyRuntime.projects.list() },
+        version: API_VERSION
+      });
+    });
+  }
   app.get('/api/v1/bootstrap', async (request, reply) => {
     let sessionId = sessions.read(request.headers.cookie);
     if (sessionId === undefined) {
@@ -297,7 +315,8 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
     reply.header('cache-control', 'no-store');
     const data = parseApiOutput(bootstrapDataSchema, {
-      csrfToken: csrf.issue(sessionId)
+      csrfToken: csrf.issue(sessionId),
+      runtimeMode
     });
     return parseApiOutput(bootstrapResponseSchema, { data, version: API_VERSION });
   });
