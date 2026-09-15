@@ -11,7 +11,9 @@ const skill = {
   id: 'a'.repeat(64),
   name: '公众号排版发布',
   description: '把文章排版成可发布的微信公众号 HTML。',
-  revision: 'b'.repeat(64)
+  revision: 'b'.repeat(64),
+  folderId: null,
+  folderName: null
 } as const;
 
 const detail: SkillDetail = {
@@ -28,6 +30,8 @@ const failed = <T,>(message = 'Skill 服务暂时不可用。'): ApiClientResult
 
 const list = vi.fn<(...args: [AbortSignal?]) => Promise<ApiClientResult<SkillsPageData>>>();
 const get = vi.fn<(...args: [string, AbortSignal?]) => Promise<ApiClientResult<SkillDetail>>>();
+const createFolder = vi.fn<(name: string) => Promise<ApiClientResult<{ id: string; name: string; skillCount: number }>>>();
+const move = vi.fn<(id: string, folderId: string | null) => Promise<ApiClientResult<SkillsPageData['items'][number]>>>();
 
 const runtime: {
   api: Pick<ReadConsoleApi, 'skills'>;
@@ -50,13 +54,14 @@ function renderPage() {
 }
 
 beforeEach(() => {
-  runtime.api = { skills: { list, get } };
-  list.mockResolvedValue(ok({ items: [skill] }));
+  runtime.api = { skills: { list, get, createFolder, move } };
+  list.mockResolvedValue(ok({ folders: [], items: [skill] }));
   get.mockResolvedValue(ok(detail));
 });
 
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(window, 'xiaozhaoDesktop');
   vi.clearAllMocks();
 });
 
@@ -91,7 +96,7 @@ describe('SkillsPage', () => {
   it('offers an explicit retry when the catalog cannot be read', async () => {
     const user = userEvent.setup();
     list.mockResolvedValueOnce(failed('本地 Skill 目录暂时无法读取。'));
-    list.mockResolvedValueOnce(ok({ items: [skill] }));
+    list.mockResolvedValueOnce(ok({ folders: [], items: [skill] }));
     renderPage();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('本地 Skill 目录暂时无法读取。');
@@ -127,7 +132,7 @@ describe('SkillsPage', () => {
   });
 
   it('explains where to add a skill when the catalog is empty', async () => {
-    list.mockResolvedValue(ok({ items: [] }));
+    list.mockResolvedValue(ok({ folders: [], items: [] }));
     renderPage();
 
     expect(await screen.findByText('在 .claude/skills 下添加 Skill 文件夹')).toBeVisible();
@@ -136,7 +141,7 @@ describe('SkillsPage', () => {
 
   it('does not show an empty success state when a refresh fails after an empty read', async () => {
     const user = userEvent.setup();
-    list.mockResolvedValueOnce(ok({ items: [] }));
+    list.mockResolvedValueOnce(ok({ folders: [], items: [] }));
     list.mockResolvedValueOnce(failed('刷新 Skill 目录失败。'));
     renderPage();
 
@@ -152,5 +157,62 @@ describe('SkillsPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('当前连接不提供 Skill 库。');
     expect(screen.getByText('请使用支持本地文件 Skill 的桌面连接。')).toBeVisible();
+  });
+
+  it('creates a folder, refreshes the catalog, and selects it', async () => {
+    const user = userEvent.setup();
+    const folder = { id: 'c'.repeat(64), name: '发布流程', skillCount: 0 };
+    createFolder.mockResolvedValue(ok(folder));
+    list.mockResolvedValueOnce(ok({ folders: [], items: [skill] })).mockResolvedValueOnce(ok({ folders: [folder], items: [] }));
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: '新建文件夹' }));
+    await user.type(screen.getByRole('textbox', { name: '文件夹名称' }), ' 发布流程 ');
+    await user.click(screen.getByRole('button', { name: '保存文件夹' }));
+    expect(createFolder).toHaveBeenCalledWith('发布流程');
+    expect(await screen.findByRole('button', { name: /发布流程/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('这里还没有 Skill')).toBeVisible();
+  });
+
+  it('moves a skill from the card menu and refreshes', async () => {
+    const user = userEvent.setup();
+    const folder = { id: 'c'.repeat(64), name: '发布流程', skillCount: 0 };
+    move.mockResolvedValue(ok({ ...skill, folderId: folder.id, folderName: folder.name }));
+    list.mockResolvedValueOnce(ok({ folders: [folder], items: [skill] })).mockResolvedValueOnce(ok({ folders: [folder], items: [] }));
+    renderPage();
+    const select = await screen.findByRole('combobox', { name: `移动到：${skill.name}` });
+    await user.selectOptions(select, folder.id);
+    expect(move).toHaveBeenCalledWith(skill.id, folder.id);
+    expect(await screen.findByText('当前还没有可浏览的 Skill。')).toBeVisible();
+  });
+
+  it('reveals a skill in Finder through the desktop bridge', async () => {
+    const user = userEvent.setup();
+    const revealSkill = vi.fn(async () => undefined);
+    vi.stubGlobal('xiaozhaoDesktop', { revealSkill });
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: `在 Finder 中打开：${skill.name}` }));
+    expect(revealSkill).toHaveBeenCalledWith(skill.id);
+  });
+
+  it('cancels folder creation and reports mutation failures', async () => {
+    const user = userEvent.setup();
+    createFolder.mockResolvedValue(failed('文件夹创建失败。'));
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: '新建文件夹' }));
+    await user.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.queryByRole('textbox', { name: '文件夹名称' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '新建文件夹' }));
+    await user.type(screen.getByRole('textbox', { name: '文件夹名称' }), '失败');
+    await user.click(screen.getByRole('button', { name: '保存文件夹' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('文件夹创建失败。');
+  });
+
+  it('keeps read-only mode when mutation API or bridge is unavailable', async () => {
+    runtime.api = { skills: { list, get } };
+    renderPage();
+    expect(await screen.findByRole('heading', { name: skill.name })).toBeVisible();
+    expect(screen.queryByRole('button', { name: '新建文件夹' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: `移动到：${skill.name}` })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /在 Finder 中打开/ })).not.toBeInTheDocument();
   });
 });
