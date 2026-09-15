@@ -54,15 +54,16 @@ function readyHealth() {
 
 describe('read console API facade', () => {
   it('reads the local Skill catalog with encoded detail ids and abort support', async () => {
-    const skill = { id: SHA, name: '写作/发布', description: '本地方法', revision: 'b'.repeat(64) };
+    const skill = { id: SHA, name: '写作/发布', description: '本地方法', revision: 'b'.repeat(64), folderId: null, folderName: null };
+    const folders = [{ id: 'd'.repeat(64), name: '内容', skillCount: 1 }];
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(success({ items: [skill] }))
+      .mockResolvedValueOnce(success({ folders, items: [skill] }))
       .mockResolvedValueOnce(success({ ...skill, markdown: '# 方法', references: ['README.md'] }));
     const api = createBrowserReadConsoleApi(fetchMock);
     const signal = new AbortController().signal;
 
     expect(api.skills).toBeDefined();
-    expect(await api.skills!.list(signal)).toEqual({ ok: true, value: { items: [skill] } });
+    expect(await api.skills!.list(signal)).toEqual({ ok: true, value: { folders, items: [skill] } });
     expect(await api.skills!.get('skill/with space', signal)).toMatchObject({ ok: true, value: { name: '写作/发布' } });
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/skills', expect.objectContaining({ method: 'GET', signal }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/skills/skill%2Fwith%20space', expect.objectContaining({ method: 'GET', signal }));

@@ -105,8 +105,8 @@ export interface ReadConsoleApi {
   readonly skills?: {
     list(signal?: AbortSignal): Promise<ApiClientResult<SkillsPage>>;
     get(id: string, signal?: AbortSignal): Promise<ApiClientResult<SkillDetail>>;
-    createFolder?(name: string): Promise<ApiClientResult<SkillFolder>>;
-    move?(id: string, folderId: string | null): Promise<ApiClientResult<SkillSummary>>;
+    createFolder?(name: string, signal?: AbortSignal): Promise<ApiClientResult<SkillFolder>>;
+    move?(id: string, folderId: string | null, signal?: AbortSignal): Promise<ApiClientResult<SkillSummary>>;
   };
   attachments?: {
     list(signal?: AbortSignal): Promise<ApiClientResult<{ attachments: Attachment[] }>>;
@@ -407,8 +407,8 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
     skills: {
       list: signal => requestData(fetcher, '/api/v1/skills', skillsResponseSchema, getInit(signal)),
       get: (id, signal) => requestData(fetcher, `/api/v1/skills/${encodeURIComponent(id)}`, skillResponseSchema, getInit(signal)),
-      createFolder: name => postWithCsrf('/api/v1/skills/folders', skillFolderResponseSchema, { name }),
-      move: (id, folderId) => postWithCsrf(`/api/v1/skills/${encodeURIComponent(id)}/move`, skillMoveResponseSchema, { folderId })
+      createFolder: (name, signal) => postWithCsrf('/api/v1/skills/folders', skillFolderResponseSchema, { name }, undefined, signal),
+      move: (id, folderId, signal) => postWithCsrf(`/api/v1/skills/${encodeURIComponent(id)}/move`, skillMoveResponseSchema, { folderId }, undefined, signal)
     },
     attachments: {
       list: signal => requestData(fetcher, '/api/v1/assistant/attachments', attachmentListResponseSchema, getInit(signal)),

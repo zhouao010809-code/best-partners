@@ -168,7 +168,7 @@ describe('SkillsPage', () => {
     await user.click(await screen.findByRole('button', { name: '新建文件夹' }));
     await user.type(screen.getByRole('textbox', { name: '文件夹名称' }), ' 发布流程 ');
     await user.click(screen.getByRole('button', { name: '保存文件夹' }));
-    expect(createFolder).toHaveBeenCalledWith('发布流程');
+    expect(createFolder).toHaveBeenCalledWith('发布流程', expect.any(AbortSignal));
     expect(await screen.findByRole('button', { name: /发布流程/ })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('这里还没有 Skill')).toBeVisible();
   });
@@ -181,7 +181,7 @@ describe('SkillsPage', () => {
     renderPage();
     const select = await screen.findByRole('combobox', { name: `移动到：${skill.name}` });
     await user.selectOptions(select, folder.id);
-    expect(move).toHaveBeenCalledWith(skill.id, folder.id);
+    expect(move).toHaveBeenCalledWith(skill.id, folder.id, expect.any(AbortSignal));
     expect(await screen.findByText('当前还没有可浏览的 Skill。')).toBeVisible();
   });
 
@@ -192,6 +192,28 @@ describe('SkillsPage', () => {
     renderPage();
     await user.click(await screen.findByRole('button', { name: `在 Finder 中打开：${skill.name}` }));
     expect(revealSkill).toHaveBeenCalledWith(skill.id);
+  });
+
+  it('reports Finder bridge failures and restores the retry button', async () => {
+    const user = userEvent.setup();
+    const revealSkill = vi.fn(async () => { throw new Error('bridge failed'); });
+    vi.stubGlobal('xiaozhaoDesktop', { revealSkill });
+    renderPage();
+    const button = await screen.findByRole('button', { name: `在 Finder 中打开：${skill.name}` });
+    await user.click(button);
+    expect(await screen.findByRole('status')).toHaveTextContent('无法在 Finder 中打开，请重试。');
+    expect(button).toBeEnabled();
+  });
+
+  it('keeps the original list and reports a move failure', async () => {
+    const user = userEvent.setup();
+    const folder = { id: 'c'.repeat(64), name: '发布流程', skillCount: 0 };
+    move.mockResolvedValue(failed('移动失败。'));
+    list.mockResolvedValue(ok({ folders: [folder], items: [skill] }));
+    renderPage();
+    await user.selectOptions(await screen.findByRole('combobox', { name: `移动到：${skill.name}` }), folder.id);
+    expect(await screen.findByRole('alert')).toHaveTextContent('移动失败，请刷新后重试。');
+    expect(screen.getByRole('heading', { name: skill.name })).toBeVisible();
   });
 
   it('cancels folder creation and reports mutation failures', async () => {

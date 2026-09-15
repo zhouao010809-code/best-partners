@@ -55,6 +55,7 @@ export function SkillsPage() {
   const [folderFormOpen, setFolderFormOpen] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [mutationError, setMutationError] = useState<string>();
+  const [folderSubmitting, setFolderSubmitting] = useState(false);
   const [movingId, setMovingId] = useState<string>();
   const pendingFolderIdRef = useRef<string | undefined>(undefined);
   const [revealingId, setRevealingId] = useState<string>();
@@ -64,6 +65,8 @@ export function SkillsPage() {
   const selectedButtonRef = useRef<HTMLButtonElement | null>(null);
   const detailRetryButtonRef = useRef<HTMLButtonElement | null>(null);
   const detailHeadingRef = useRef<HTMLHeadingElement>(null);
+  const mountedRef = useRef(true);
+  const mutationControllersRef = useRef<Set<AbortController>>(new Set());
 
   const refresh = useCallback(() => {
     setRefreshToken((value) => value + 1);
@@ -103,9 +106,15 @@ export function SkillsPage() {
     return () => controller.abort();
   }, [refreshToken, skillsApi]);
 
-  useEffect(() => () => {
-    listControllerRef.current?.abort();
-    detailControllerRef.current?.abort();
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      listControllerRef.current?.abort();
+      detailControllerRef.current?.abort();
+      mutationControllersRef.current.forEach((controller) => controller.abort());
+      mutationControllersRef.current.clear();
+    };
   }, []);
 
   useEffect(() => {
@@ -176,22 +185,42 @@ export function SkillsPage() {
   }
 
   async function submitFolder(): Promise<void> {
-    if (!skillsApi?.createFolder) return;
+    if (!skillsApi?.createFolder || folderSubmitting || !mountedRef.current) return;
     const validation = validateFolderName(folderName);
     if (validation) { setMutationError(validation); return; }
     setMutationError(undefined);
-    const result = await skillsApi.createFolder(folderName.trim());
-    if (!result.ok) { if (isCancelled(result)) return; setMutationError(result.state.message || '创建文件夹失败，请重试。'); return; }
-    setFolderFormOpen(false); setFolderName(''); pendingFolderIdRef.current = result.value.id; refresh();
+    setFolderSubmitting(true);
+    const controller = new AbortController();
+    mutationControllersRef.current.add(controller);
+    try {
+      const result = await skillsApi.createFolder(folderName.trim(), controller.signal);
+      if (!mountedRef.current) return;
+      if (!result.ok) { if (isCancelled(result)) return; setMutationError(result.state.message || '创建文件夹失败，请重试。'); return; }
+      setFolderFormOpen(false); setFolderName(''); pendingFolderIdRef.current = result.value.id; refresh();
+    } catch {
+      if (mountedRef.current) setMutationError('创建文件夹失败，请重试。');
+    } finally {
+      mutationControllersRef.current.delete(controller);
+      if (mountedRef.current) setFolderSubmitting(false);
+    }
   }
 
   async function moveSkill(skill: SkillSummary, target: string): Promise<void> {
     if (!skillsApi?.move || target === (skill.folderId ?? '')) return;
     setMovingId(skill.id); setMutationError(undefined);
-    const result = await skillsApi.move(skill.id, target || null);
-    setMovingId(undefined);
-    if (!result.ok) { if (isCancelled(result)) return; setMutationError('移动失败，请刷新后重试。'); return; }
-    refresh();
+    const controller = new AbortController();
+    mutationControllersRef.current.add(controller);
+    try {
+      const result = await skillsApi.move(skill.id, target || null, controller.signal);
+      if (!mountedRef.current) return;
+      setMovingId(undefined);
+      if (!result.ok) { if (isCancelled(result)) return; setMutationError('移动失败，请刷新后重试。'); return; }
+      refresh();
+    } catch {
+      if (mountedRef.current) { setMovingId(undefined); setMutationError('移动失败，请刷新后重试。'); }
+    } finally {
+      mutationControllersRef.current.delete(controller);
+    }
   }
 
   async function reveal(skillId: string): Promise<void> {
@@ -256,10 +285,11 @@ export function SkillsPage() {
       ) : (
         <>
           {mutationError && <div className="skills-mutation-error" role="alert">{mutationError}</div>}
+          {revealStatus && <div className="skills-mutation-status" role="status">{revealStatus}</div>}
           {folderFormOpen && <form className="skills-folder-form" onSubmit={(event) => { event.preventDefault(); void submitFolder(); }}>
             <label htmlFor="skills-folder-name">文件夹名称</label>
             <input id="skills-folder-name" value={folderName} onChange={(event) => setFolderName(event.target.value)} autoFocus />
-            <button type="submit">保存文件夹</button><button type="button" onClick={() => { setFolderFormOpen(false); setFolderName(''); setMutationError(undefined); }}>取消</button>
+            <button type="submit" disabled={folderSubmitting}>{folderSubmitting ? '正在保存…' : '保存文件夹'}</button><button type="button" disabled={folderSubmitting} onClick={() => { setFolderFormOpen(false); setFolderName(''); setMutationError(undefined); }}>取消</button>
           </form>}
           {listResource.status === 'ready' && listData !== undefined && <nav className="skills-folders" aria-label="Skill 文件夹">
             <button type="button" aria-pressed={folderId === null} onClick={() => setFolderId(null)}>未分类 <span>{listData.items.filter((item) => item.folderId === null).length}</span></button>
