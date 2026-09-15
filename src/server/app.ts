@@ -329,7 +329,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   registerIndexJobRoutes(app, indexJobs);
   if (companyRuntime !== undefined) {
     registerCompanyAuthRoutes(app, companyRuntime);
-    registerCompanyProjectRoutes(app, companyRuntime);
+    registerCompanyProjectRoutes(app, { ...companyRuntime, runtime: companyRuntime });
   }
   app.get('/api/v1/bootstrap', async (request, reply) => {
     let sessionId = sessions.read(request.headers.cookie);

@@ -325,12 +325,18 @@ export async function stageProjectSource(options: StageProjectSourceOptions): Pr
   const proposal = await scanProjectFolder(options.sourceRoot, options);
   const sourceRoot = proposal.sourceRoot;
   const incomingRoot = await assertRealDirectory(options.incomingRoot, 'Incoming root');
-  if (sameOrContainedBy(sourceRoot, incomingRoot) || sameOrContainedBy(incomingRoot, sourceRoot)) {
-    throw new Error('Source and incoming roots must be separate');
+  // A submitted folder may itself live below incoming (the normal desktop
+  // drop flow). Reject only a source that contains incoming, because that
+  // would make the staging destination part of the scanned tree.
+  if (sameOrContainedBy(sourceRoot, incomingRoot)) {
+    throw new Error('Source root must not contain incoming root');
   }
   const runId = assertCompanyRelativePath(options.runId);
   if (runId.includes('/')) throw new Error('runId must be a single path segment');
   const finalRoot = join(incomingRoot, runId);
+  if (sameOrContainedBy(sourceRoot, finalRoot) || sameOrContainedBy(finalRoot, sourceRoot)) {
+    throw new Error('Staging destination overlaps source root');
+  }
   const temporaryRoot = join(incomingRoot, `.${runId}.staging-${randomUUID()}`);
   const copyFile = options.copyFile ?? (async (source: string, destination: string) => copyFileFs(source, destination));
   let published = false;

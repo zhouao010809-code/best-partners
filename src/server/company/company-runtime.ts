@@ -8,6 +8,10 @@ import {
   type CompanyAuthService,
   type CompanyPrincipal
 } from './company-auth-service.js';
+import {
+  createProjectService,
+  type ProjectService
+} from './project-service.js';
 
 export interface CompanyPathResolver {
   readonly rootPath: string;
@@ -20,8 +24,11 @@ export interface CompanyDatabaseProjection {
 
 export interface CompanyProjectService {
   list(user?: CompanyPrincipal): Promise<readonly unknown[]>;
+  scan?: ProjectService['scan'];
+  getDraft?: ProjectService['getDraft'];
+  confirm?: ProjectService['confirm'];
+  get?: ProjectService['get'];
   create?(input: unknown, user: CompanyPrincipal): Promise<unknown>;
-  confirm?(projectId: string, user: CompanyPrincipal): Promise<unknown>;
   listProposals?(user: CompanyPrincipal): Promise<readonly unknown[]>;
   approveProposal?(proposalId: string, user: CompanyPrincipal): Promise<unknown>;
   updateWorkspacePath?(path: string, user: CompanyPrincipal): Promise<unknown>;
@@ -69,6 +76,20 @@ export function createCompanyRuntime(options: CompanyRuntimeOptions = {}): Compa
     skillsPath: join(rootPath, 'skills'),
     systemPath: join(rootPath, 'system')
   };
+  const projects: CompanyProjectService = options.projects
+    ?? (options.database === undefined
+      ? { list: async () => [] }
+      : createProjectService({
+        database: options.database,
+        workspace: {
+          id: workspace.id,
+          rootPath: workspace.rootPath,
+          incomingPath: workspace.incomingPath,
+          projectsPath: workspace.projectsPath,
+          skillsPath: workspace.skillsPath,
+          systemPath: workspace.systemPath
+        }
+      }));
   return {
     workspace,
     paths: { rootPath, resolve: relativePath => join(rootPath, assertCompanyRelativePath(relativePath)) },
@@ -81,6 +102,6 @@ export function createCompanyRuntime(options: CompanyRuntimeOptions = {}): Compa
           workspace: { id: workspace.id, displayName: workspace.displayName, rootPath }
         })
     ),
-    projects: options.projects ?? { list: async () => [] }
+    projects
   };
 }

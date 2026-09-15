@@ -4,14 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ensureCompanyWorkspace } from '../../src/server/company/company-paths.js';
 import { createProjectService, type ProjectService } from '../../src/server/company/project-service.js';
+import { createCompanyRuntime } from '../../src/server/company/company-runtime.js';
+import { buildServer } from '../../src/server/app.js';
 import { openStateKernel, type NormalStateKernel } from '../../src/server/db/database.js';
 
 const roots: string[] = [];
 const kernels: NormalStateKernel[] = [];
+const servers: Array<ReturnType<typeof buildServer>> = [];
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => server.close()));
   for (const kernel of kernels.splice(0)) kernel.close();
-  return Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
 async function fixture(): Promise<{
@@ -112,5 +116,59 @@ describe('company project service', () => {
     expect(database.prepare(`
       SELECT COUNT(*) AS count FROM company_project_events WHERE project_id = ? AND event_type = 'project_confirmed'
     `).get(results[0]!.project.id)).toEqual({ count: 1 });
+  });
+});
+
+describe('company project ingestion routes', () => {
+  it('scans, reads, and confirms a folder supplied through the incoming area', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'company-project-route-'));
+    roots.push(root);
+    const appDataDir = join(root, 'state');
+    const vaultRealRoot = join(root, 'vault');
+    const workspaceRoot = join(root, 'company-workspace');
+    const workspace = await ensureCompanyWorkspace(workspaceRoot, appDataDir);
+    const source = join(workspace.incomingPath, 'upload-1');
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, '项目说明.md'), '客户名称：明德培训');
+    await mkdir(vaultRealRoot, { recursive: true });
+    const kernel = openStateKernel({ appDataDir, vaultRealRoot });
+    if (kernel.mode !== 'normal') throw new Error('expected normal kernel');
+    kernels.push(kernel);
+    const runtime = createCompanyRuntime({ database: kernel.db, workspaceRoot });
+    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime });
+    servers.push(server);
+    const baseHeaders = { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' };
+    const bootstrap = await server.inject({ method: 'POST', url: '/api/company/v1/auth/bootstrap', headers: baseHeaders, payload: {
+      operator: { displayName: 'Operator', password: 'operator-secret' },
+      reviewer: { displayName: 'Reviewer', password: 'reviewer-secret' }
+    } });
+    expect(bootstrap.statusCode).toBe(200);
+    const login = await server.inject({ method: 'POST', url: '/api/company/v1/auth/login', headers: baseHeaders, payload: {
+      displayName: 'Operator', password: 'operator-secret'
+    } });
+    expect(login.statusCode).toBe(200);
+    const setCookie = login.headers['set-cookie'];
+    if (typeof setCookie !== 'string') throw new Error('missing company cookie');
+    const headers = {
+      ...baseHeaders,
+      cookie: setCookie.split(';', 1)[0],
+      'x-csrf-token': login.json().data.csrfToken as string
+    };
+    const scan = await server.inject({ method: 'POST', url: '/api/company/v1/projects/scan', headers, payload: { incomingPath: 'incoming/upload-1' } });
+    expect(scan.statusCode).toBe(200);
+    const draft = scan.json().data;
+    expect(draft.proposal.suggestedClientName).toBe('明德培训');
+    const read = await server.inject({ url: `/api/company/v1/projects/drafts/${draft.run.id}`, headers });
+    expect(read.statusCode).toBe(200);
+    const confirm = await server.inject({ method: 'POST', url: `/api/company/v1/projects/drafts/${draft.run.id}/confirm`, headers, payload: {
+      name: '明德培训代运营', clientName: '明德培训', status: 'active',
+      sourceSha256: draft.proposal.sourceSha256, selectedSkillIds: []
+    } });
+    expect(confirm.statusCode).toBe(200);
+    const projectId = confirm.json().data.project.id as string;
+    const detail = await server.inject({ url: `/api/company/v1/projects/${projectId}`, headers });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().data.status).toBe('active');
   });
 });

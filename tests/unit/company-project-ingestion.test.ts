@@ -102,6 +102,18 @@ describe('company project ingestion', () => {
     expect(await readdir(incoming)).toEqual(['run-1']);
   });
 
+  it('allows a submitted child folder inside incoming but never scans incoming itself', async () => {
+    const base = await fixture();
+    const incoming = join(base, 'incoming');
+    const source = join(incoming, 'upload-1');
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, '说明.md'), '内容');
+
+    const staged = await stageProjectSource({ sourceRoot: source, incomingRoot: incoming, runId: 'run-1' });
+    expect(await readFile(join(staged.stagingRoot, '说明.md'), 'utf8')).toBe('内容');
+    await expect(stageProjectSource({ sourceRoot: incoming, incomingRoot: incoming, runId: 'run-2' })).rejects.toThrow(/contain incoming|overlap/i);
+  });
+
   it('cleans only the run staging directory when a copy fails', async () => {
     const base = await fixture();
     const source = join(base, 'source');

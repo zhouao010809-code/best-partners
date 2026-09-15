@@ -35,9 +35,20 @@ function fixture() {
     database: db,
     workspaceRoot: '/srv/company-workspace',
     projects: {
-      list: async () => [{ id: 'project-1' }],
+      list: async () => [{
+        id: 'project-1',
+        workspaceId: 'company',
+        name: 'Security fixture project',
+        status: 'draft',
+        projectRoot: '/srv/company-workspace/projects/project-1',
+        sourceRoot: '/srv/company-workspace/incoming/project-1',
+        configSha256: 'a'.repeat(64),
+        confidence: {},
+        createdAt: '2026-09-16T00:00:00.000Z',
+        updatedAt: '2026-09-16T00:00:00.000Z',
+        dataCoverage: 'not_configured'
+      }],
       create: async (_input, user) => { calls.push(`create:${user.role}`); return { id: 'project-1' }; },
-      confirm: async (id, user) => { calls.push(`confirm:${user.role}:${id}`); return { id }; },
       listProposals: async () => [{ id: 'proposal-1' }],
       approveProposal: async (id, user) => { calls.push(`approve:${user.role}:${id}`); return { id }; },
       updateWorkspacePath: async (path, user) => { calls.push(`path:${user.role}:${path}`); return { path }; }
@@ -137,7 +148,10 @@ describe('company LAN authority and namespace security', () => {
     });
     expect(session.statusCode).toBe(200);
     expect(projects.statusCode).toBe(200);
-    expect(projects.json()).toEqual({ data: { items: [{ id: 'project-1' }] }, version: 1 });
+    expect(projects.json()).toMatchObject({
+      data: { items: [{ id: 'project-1', status: 'draft', dataCoverage: 'not_configured' }] },
+      version: 1
+    });
 
     const missingCsrf = await server.inject({
       method: 'POST', url: '/api/company/v1/projects', headers: headers({ cookie: operator.cookie }), payload: { name: 'A' }
