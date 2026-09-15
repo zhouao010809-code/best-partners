@@ -33,7 +33,9 @@ function isUnspecifiedIp(host: string): boolean {
     if (!dotted?.includes('.')) return parts;
     const octets = dotted.split('.').map(Number);
     if (octets.length !== 4 || octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
-    return [...parts.slice(0, -1), ((octets[0] << 8) | octets[1]).toString(16), ((octets[2] << 8) | octets[3]).toString(16)];
+    const [first, second, third, fourth] = octets;
+    if (first === undefined || second === undefined || third === undefined || fourth === undefined) return false;
+    return [...parts.slice(0, -1), ((first << 8) | second).toString(16), ((third << 8) | fourth).toString(16)];
   };
   const expandedLeft = expandDotted(left);
   const expandedRight = expandDotted(right);
