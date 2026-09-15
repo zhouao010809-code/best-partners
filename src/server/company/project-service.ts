@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   copyFile,
+  link,
   lstat,
   mkdir,
   readFile,
@@ -12,7 +13,7 @@ import {
 import { basename, dirname, join, relative, sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import { ulid } from 'ulid';
-import { stringify } from 'yaml';
+import { parse as parseYaml, stringify } from 'yaml';
 import { PublicApiError } from '../../shared/api/errors.js';
 import type { CompanyProjectConfig } from '../../shared/company/project.js';
 import {
@@ -47,6 +48,8 @@ export interface ProjectServiceOptions {
   readonly stageProjectSource?: (options: StageProjectSourceOptions) => ReturnType<typeof stageProjectSource>;
   /** A testable interruption point before files are published. */
   readonly beforeConfirm?: (input: { readonly runId: string; readonly projectId: string }) => void | Promise<void>;
+  /** A testable interruption point after files are published but before DB confirmation. */
+  readonly afterPublish?: (input: { readonly runId: string; readonly projectId: string }) => void | Promise<void>;
   readonly refreshIndex?: () => void | Promise<void>;
 }
 
@@ -302,11 +305,93 @@ async function isCompletePublishedTree(root: string, proposal: ProjectScanPropos
         if (!info.isDirectory() || info.isSymbolicLink()) return false;
       } else if (!info.isFile() || info.isSymbolicLink()) {
         return false;
+      } else if (entry.sha256 !== undefined) {
+        if (sha256(await readFile(join(root, 'raw', ...entry.relativePath.split('/')))) !== entry.sha256) return false;
       }
     }
     return true;
   } catch {
     return false;
+  }
+}
+
+function sameFileIdentity(left: Awaited<ReturnType<typeof lstat>>, right: Awaited<ReturnType<typeof lstat>>): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function stableNameCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+async function publishProjectDirectory(sourceRoot: string, targetRoot: string): Promise<void> {
+  const children = (await readdir(sourceRoot, { withFileTypes: true }))
+    .sort((left, right) => {
+      // The manifest is the completion marker and must be linked last.
+      if (left.name === 'source-manifest.json') return 1;
+      if (right.name === 'source-manifest.json') return -1;
+      return stableNameCompare(left.name, right.name);
+    });
+  for (const child of children) {
+    const source = join(sourceRoot, child.name);
+    const target = join(targetRoot, child.name);
+    const info = await lstat(source);
+    if (info.isSymbolicLink()) throw new Error(`Project publish contains a symlink: ${child.name}`);
+    if (info.isDirectory()) {
+      await mkdir(target, { recursive: false, mode: 0o700 });
+      await publishProjectDirectory(source, target);
+    } else if (info.isFile()) {
+      await link(source, target);
+    } else {
+      throw new Error(`Project publish contains an unsupported entry: ${child.name}`);
+    }
+  }
+}
+
+/** Publish without replacing a path another confirmation may have claimed. */
+async function publishProjectTreeNoReplace(sourceRoot: string, targetRoot: string): Promise<void> {
+  await mkdir(targetRoot, { recursive: false, mode: 0o700 });
+  const reservation = await lstat(targetRoot);
+  try {
+    await publishProjectDirectory(sourceRoot, targetRoot);
+  } catch (error) {
+    try {
+      const current = await lstat(targetRoot);
+      if (sameFileIdentity(current, reservation)) await rm(targetRoot, { recursive: true, force: true });
+    } catch {
+      // Do not remove a path that no longer belongs to this publish attempt.
+    }
+    throw error;
+  }
+}
+
+function configFieldEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+async function assertPublishedConfiguration(
+  root: string,
+  expected: CompanyProjectConfig
+): Promise<void> {
+  let actual: unknown;
+  try {
+    actual = parseYaml(await readFile(join(root, '项目配置.yaml'), 'utf8'));
+  } catch {
+    fail('COMPANY_PROJECT_ROOT_CONFLICT', 'Project configuration is unreadable', 409);
+  }
+  if (actual === null || typeof actual !== 'object' || Array.isArray(actual)) {
+    fail('COMPANY_PROJECT_ROOT_CONFLICT', 'Project configuration is invalid', 409);
+  }
+  const candidate = actual as Partial<CompanyProjectConfig>;
+  const fields: readonly (keyof CompanyProjectConfig)[] = [
+    'id', 'name', 'status', 'sourceRoot', 'projectRoot', 'selectedSkillIds', 'platformAccountRefs', 'serviceStart', 'serviceEnd'
+  ];
+  for (const field of fields) {
+    if (!configFieldEqual(candidate[field], expected[field])) {
+      fail('COMPANY_PROJECT_ROOT_CONFLICT', 'Project configuration does not match the pending confirmation', 409);
+    }
+  }
+  if (!configFieldEqual(candidate.clientName, expected.clientName)) {
+    fail('COMPANY_PROJECT_ROOT_CONFLICT', 'Project configuration does not match the pending confirmation', 409);
   }
 }
 
@@ -476,6 +561,22 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     if (published && !(await isCompletePublishedTree(finalRoot, runProjection(run).proposal))) {
       fail('COMPANY_PROJECT_ROOT_CONFLICT', 'Project destination already exists but is incomplete', 409);
     }
+    if (published) {
+      const previous = findProject.get(projectId, options.workspace.id) as ProjectRow | undefined;
+      if (previous === undefined) fail('COMPANY_PROJECT_NOT_FOUND', 'Project not found', 404);
+      await assertPublishedConfiguration(finalRoot, projectConfig({
+        project: previous,
+        name,
+        ...(input.clientName === undefined ? {} : { clientName: input.clientName }),
+        status: input.status,
+        sourceRoot: runProjection(run).proposal.sourceRoot,
+        projectRoot: finalRoot,
+        selectedSkillIds: input.selectedSkillIds ?? runProjection(run).proposal.selectedSkillIds,
+        ...(input.serviceStart === undefined ? {} : { serviceStart: input.serviceStart }),
+        ...(input.serviceEnd === undefined ? {} : { serviceEnd: input.serviceEnd }),
+        now: timestamp
+      }));
+    }
     try {
       if (!published) {
         await mkdir(temporaryRoot, { recursive: false, mode: 0o700 });
@@ -496,18 +597,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         await writeAtomic(join(temporaryRoot, '项目配置.yaml'), stringify(config));
         await writeAtomic(join(temporaryRoot, '项目说明.md'), `# ${name}\n\n- 项目状态：${input.status}\n- 来源：${runProjection(run).proposal.sourceRoot}\n`);
         try {
-          await rename(temporaryRoot, finalRoot);
+          await publishProjectTreeNoReplace(temporaryRoot, finalRoot);
           published = true;
+          await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
         } catch (error) {
-          if (!hasCode(error, 'EEXIST')) throw error;
-          const finalInfo = await lstat(finalRoot);
-          if (finalInfo.isSymbolicLink() || !finalInfo.isDirectory()) throw error;
-          if (!(await isCompletePublishedTree(finalRoot, runProjection(run).proposal))) {
+          if (hasCode(error, 'EEXIST')) {
             fail('COMPANY_PROJECT_ROOT_CONFLICT', 'Project destination was claimed by another publish', 409);
           }
-          published = true;
+          throw error;
         }
       }
+
+      await options.afterPublish?.({ runId, projectId });
 
       const operationId = makeOperationId();
       const configBytes = await readFile(join(finalRoot, '项目配置.yaml'));
