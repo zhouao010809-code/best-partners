@@ -139,7 +139,7 @@ describe('SQLite state kernel', () => {
     const input = makeRoots();
     const first = requireNormal(input);
 
-    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16].map((version) => ({ version }));
+    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17].map((version) => ({ version }));
     expect(first.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
       .toEqual(expectedVersions);
     const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
@@ -171,6 +171,15 @@ describe('SQLite state kernel', () => {
       .toContain('preview_token');
     expect((first.db.pragma('table_info(personal_ingestion_batches)') as Array<{ name: string }>).map((column) => column.name))
       .toContain('plan_json');
+    expect(first.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'company_%' ORDER BY name").all())
+      .toEqual([
+        { name: 'company_project_events' },
+        { name: 'company_project_ingestion_runs' },
+        { name: 'company_projects' },
+        { name: 'company_sessions' },
+        { name: 'company_users' },
+        { name: 'company_workspaces' }
+      ]);
     first.close();
 
     const second = requireNormal(input);
@@ -185,6 +194,40 @@ describe('SQLite state kernel', () => {
     expect(() => insertRun(kernel.db, { id: 'run-2' })).toThrow(/UNIQUE/);
     insertRun(kernel.db, { id: 'run-3', state: 'completed' });
     insertRun(kernel.db, { id: 'run-4', state: 'invalidated' });
+  });
+
+  it('enforces company workspace projection constraints without changing personal tables', () => {
+    const kernel = requireNormal(makeRoots());
+    const tableColumns = (table: string) => (kernel.db.pragma(`table_info(${table})`) as Array<{ name: string }>).map(column => column.name);
+    expect(tableColumns('company_workspaces')).toEqual(['id', 'display_name', 'root_path', 'created_at', 'updated_at']);
+    expect(tableColumns('company_users')).toEqual(['id', 'workspace_id', 'display_name', 'role', 'password_salt', 'password_hash', 'disabled', 'created_at', 'updated_at']);
+    expect(tableColumns('company_sessions')).toEqual(['id_hash', 'user_id', 'expires_at', 'created_at', 'last_seen_at']);
+    expect(tableColumns('company_projects')).toEqual(['id', 'workspace_id', 'name', 'client_name', 'status', 'project_root', 'source_root', 'config_sha256', 'confidence_json', 'created_at', 'updated_at']);
+    expect(tableColumns('company_project_ingestion_runs')).toEqual(['id', 'project_id', 'source_sha256', 'state', 'proposal_json', 'operation_id', 'created_at', 'updated_at']);
+    expect(tableColumns('company_project_events')).toEqual(['id', 'project_id', 'actor_id', 'event_type', 'payload_json', 'created_at']);
+
+    const now = '2026-09-16T00:00:00.000Z';
+    kernel.db.prepare('INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run('workspace-1', 'Workspace', '/srv/workspace', now, now);
+    expect(() => kernel.db.prepare('INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .run('workspace-2', 'Other', '/srv/workspace', now, now)).toThrow(/UNIQUE/);
+    kernel.db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('user-1', 'workspace-1', 'Owner', 'owner', 'salt', 'hash', now, now);
+    expect(() => kernel.db.prepare('INSERT INTO company_users (id, workspace_id, display_name, role, password_salt, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('user-2', 'workspace-1', 'Reviewer', 'reviewer', 'salt', 'hash', now, now)).not.toThrow();
+    kernel.db.prepare('INSERT INTO company_projects (id, workspace_id, name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('project-1', 'workspace-1', 'Project', 'draft', '/srv/workspace/projects/p1', '/srv/workspace/incoming/p1', 'sha', '{}', now, now);
+    expect(() => kernel.db.prepare('INSERT INTO company_projects (id, workspace_id, name, status, project_root, source_root, config_sha256, confidence_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('project-2', 'workspace-1', 'Duplicate root', 'active', '/srv/workspace/projects/p1', '/srv/workspace/incoming/p2', 'sha2', '{}', now, now)).toThrow(/UNIQUE/);
+    const insertRun = kernel.db.prepare('INSERT INTO company_project_ingestion_runs (id, project_id, source_sha256, state, proposal_json, operation_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    insertRun.run('run-1', 'project-1', 'source-sha', 'scanning', '{}', 'op-1', now, now);
+    expect(() => insertRun.run('run-2', 'project-1', 'source-sha', 'proposed', '{}', 'op-2', now, now)).toThrow(/UNIQUE/);
+    insertRun.run('run-3', 'project-1', 'source-sha', 'failed', '{}', 'op-3', now, now);
+    expect(() => insertRun.run('run-4', 'project-1', 'source-sha', 'not-a-state', '{}', 'op-4', now, now)).toThrow(/CHECK/);
+    expect(() => kernel.db.prepare('INSERT INTO company_project_events (id, project_id, actor_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('event-1', 'missing-project', null, 'system', '{}', now)).toThrow(/FOREIGN KEY/);
+    expect(kernel.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'extraction_runs'").get())
+      .toEqual({ name: 'extraction_runs' });
   });
 
   it('rejects duplicate idempotency keys', () => {
