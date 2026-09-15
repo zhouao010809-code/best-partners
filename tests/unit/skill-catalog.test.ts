@@ -16,6 +16,13 @@ async function fixture(): Promise<string> {
   return root;
 }
 
+async function skillRootFixture(): Promise<string> {
+  const vault = await fixture();
+  const root = join(vault, '.claude', 'skills');
+  await mkdir(root, { recursive: true });
+  return root;
+}
+
 async function skill(root: string, name: string, body: string): Promise<void> {
   const directory = join(root, name);
   await mkdir(directory, { recursive: true });
@@ -23,7 +30,7 @@ async function skill(root: string, name: string, body: string): Promise<void> {
 }
 
 it('lists one-level folders, preserves empty folders, and moves without changing skill id/content', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   const service = createSkillCatalogService({ skillsRoot: root });
   await service.createFolder('writing');
   await skill(join(root, 'writing'), 'writer', '# Writer');
@@ -40,7 +47,7 @@ it('lists one-level folders, preserves empty folders, and moves without changing
 });
 
 it('rejects invalid and duplicate folder operations', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   const service = createSkillCatalogService({ skillsRoot: root });
   await expect(service.createFolder('.hidden')).rejects.toMatchObject({ code: 'SKILL_FOLDER_INVALID' });
   await expect(service.createFolder('scripts')).rejects.toMatchObject({ code: 'SKILL_FOLDER_INVALID' });
@@ -50,7 +57,7 @@ it('rejects invalid and duplicate folder operations', async () => {
 });
 
 it('resolves only validated direct SKILL.md sources and rejects destination conflicts', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   const service = createSkillCatalogService({ skillsRoot: root });
   await service.createFolder('docs');
   await skill(root, 'writer', '# Root writer');
@@ -81,8 +88,18 @@ it('creates the configured catalog root when the .claude and skills directories 
   });
 });
 
+it('rejects a catalog configured outside .claude/skills', async () => {
+  const vault = await fixture();
+  const other = join(vault, 'other-dir');
+  await mkdir(other);
+  await expect(createSkillCatalogService({ skillsRoot: other }).list()).rejects.toMatchObject({
+    code: 'SKILL_CATALOG_UNAVAILABLE',
+    statusCode: 503
+  });
+});
+
 it('ignores symlinked custom folders and does not traverse them', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   const outside = await fixture();
   await skill(outside, 'outside', '# Outside');
   await symlink(outside, join(root, 'linked-folder'));
@@ -93,7 +110,7 @@ it('ignores symlinked custom folders and does not traverse them', async () => {
 });
 
 it('discovers only safe direct skills, keeps ids opaque, and returns bounded detail', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   await skill(root, 'writer', `---\nname: Writer\ndescription: Drafts clear copy\n---\n\n# Writer\n\nUse the method.\n`);
   await writeFile(join(root, 'writer', 'REFERENCE.md'), '# Reference\n');
   await writeFile(join(root, 'writer', 'notes.txt'), 'not exposed');
@@ -128,7 +145,7 @@ it('discovers only safe direct skills, keeps ids opaque, and returns bounded det
 });
 
 it('keeps canonically equivalent directory names on distinct opaque ids', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   const decomposed = 'e\u0301';
   const composed = 'é';
   await skill(root, decomposed, '# Decomposed');
@@ -143,7 +160,7 @@ it('keeps canonically equivalent directory names on distinct opaque ids', async 
 });
 
 it('rejects traversal, absolute, malformed, and unknown ids as public errors', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   await skill(root, 'writer', '# Writer');
   const service = createSkillCatalogService({ skillsRoot: root });
   for (const id of ['../writer', '/tmp/writer', 'not-an-id']) {
@@ -153,7 +170,7 @@ it('rejects traversal, absolute, malformed, and unknown ids as public errors', a
 });
 
 it('reports an unavailable catalog when the fixed root is absent or unsafe', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   const service = createSkillCatalogService({ skillsRoot: join(root, 'missing') });
   await expect(service.list()).rejects.toMatchObject({ code: 'SKILL_CATALOG_UNAVAILABLE', statusCode: 503 });
 
@@ -192,7 +209,7 @@ it('rejects a symlink at the catalog root itself', async () => {
 });
 
 it('omits symlinked, oversized, and non-regular skill files', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   const valid = join(root, 'valid');
   await mkdir(valid);
   await writeFile(join(valid, 'SKILL.md'), '# Valid');
@@ -206,7 +223,7 @@ it('omits symlinked, oversized, and non-regular skill files', async () => {
 });
 
 it('keeps service errors typed rather than leaking filesystem paths', async () => {
-  const root = await fixture();
+  const root = await skillRootFixture();
   const service = createSkillCatalogService({ skillsRoot: root });
   try {
     await service.get('../secret');

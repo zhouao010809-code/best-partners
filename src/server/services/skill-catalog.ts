@@ -128,7 +128,12 @@ export function createSkillCatalogService(input: {
   const configuredParent = dirname(configuredRoot);
   const configuredVault = dirname(configuredParent);
 
+  function hasCanonicalNames(): boolean {
+    return basename(configuredParent) === '.claude' && basename(configuredRoot) === 'skills';
+  }
+
   async function fixedRoot(): Promise<string> {
+    if (!hasCanonicalNames()) throw unavailable();
     try {
       const [vaultStat, parentStat, rootStat] = await Promise.all([
         lstat(configuredVault),
@@ -180,6 +185,7 @@ export function createSkillCatalogService(input: {
   }
 
   async function ensureRoot(): Promise<string> {
+    if (!hasCanonicalNames()) throw unavailable();
     try {
       const vaultStat = await lstat(configuredVault);
       if (!vaultStat.isDirectory() || vaultStat.isSymbolicLink()) {
