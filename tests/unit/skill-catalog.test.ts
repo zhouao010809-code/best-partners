@@ -22,6 +22,33 @@ async function skill(root: string, name: string, body: string): Promise<void> {
   await writeFile(join(directory, 'SKILL.md'), body);
 }
 
+it('lists one-level folders, preserves empty folders, and moves without changing skill id/content', async () => {
+  const root = await fixture();
+  const service = createSkillCatalogService({ skillsRoot: root });
+  await service.createFolder('writing');
+  await skill(join(root, 'writing'), 'writer', '# Writer');
+  await mkdir(join(root, 'writing', 'nested'));
+  await skill(join(root, 'writing', 'nested'), 'ignored', '# Ignored');
+  await skill(root, 'root-skill', '# Root');
+  const before = await service.list();
+  expect(before.folders).toEqual([{ id: expect.stringMatching(/^[a-f0-9]{64}$/), name: 'writing', skillCount: 1 }]);
+  const writer = before.items.find((item) => item.name === 'writer')!;
+  const bytes = await (await import('node:fs/promises')).readFile(join(root, 'writing', 'writer', 'SKILL.md'));
+  await service.move(writer.id, null);
+  await expect((await import('node:fs/promises')).readFile(join(root, 'writer', 'SKILL.md'))).resolves.toEqual(bytes);
+  await expect(service.get(writer.id)).resolves.toMatchObject({ id: writer.id, folderId: null, folderName: null });
+});
+
+it('rejects invalid and duplicate folder operations', async () => {
+  const root = await fixture();
+  const service = createSkillCatalogService({ skillsRoot: root });
+  await expect(service.createFolder('.hidden')).rejects.toMatchObject({ code: 'SKILL_FOLDER_INVALID' });
+  await expect(service.createFolder('scripts')).rejects.toMatchObject({ code: 'SKILL_FOLDER_INVALID' });
+  await service.createFolder('docs');
+  await expect(service.createFolder('docs')).rejects.toMatchObject({ code: 'SKILL_FOLDER_CONFLICT' });
+  await expect(service.move('a'.repeat(64), null)).rejects.toMatchObject({ code: 'SKILL_NOT_FOUND' });
+});
+
 it('discovers only safe direct skills, keeps ids opaque, and returns bounded detail', async () => {
   const root = await fixture();
   await skill(root, 'writer', `---\nname: Writer\ndescription: Drafts clear copy\n---\n\n# Writer\n\nUse the method.\n`);
@@ -38,7 +65,8 @@ it('discovers only safe direct skills, keeps ids opaque, and returns bounded det
   await symlink(join(outside, 'outside'), join(root, 'linked'));
 
   const service = createSkillCatalogService({ skillsRoot: root });
-  const items = await service.list();
+  const page = await service.list();
+  const items = page.items;
   expect(items).toHaveLength(2);
   expect(items.map((item) => item.name)).toEqual(['fallback', 'Writer']);
   expect(items.some((item) => ['scripts', 'env'].includes(item.name))).toBe(false);
@@ -63,7 +91,7 @@ it('keeps canonically equivalent directory names on distinct opaque ids', async 
   await skill(root, decomposed, '# Decomposed');
   await skill(root, composed, '# Composed');
 
-  const items = await createSkillCatalogService({ skillsRoot: root }).list();
+  const items = (await createSkillCatalogService({ skillsRoot: root }).list()).items;
   // APFS may normalize the two directory names to one entry. The ID
   // invariant is still asserted directly, and on a non-normalizing filesystem
   // the catalog must expose both entries without a collision.
@@ -131,7 +159,7 @@ it('omits symlinked, oversized, and non-regular skill files', async () => {
   const outside = await fixture();
   await writeFile(join(outside, 'SKILL.md'), '# Outside');
   await symlink(join(outside, 'SKILL.md'), join(root, 'valid', 'LINK.md'));
-  await expect(createSkillCatalogService({ skillsRoot: root }).list()).resolves.toHaveLength(1);
+  await expect(createSkillCatalogService({ skillsRoot: root }).list()).resolves.toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ name: 'valid' })]) });
 });
 
 it('keeps service errors typed rather than leaking filesystem paths', async () => {

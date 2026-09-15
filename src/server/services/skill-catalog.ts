@@ -1,236 +1,36 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open, readdir, realpath } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { lstat, mkdir, open, readdir, realpath, rename } from 'node:fs/promises';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { PublicApiError } from '../../shared/api/errors.js';
-import type { SkillDetail, SkillSummary } from '../../shared/api/skills.js';
+import type { SkillDetail, SkillFolder, SkillSummary, SkillsPage } from '../../shared/api/skills.js';
 import { parseFrontmatter } from '../rules/frontmatter.js';
 
-const MAX_SKILL_BYTES = 256 * 1024;
-const SKILL_FILE = 'SKILL.md';
-const DEFAULT_DESCRIPTION = 'No description provided.';
-const MAX_NAME_LENGTH = 256;
-const MAX_DESCRIPTION_LENGTH = 10_000;
-const MAX_REFERENCE_COUNT = 1_000;
-const RESERVED_DIRECTORY_NAMES = new Set(['env', 'scripts']);
-
-export interface SkillCatalogService {
-  list(): Promise<SkillSummary[]>;
-  get(id: string): Promise<SkillDetail>;
-}
-
-function unavailable(): PublicApiError {
-  return new PublicApiError('SKILL_CATALOG_UNAVAILABLE', 'Skill catalog is unavailable.', 503);
-}
-
-function invalidId(): PublicApiError {
-  return new PublicApiError('SKILL_ID_INVALID', 'Skill id is invalid.', 400);
-}
-
-function notFound(): PublicApiError {
-  return new PublicApiError('SKILL_NOT_FOUND', 'Skill was not found.', 404);
-}
-
-function safeDirectoryName(name: string): boolean {
-  return name.length > 0
-    && !name.startsWith('.')
-    && name !== '.'
-    && name !== '..'
-    && !RESERVED_DIRECTORY_NAMES.has(name.toLowerCase())
-    && !/[\\/\0\u0000-\u001f\u007f]/u.test(name)
-    && Buffer.byteLength(name, 'utf8') <= 255;
-}
-
-function digest(value: Uint8Array): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-export function skillId(name: string): string {
-  // Keep the raw directory bytes. Unicode-equivalent names can coexist on
-  // filesystems that do not normalize filenames, and must therefore retain
-  // distinct opaque IDs.
-  return digest(Buffer.from(name, 'utf8'));
-}
-
-function field(value: unknown, fallback: string, maxLength: number): string {
-  if (typeof value !== 'string') return fallback;
-  const normalized = value.replace(/\s+/gu, ' ').trim();
-  return normalized.length > 0
-    && normalized.length <= maxLength
-    && !/[\u0000-\u001f\u007f]/u.test(normalized)
-    ? normalized
-    : fallback;
-}
-
-async function readBoundedRegularFile(path: string): Promise<Buffer | undefined> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    // O_NOFOLLOW prevents a final-path symlink from being opened if the tree
-    // changes between lstat and open.
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > MAX_SKILL_BYTES) return undefined;
-    const bytes = Buffer.alloc(stat.size);
-    let offset = 0;
-    while (offset < bytes.byteLength) {
-      const result = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
-      if (result.bytesRead === 0) return undefined;
-      offset += result.bytesRead;
-    }
-    return bytes;
-  } catch {
-    return undefined;
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
-type DiscoveredSkill = {
-  readonly directoryName: string;
-  readonly directoryPath: string;
-  readonly directoryRealPath: string;
-  readonly bytes: Buffer;
-};
-
+const MAX_SKILL_BYTES = 256 * 1024; const SKILL_FILE = 'SKILL.md'; const DEFAULT_DESCRIPTION = 'No description provided.';
+const RESERVED_DIRECTORY_NAMES = new Set(['env', 'scripts']); const MAX_REFERENCE_COUNT = 1_000;
+export interface SkillCatalogService { list(): Promise<SkillsPage>; get(id: string): Promise<SkillDetail>; createFolder(name: string): Promise<SkillFolder>; move(skillId: string, folderId: string | null): Promise<SkillDetail>; resolveSource(skillId: string): Promise<string>; }
+const err = (code: string, message: string, status = 400) => new PublicApiError(code, message, status);
+const unavailable = () => err('SKILL_CATALOG_UNAVAILABLE', 'Skill catalog is unavailable.', 503);
+const safeName = (name: string) => name.length > 0 && !name.startsWith('.') && name !== '.' && name !== '..' && !RESERVED_DIRECTORY_NAMES.has(name.toLowerCase()) && !/[\\/\0\u0000-\u001f\u007f]/u.test(name) && Buffer.byteLength(name) <= 255;
+const digest = (v: Uint8Array) => createHash('sha256').update(v).digest('hex');
+export const skillId = (name: string) => digest(Buffer.from(name, 'utf8'));
+const folderId = (name: string) => digest(Buffer.from(name, 'utf8'));
+const field = (v: unknown, fallback: string, max: number) => { if (typeof v !== 'string') return fallback; const x = v.replace(/\s+/gu, ' ').trim(); return x && x.length <= max && !/[\u0000-\u001f\u007f]/u.test(x) ? x : fallback; };
+async function readFile(path: string): Promise<Buffer | undefined> { let h: Awaited<ReturnType<typeof open>> | undefined; try { h = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); const s = await h.stat(); if (!s.isFile() || s.size > MAX_SKILL_BYTES) return undefined; const b = Buffer.alloc(s.size); let o = 0; while (o < b.length) { const r = await h.read(b, o, b.length - o, o); if (!r.bytesRead) return undefined; o += r.bytesRead; } return b; } catch { return undefined; } finally { await h?.close().catch(() => undefined); } }
+type Skill = { directoryName: string; directoryPath: string; directoryRealPath: string; bytes: Buffer; folder: SkillFolder | null };
 export function createSkillCatalogService(input: { skillsRoot: string }): SkillCatalogService {
-  const configuredRoot = resolve(input.skillsRoot);
-  // The production path is `<vault>/.claude/skills`. Treat the vault and the
-  // two catalog components as the trust boundary. Ancestors above the vault
-  // may contain harmless OS aliases (for example `/var` -> `/private/var`),
-  // so compare against a canonicalized boundary rather than the raw absolute
-  // string.
-  const configuredCatalogParent = dirname(configuredRoot);
-  const configuredVaultRoot = dirname(configuredCatalogParent);
-
-  async function fixedRoot(): Promise<string> {
-    try {
-      const vaultStat = await lstat(configuredVaultRoot);
-      const parentStat = await lstat(configuredCatalogParent);
-      const rootStat = await lstat(configuredRoot);
-      if (!vaultStat.isDirectory() || vaultStat.isSymbolicLink()
-        || !parentStat.isDirectory() || parentStat.isSymbolicLink()
-        || !rootStat.isDirectory() || rootStat.isSymbolicLink()) throw unavailable();
-      const canonicalVaultRoot = await realpath(configuredVaultRoot);
-      const canonical = await realpath(configuredRoot);
-      // Requiring the canonical path to remain under the canonical vault and
-      // to preserve the `.claude/skills` suffix rejects a symlink in either
-      // catalog parent instead of silently reading outside the vault.
-      const expected = join(canonicalVaultRoot, basename(configuredCatalogParent), basename(configuredRoot));
-      if (canonical !== expected) throw unavailable();
-      const canonicalStat = await lstat(canonical);
-      if (!canonicalStat.isDirectory() || canonicalStat.isSymbolicLink()) throw unavailable();
-      return canonical;
-    } catch (error) {
-      if (error instanceof PublicApiError) throw error;
-      throw unavailable();
-    }
-  }
-
-  async function discover(root: string, directoryName: string): Promise<DiscoveredSkill | undefined> {
-    if (!safeDirectoryName(directoryName)) return undefined;
-    const directoryPath = join(root, directoryName);
-    try {
-      const directoryStat = await lstat(directoryPath);
-      if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) return undefined;
-      const directoryRealPath = await realpath(directoryPath);
-      if (dirname(directoryRealPath) !== root || basename(directoryRealPath) !== directoryName) return undefined;
-      const skillPath = join(directoryPath, SKILL_FILE);
-      const skillStat = await lstat(skillPath);
-      if (!skillStat.isFile() || skillStat.isSymbolicLink() || skillStat.size > MAX_SKILL_BYTES) return undefined;
-      const skillRealPath = await realpath(skillPath);
-      if (dirname(skillRealPath) !== directoryRealPath || basename(skillRealPath) !== SKILL_FILE) return undefined;
-      const bytes = await readBoundedRegularFile(skillPath);
-      return bytes === undefined ? undefined : { directoryName, directoryPath, directoryRealPath, bytes };
-    } catch {
-      return undefined;
-    }
-  }
-
-  async function directories(root: string): Promise<DiscoveredSkill[]> {
-    let entries: string[];
-    try {
-      entries = await readdir(root);
-    } catch {
-      throw unavailable();
-    }
-    const result: DiscoveredSkill[] = [];
-    for (const directoryName of entries.sort()) {
-      const discovered = await discover(root, directoryName);
-      if (discovered !== undefined) result.push(discovered);
-    }
-    return result;
-  }
-
-  function metadata(discovered: DiscoveredSkill): { summary: SkillSummary; markdown: string } | undefined {
-    let data: Record<string, unknown> = {};
-    let bodyBytes: Uint8Array = discovered.bytes;
-    try {
-      const parsed = parseFrontmatter(discovered.bytes);
-      data = parsed.data;
-      bodyBytes = parsed.bodyBytes;
-    } catch {
-      // A malformed or absent frontmatter does not make the file executable;
-      // it simply falls back to safe directory metadata and the full Markdown.
-    }
-    let markdown: string;
-    try {
-      markdown = new TextDecoder('utf-8', { fatal: true }).decode(bodyBytes);
-    } catch {
-      return undefined;
-    }
-    const summary: SkillSummary = {
-      id: skillId(discovered.directoryName),
-      name: field(data.name, discovered.directoryName, MAX_NAME_LENGTH),
-      description: field(data.description, DEFAULT_DESCRIPTION, MAX_DESCRIPTION_LENGTH),
-      revision: digest(discovered.bytes)
-    };
-    return { summary, markdown };
-  }
-
-  async function references(discovered: DiscoveredSkill): Promise<string[]> {
-    try {
-      const entries = await readdir(discovered.directoryPath);
-      const result: string[] = [];
-      for (const name of entries.sort()) {
-        if (!safeDirectoryName(name) || name === SKILL_FILE || !name.endsWith('.md')) continue;
-        const path = join(discovered.directoryPath, name);
-        try {
-          const stat = await lstat(path);
-          if (!stat.isFile() || stat.isSymbolicLink()) continue;
-          const canonical = await realpath(path);
-          if (dirname(canonical) !== discovered.directoryRealPath || basename(canonical) !== name) continue;
-          result.push(name);
-        } catch {
-          // References are optional and never make the main Skill unavailable.
-        }
-      }
-      return result.slice(0, MAX_REFERENCE_COUNT);
-    } catch {
-      return [];
-    }
-  }
-
-  async function list(): Promise<SkillSummary[]> {
-    const root = await fixedRoot();
-    const found = await directories(root);
-    const items: SkillSummary[] = [];
-    for (const discovered of found) {
-      const parsed = metadata(discovered);
-      if (parsed !== undefined) items.push(parsed.summary);
-    }
-    return items.slice(0, MAX_REFERENCE_COUNT);
-  }
-
-  async function get(id: string): Promise<SkillDetail> {
-    if (!/^[a-f0-9]{64}$/u.test(id)) throw invalidId();
-    const root = await fixedRoot();
-    const found = await directories(root);
-    const discovered = found.find((candidate) => skillId(candidate.directoryName) === id);
-    if (discovered === undefined) throw notFound();
-    const parsed = metadata(discovered);
-    if (parsed === undefined) throw notFound();
-    return { ...parsed.summary, markdown: parsed.markdown, references: await references(discovered) };
-  }
-
-  return { list, get };
+  const configuredRoot = resolve(input.skillsRoot); const parent = dirname(configuredRoot); const vault = dirname(parent);
+  async function fixedRoot(): Promise<string> { try { const [v, p, r] = await Promise.all([lstat(vault), lstat(parent), lstat(configuredRoot)]); if (!v.isDirectory() || v.isSymbolicLink() || !p.isDirectory() || p.isSymbolicLink() || !r.isDirectory() || r.isSymbolicLink()) throw unavailable(); const cv = await realpath(vault); const c = await realpath(configuredRoot); if (c !== join(cv, basename(parent), basename(configuredRoot))) throw unavailable(); return c; } catch (e) { if (e instanceof PublicApiError) throw e; throw unavailable(); } }
+  async function ensureRoot(): Promise<string> { try { const v = await lstat(vault); if (!v.isDirectory() || v.isSymbolicLink()) throw unavailable(); try { const p = await lstat(parent); if (!p.isDirectory() || p.isSymbolicLink()) throw unavailable(); } catch (e) { if (e instanceof PublicApiError) throw e; await mkdir(parent); } try { const r = await lstat(configuredRoot); if (!r.isDirectory() || r.isSymbolicLink()) throw unavailable(); } catch (e) { if (e instanceof PublicApiError) throw e; await mkdir(configuredRoot); } return fixedRoot(); } catch (e) { if (e instanceof PublicApiError) throw e; throw unavailable(); } }
+  async function discover(root: string, name: string, folder: SkillFolder | null): Promise<Skill | undefined> { if (!safeName(name)) return; const path = join(root, name); try { const s = await lstat(path); if (!s.isDirectory() || s.isSymbolicLink()) return; const rp = await realpath(path); if (dirname(rp) !== root || basename(rp) !== name) return; const sp = join(path, SKILL_FILE); const ss = await lstat(sp); if (!ss.isFile() || ss.isSymbolicLink() || ss.size > MAX_SKILL_BYTES) return; const bytes = await readFile(sp); return bytes ? { directoryName: name, directoryPath: path, directoryRealPath: rp, bytes, folder } : undefined; } catch { return; } }
+  async function layout(root: string): Promise<{ folders: SkillFolder[]; found: Skill[] }> { let names: string[]; try { names = (await readdir(root)).sort(); } catch { throw unavailable(); } const folders: SkillFolder[] = []; const found: Skill[] = []; for (const name of names) { if (!safeName(name)) continue; const direct = await discover(root, name, null); if (direct) { found.push(direct); continue; } try { const path = join(root, name); const s = await lstat(path); if (!s.isDirectory() || s.isSymbolicLink()) continue; const rp = await realpath(path); if (dirname(rp) !== root || basename(rp) !== name) continue; try { const marker = await lstat(join(path, SKILL_FILE)); if (marker) continue; } catch {} const f: SkillFolder = { id: folderId(name), name, skillCount: 0 }; for (const child of (await readdir(path)).sort()) { const x = await discover(path, child, f); if (x) found.push(x); } f.skillCount = found.filter((x) => x.folder?.id === f.id).length; folders.push(f); } catch { /* ignore unsafe entries */ } } folders.sort((a, b) => a.name.localeCompare(b.name)); found.sort((a, b) => a.directoryName.localeCompare(b.directoryName)); return { folders, found }; }
+  function metadata(s: Skill): { summary: SkillSummary; markdown: string } | undefined { let data: Record<string, unknown> = {}; let body: Uint8Array = s.bytes; try { const p = parseFrontmatter(s.bytes); data = p.data; body = p.bodyBytes; } catch {} let markdown: string; try { markdown = new TextDecoder('utf-8', { fatal: true }).decode(body); } catch { return; } return { summary: { id: skillId(s.directoryName), name: field(data.name, s.directoryName, 256), description: field(data.description, DEFAULT_DESCRIPTION, 10_000), revision: digest(s.bytes), folderId: s.folder?.id ?? null, folderName: s.folder?.name ?? null }, markdown }; }
+  async function refs(s: Skill): Promise<string[]> { try { const out: string[] = []; for (const n of (await readdir(s.directoryPath)).sort()) { if (!safeName(n) || n === SKILL_FILE || !n.endsWith('.md')) continue; try { const p = join(s.directoryPath, n); const st = await lstat(p); if (!st.isFile() || st.isSymbolicLink()) continue; const rp = await realpath(p); if (dirname(rp) === s.directoryRealPath && basename(rp) === n) out.push(n); } catch {} } return out.slice(0, MAX_REFERENCE_COUNT); } catch { return []; } }
+  async function locate(id: string): Promise<{ root: string; skill: Skill }> { if (!/^[a-f0-9]{64}$/u.test(id)) throw err('SKILL_ID_INVALID', 'Skill id is invalid.'); const root = await fixedRoot(); const l = await layout(root); const skill = l.found.find((x) => skillId(x.directoryName) === id); if (!skill) throw err('SKILL_NOT_FOUND', 'Skill was not found.', 404); return { root, skill }; }
+  async function get(id: string): Promise<SkillDetail> { const { skill } = await locate(id); const m = metadata(skill); if (!m) throw err('SKILL_NOT_FOUND', 'Skill was not found.', 404); return { ...m.summary, markdown: m.markdown, references: await refs(skill) }; }
+  async function list(): Promise<SkillsPage> { const root = await fixedRoot(); const l = await layout(root); return { folders: l.folders, items: l.found.map(metadata).filter((x): x is { summary: SkillSummary; markdown: string } => !!x).map((x) => x.summary).slice(0, MAX_REFERENCE_COUNT) }; }
+  async function createFolder(name: string): Promise<SkillFolder> { if (!safeName(name)) throw err('SKILL_FOLDER_INVALID', 'Skill folder is invalid.'); const root = await ensureRoot(); try { await lstat(join(root, name)); throw err('SKILL_FOLDER_CONFLICT', 'Skill folder conflicts with an existing entry.', 409); } catch (e) { if (e instanceof PublicApiError) throw e; } await mkdir(join(root, name)); return { id: folderId(name), name, skillCount: 0 }; }
+  async function move(id: string, targetId: string | null): Promise<SkillDetail> { const { root, skill } = await locate(id); const l = await layout(root); const target = targetId === null ? null : l.folders.find((f) => f.id === targetId); if (targetId !== null && !/^[a-f0-9]{64}$/u.test(targetId)) throw err('SKILL_FOLDER_INVALID', 'Skill folder is invalid.'); if (targetId !== null && !target) throw err('SKILL_FOLDER_NOT_FOUND', 'Skill folder was not found.', 404); const destination = target ? join(root, target.name, skill.directoryName) : join(root, skill.directoryName); const rel = relative(root, destination); if (rel.startsWith('..') || resolve(root, rel) !== destination) throw err('SKILL_FOLDER_INVALID', 'Skill folder is invalid.'); if (destination !== skill.directoryPath) { try { await lstat(destination); throw err('SKILL_FOLDER_CONFLICT', 'Skill folder conflicts with an existing entry.', 409); } catch (e) { if (e instanceof PublicApiError) throw e; } await rename(skill.directoryPath, destination); } return get(id); }
+  async function resolveSource(id: string): Promise<string> { const { skill } = await locate(id); const p = join(skill.directoryPath, SKILL_FILE); const s = await lstat(p); if (!s.isFile() || s.isSymbolicLink()) throw err('SKILL_NOT_FOUND', 'Skill was not found.', 404); return p; }
+  return { list, get, createFolder, move, resolveSource };
 }
