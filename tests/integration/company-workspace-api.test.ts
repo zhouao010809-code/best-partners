@@ -15,11 +15,23 @@ describe('runtime mode boundary', () => {
     servers.push(server);
 
     const bootstrap = await server.inject({ url: '/api/v1/bootstrap', headers: { host: '127.0.0.1:4317' } });
-    const companyRoute = await server.inject({ url: '/api/company/v1/projects', headers: { host: '127.0.0.1:4317' } });
+    const companyRequests = await Promise.all([
+      server.inject({ url: '/api/company/v1/projects', headers: { host: '127.0.0.1:4317' } }),
+      server.inject({ method: 'POST', url: '/api/company/v1/projects', headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' } }),
+      server.inject({ method: 'PATCH', url: '/api/company/v1/projects/one', headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' } }),
+      server.inject({ method: 'DELETE', url: '/api/company/v1/projects/one', headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' } })
+    ]);
 
     expect(bootstrap.statusCode).toBe(200);
     expect(bootstrap.json().data.runtimeMode).toBe('personal');
-    expect(companyRoute.statusCode).toBe(404);
+    expect(companyRequests.map(response => response.statusCode)).toEqual([404, 404, 404, 404]);
+
+    const versionPrefixCollision = await server.inject({
+      method: 'POST',
+      url: '/api/company/v10/auth/login',
+      headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' }
+    });
+    expect(versionPrefixCollision.statusCode).toBe(401);
   });
 
   it('registers the company namespace against the isolated company project service', async () => {

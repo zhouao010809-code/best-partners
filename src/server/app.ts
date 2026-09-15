@@ -250,7 +250,8 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.addHook('onRequest', async (request, reply) => {
     const pathname = request.url.split('?', 1)[0] ?? request.url;
-    const isCompanyRoute = runtimeMode === 'company' && pathname.startsWith('/api/company/v1');
+    const isCompanyPath = /^\/api\/company\/v1(?:\/|$)/u.test(pathname);
+    const isCompanyRoute = runtimeMode === 'company' && isCompanyPath;
     const policy = options.httpPolicy;
     if (!(policy?.isAllowedHost(request.headers.host) ?? isAllowedHost(request.headers.host))) {
       return reply.code(421).send(safeError(
@@ -265,6 +266,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       ?? isAllowedOrigin(request.headers.origin, nodeEnv, originRequired))) {
       return reply.code(403).send(safeError('ORIGIN_FORBIDDEN', 'Origin rejected', operationId()));
     }
+    // In personal mode the company namespace is intentionally absent. Let the
+    // request reach the router (and return 404) without requiring a personal
+    // mutation session first.
+    if (runtimeMode === 'personal' && isCompanyPath) return;
     if (isCompanyRoute) {
       const isBootstrap = request.method === 'POST' && pathname === '/api/company/v1/auth/bootstrap';
       const isLogin = request.method === 'POST' && pathname === '/api/company/v1/auth/login';
