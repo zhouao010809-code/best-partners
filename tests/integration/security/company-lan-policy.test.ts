@@ -132,7 +132,12 @@ describe('company LAN authority and namespace security', () => {
     const session = await server.inject({
       method: 'GET', url: '/api/company/v1/auth/session', headers: headers({ cookie: operator.cookie })
     });
+    const projects = await server.inject({
+      method: 'GET', url: '/api/company/v1/projects', headers: headers({ cookie: operator.cookie })
+    });
     expect(session.statusCode).toBe(200);
+    expect(projects.statusCode).toBe(200);
+    expect(projects.json()).toEqual({ data: { items: [{ id: 'project-1' }] }, version: 1 });
 
     const missingCsrf = await server.inject({
       method: 'POST', url: '/api/company/v1/projects', headers: headers({ cookie: operator.cookie }), payload: { name: 'A' }
