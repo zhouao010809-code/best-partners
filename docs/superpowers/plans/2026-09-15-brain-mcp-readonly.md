@@ -187,3 +187,9 @@
 - 搜索权重、过时过滤、坏笔记跳过和证据行号都有可执行断言。
 - 不含 HTTP/OAuth、Codex-in-问问、Fastify assistant、写入/删除、App UI、DMG 集成；README 只说明本地 Codex 显式配置。
 - 没有 `TODO`、`TBD` 或未定义的接口名；`createVaultReader`、`createBrainToolHandlers` 和 `registerTool` 的调用关系在任务间一致。
+
+## Review follow-ups completed
+
+- CLI entrypoint resolves relative `tsx`/`node` paths before deciding whether to start, so both source and `dist/mcp-server/index.js` commands remain usable.
+- Search uses a separate bounded full-note read (up to the physical safety cap) so a match after the public 100,000-byte response window is not silently lost; aggregate file/byte limits are reported with `truncated`.
+- Directory scans guard against in-vault symlink cycles and hidden realpath targets; filesystem failures distinguish missing files, disallowed loops, and retryable reads without echoing paths.
