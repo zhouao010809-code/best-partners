@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { assertCompanyRelativePath } from './company-paths.js';
 import type { CompanyWorkspaceManifest } from '../../shared/company/workspace.js';
 
 export interface CompanyPathResolver {
@@ -31,7 +32,7 @@ export interface CompanyRuntimeOptions {
 }
 
 export function createCompanyRuntime(options: CompanyRuntimeOptions = {}): CompanyRuntime {
-  const rootPath = options.workspaceRoot ?? join(process.cwd(), 'company-workspace');
+  const rootPath = resolve(options.workspaceRoot ?? join(process.cwd(), 'company-workspace'));
   const workspace: CompanyWorkspaceManifest = {
     id: 'company',
     displayName: 'Company workspace',
@@ -43,7 +44,7 @@ export function createCompanyRuntime(options: CompanyRuntimeOptions = {}): Compa
   };
   return {
     workspace,
-    paths: { rootPath, resolve: relativePath => join(rootPath, relativePath) },
+    paths: { rootPath, resolve: relativePath => join(rootPath, assertCompanyRelativePath(relativePath)) },
     database: { kind: 'company' },
     auth: { authenticate: async () => undefined },
     projects: { list: async () => [] }
