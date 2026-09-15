@@ -1,7 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import {
   skillEmptyQuerySchema,
+  skillFolderCreateRequestSchema,
+  skillFolderResponseSchema,
   skillIdParamsSchema,
+  skillMoveRequestSchema,
+  skillMoveResponseSchema,
   skillResponseSchema,
   skillsResponseSchema
 } from '../../../shared/api/skills.js';
@@ -19,13 +23,31 @@ export function registerSkillRoutes(app: FastifyInstance, service?: SkillCatalog
   app.get('/api/v1/skills', async (request, reply) => {
     reply.header('cache-control', 'no-store');
     parseApiInput(skillEmptyQuerySchema, request.query);
-    const data = { items: await required().list() };
-    return parseApiOutput(skillsResponseSchema, { data, version: API_VERSION });
+    return parseApiOutput(skillsResponseSchema, { data: await required().list(), version: API_VERSION });
   });
 
   app.get('/api/v1/skills/:id', async (request, reply) => {
     reply.header('cache-control', 'no-store');
     const { id } = parseApiInput(skillIdParamsSchema, request.params);
     return parseApiOutput(skillResponseSchema, { data: await required().get(id), version: API_VERSION });
+  });
+
+  app.post('/api/v1/skills/folders', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const body = parseApiInput(skillFolderCreateRequestSchema, request.body);
+    return parseApiOutput(skillFolderResponseSchema, {
+      data: await required().createFolder(body.name),
+      version: API_VERSION
+    });
+  });
+
+  app.post('/api/v1/skills/:id/move', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { id } = parseApiInput(skillIdParamsSchema, request.params);
+    const body = parseApiInput(skillMoveRequestSchema, request.body);
+    return parseApiOutput(skillMoveResponseSchema, {
+      data: await required().move(id, body.folderId),
+      version: API_VERSION
+    });
   });
 }

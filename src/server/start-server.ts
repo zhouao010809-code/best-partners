@@ -40,6 +40,7 @@ export interface EmbeddedServerConfig {
   readonly modelName?: string;
   readonly gateway: OpenableVaultGateway;
   readonly adapter?: 'filesystem' | 'local-rest';
+  readonly skillCatalog?: SkillCatalogService;
   readonly personalArchiveAddonPath?: string;
   readonly modelCredentials?: ModelCredentialsPort;
   readonly legacyHealth?: {
@@ -275,7 +276,7 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
     }
     const policy = createLoopbackPolicy();
     if (config.adapter === 'filesystem') {
-      skillCatalog = createSkillCatalogService({ skillsRoot: join(config.vaultRealRoot, '.claude', 'skills') });
+      skillCatalog = config.skillCatalog ?? createSkillCatalogService({ skillsRoot: join(config.vaultRealRoot, '.claude', 'skills') });
     }
     app = buildServer({
       healthService,
