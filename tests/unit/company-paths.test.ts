@@ -31,7 +31,7 @@ describe('company workspace paths', () => {
     await expect(realpath(join(workspaceRoot, 'incoming'))).resolves.toBe(join(await realpath(base), 'workspace', 'incoming'));
   });
 
-  it.each(['../escape', 'projects/../../escape', '/absolute', '\\absolute', 'projects\\x', 'nul\0x'])('rejects unsafe relative path %s', path => {
+  it.each(['../escape', 'a/..', './x', 'projects/../../escape', '/absolute', '\\absolute', 'projects\\x', 'nul\0x'])('rejects unsafe relative path %s', path => {
     expect(() => assertCompanyRelativePath(path)).toThrow();
   });
 

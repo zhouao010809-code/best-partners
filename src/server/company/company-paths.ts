@@ -86,7 +86,7 @@ export async function ensureCompanyWorkspace(workspaceRoot: string | CompanyWork
 
 export function assertCompanyRelativePath(value: string): string {
   if (!value || value.includes('\0') || value.includes('\\') || isAbsolute(value) || /^[A-Za-z]:\//.test(value)) throw new Error('Invalid company relative path');
-  const normalized = value.split('/').filter(Boolean).join('/');
-  if (!normalized || normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) throw new Error('Invalid company relative path');
-  return normalized;
+  const segments = value.split('/');
+  if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) throw new Error('Invalid company relative path');
+  return segments.join('/');
 }
