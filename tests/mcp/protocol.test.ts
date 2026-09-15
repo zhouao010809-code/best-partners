@@ -39,7 +39,7 @@ describe('brain MCP stdio protocol', () => {
     const fixture = await createBrainFixture(); fixtures.push(fixture);
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [resolve('node_modules/tsx/dist/cli.mjs'), resolve('mcp-server/index.ts')],
+      args: ['node_modules/tsx/dist/cli.mjs', 'mcp-server/index.ts'],
       env: { ...process.env, XIAOZHAO_VAULT_ROOT: fixture.root } as Record<string, string>,
       stderr: 'pipe'
     });

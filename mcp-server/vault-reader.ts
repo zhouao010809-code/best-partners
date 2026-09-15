@@ -29,10 +29,20 @@ export type VaultReaderErrorCode =
 export class VaultReaderError extends Error {
   public readonly name = 'VaultReaderError';
 
-  constructor(public readonly code: VaultReaderErrorCode, message = code) {
+  constructor(public readonly code: VaultReaderErrorCode, message = SAFE_MESSAGES[code]) {
     super(message);
   }
 }
+
+const SAFE_MESSAGES: Record<VaultReaderErrorCode, string> = {
+  INVALID_ROOT: 'The configured vault is not a valid four-section brain.',
+  PATH_NOT_ALLOWED: 'The path must be a Markdown file under 01图书馆/ or 02知识库/.',
+  NOT_FOUND: 'The requested Markdown file was not found.',
+  READ_FAILED: 'The Markdown file could not be read; retry after checking permissions.',
+  FILE_TOO_LARGE: 'The Markdown file is larger than the safe read limit.',
+  INVALID_NOTE: 'The Markdown frontmatter does not match the expected note schema.',
+  INVALID_LIMIT: 'The request limit or query is outside the allowed range.'
+};
 
 export type RawMarkdown = {
   path: string;
@@ -80,6 +90,7 @@ export type VaultReader = {
   readonly root: string;
   readMarkdown(path: string, maxBytes?: number): Promise<RawMarkdown>;
   readKnowledge(path: string, maxBytes?: number): Promise<KnowledgeRead>;
+  readKnowledgeForSearch(path: string): Promise<KnowledgeRead>;
   readSource(path: string, maxBytes?: number): Promise<SourceRead>;
   findEvidence(path: string, query: string, maxPassages?: number): Promise<EvidenceRead>;
   listKnowledgeFiles(): Promise<string[]>;
@@ -91,14 +102,23 @@ function fail(code: VaultReaderErrorCode): never {
   throw new VaultReaderError(code);
 }
 
+function fsFailureCode(error: unknown): VaultReaderErrorCode {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? (error as { code?: unknown }).code
+    : undefined;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return 'NOT_FOUND';
+  if (code === 'ELOOP') return 'PATH_NOT_ALLOWED';
+  return 'READ_FAILED';
+}
+
 function isWithin(base: string, candidate: string): boolean {
   const remainder = relative(base, candidate);
   return remainder === '' || (remainder !== '..' && !remainder.startsWith(`..${sep}`) && !isAbsolute(remainder));
 }
 
-function validateLimit(value: number | undefined): number {
+function validateLimit(value: number | undefined, maximum = MAX_BYTES): number {
   const limit = value ?? DEFAULT_BYTES;
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_BYTES) fail('INVALID_LIMIT');
+  if (!Number.isInteger(limit) || limit < 1 || limit > maximum) fail('INVALID_LIMIT');
   return limit;
 }
 
@@ -190,9 +210,14 @@ async function createReader(root: string): Promise<VaultReader> {
       fileSize = fileStat.size;
     } catch (error) {
       if (error instanceof VaultReaderError) throw error;
-      fail('NOT_FOUND');
+      fail(fsFailureCode(error));
     }
-    const sectionRoot = await realpath(join(canonicalRoot, section));
+    let sectionRoot: string;
+    try {
+      sectionRoot = await realpath(join(canonicalRoot, section));
+    } catch (error) {
+      fail(fsFailureCode(error));
+    }
     if (!isWithin(sectionRoot, canonicalFile)) fail('PATH_NOT_ALLOWED');
     if (fileSize > MAX_PHYSICAL_BYTES) fail('FILE_TOO_LARGE');
     const realParts = toRelative(canonicalRoot, canonicalFile).split('/');
@@ -218,8 +243,8 @@ async function createReader(root: string): Promise<VaultReader> {
     let bytes: Uint8Array;
     try {
       bytes = await readFile(resolved.absolute);
-    } catch {
-      fail('READ_FAILED');
+    } catch (error) {
+      fail(fsFailureCode(error));
     }
     return { bytes, raw: makeRaw(resolved.relativePath, bytes, limit) };
   }
@@ -230,8 +255,8 @@ async function createReader(root: string): Promise<VaultReader> {
     return (await readResolved(resolved, limit)).raw;
   }
 
-  async function readKnowledge(path: string, maxBytes?: number): Promise<KnowledgeRead> {
-    const limit = validateLimit(maxBytes);
+  async function readKnowledgeAtLimit(path: string, maxBytes: number | undefined, allowPhysicalLimit: boolean): Promise<KnowledgeRead> {
+    const limit = validateLimit(maxBytes, allowPhysicalLimit ? MAX_PHYSICAL_BYTES : MAX_BYTES);
     const resolved = await resolveFile(path);
     if (resolved.section !== KNOWLEDGE_ROOT) fail('PATH_NOT_ALLOWED');
     const { bytes, raw } = await readResolved(resolved, limit);
@@ -247,6 +272,14 @@ async function createReader(root: string): Promise<VaultReader> {
       knowledgeType: parsed.record.knowledgeType,
       body
     };
+  }
+
+  async function readKnowledge(path: string, maxBytes?: number): Promise<KnowledgeRead> {
+    return readKnowledgeAtLimit(path, maxBytes, false);
+  }
+
+  async function readKnowledgeForSearch(path: string): Promise<KnowledgeRead> {
+    return readKnowledgeAtLimit(path, MAX_PHYSICAL_BYTES, true);
   }
 
   async function readSource(path: string, maxBytes?: number): Promise<SourceRead> {
@@ -288,12 +321,15 @@ async function createReader(root: string): Promise<VaultReader> {
   async function listKnowledgeFiles(): Promise<string[]> {
     const root = await realpath(join(canonicalRoot, KNOWLEDGE_ROOT));
     const output: string[] = [];
+    const visited = new Set<string>();
     async function walk(directory: string): Promise<void> {
+      if (visited.has(directory)) return;
+      visited.add(directory);
       let entries;
       try {
         entries = await readdir(directory, { withFileTypes: true });
-      } catch {
-        fail('READ_FAILED');
+      } catch (error) {
+        fail(fsFailureCode(error));
       }
       for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))) {
         if (entry.name.startsWith('.')) continue;
@@ -301,11 +337,22 @@ async function createReader(root: string): Promise<VaultReader> {
         let candidateReal: string;
         try {
           candidateReal = await realpath(candidate);
-        } catch {
-          continue;
+        } catch (error) {
+          const code = typeof error === 'object' && error !== null && 'code' in error
+            ? (error as { code?: unknown }).code
+            : undefined;
+          if (code === 'ENOENT' || code === 'ELOOP') continue;
+          fail(fsFailureCode(error));
         }
         if (!isWithin(root, candidateReal)) continue;
-        const candidateStat = await stat(candidateReal);
+        const candidateParts = toRelative(root, candidateReal).split('/');
+        if (candidateParts.some((part) => part.startsWith('.'))) continue;
+        let candidateStat;
+        try {
+          candidateStat = await stat(candidateReal);
+        } catch (error) {
+          fail(fsFailureCode(error));
+        }
         if (candidateStat.isDirectory()) {
           await walk(candidateReal);
         } else if (candidateStat.isFile() && entry.name.endsWith('.md')) {
@@ -317,7 +364,7 @@ async function createReader(root: string): Promise<VaultReader> {
     return output.sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }
 
-  return { root: canonicalRoot, readMarkdown, readKnowledge, readSource, findEvidence, listKnowledgeFiles };
+  return { root: canonicalRoot, readMarkdown, readKnowledge, readKnowledgeForSearch, readSource, findEvidence, listKnowledgeFiles };
 }
 
 export async function createVaultReader(root: string): Promise<VaultReader> {

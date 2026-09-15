@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -54,6 +55,6 @@ export async function main(): Promise<void> {
 }
 
 const invokedPath = process.argv[1];
-if (invokedPath && fileURLToPath(import.meta.url) === invokedPath) {
+if (invokedPath && fileURLToPath(import.meta.url) === resolve(invokedPath)) {
   void main();
 }

@@ -67,11 +67,30 @@ describe('VaultReader safety and bounded reads', () => {
     await expect(reader.readMarkdown(path)).rejects.not.toThrow(path);
   });
 
+  it('distinguishes a missing file from a read failure', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const reader = await createVaultReader(fixture.root);
+    await expect(reader.readMarkdown('01图书馆/个人/不存在.md')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
   it('rejects a symlink that resolves outside the vault', async () => {
     const fixture = await createBrainFixture(); fixtures.push(fixture);
     if (!fixture.outsideSymlinkPath) return;
     const reader = await createVaultReader(fixture.root);
     await expect(reader.readMarkdown(fixture.outsideSymlinkPath)).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+  });
+
+  it('does not recurse forever through an in-vault directory symlink cycle', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    try {
+      await symlink(join(fixture.root, '02知识库/决策'), join(fixture.root, '02知识库/决策/循环'), 'dir');
+    } catch {
+      return;
+    }
+    const reader = await createVaultReader(fixture.root);
+    const paths = await reader.listKnowledgeFiles();
+    expect(paths).toContain(KNOWLEDGE_PATH);
+    expect(paths.filter((path) => path === KNOWLEDGE_PATH)).toHaveLength(1);
   });
 
   it('marks bounded reads as truncated without changing the source file', async () => {

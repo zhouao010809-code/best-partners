@@ -84,7 +84,7 @@ export async function searchKnowledge(
   for (const path of paths.slice(0, MAX_SEARCH_FILES)) {
     let note: KnowledgeRead;
     try {
-      note = await reader.readKnowledge(path);
+      note = await reader.readKnowledgeForSearch(path);
     } catch (error) {
       if (error instanceof VaultReaderError && error.code === 'INVALID_NOTE') {
         skippedCount += 1;
