@@ -17,6 +17,7 @@ export interface XiaozhaoDesktopApi {
   getVaultInfo?(): Promise<{ readonly displayName: string; readonly path: string }>;
   openVaultDirectory?(): Promise<void>;
   revealDocument?(relativePath: string): Promise<void>;
+  revealSkill?(skillId: string): Promise<void>;
   openClipperInstall?(): Promise<void>;
   installClipperHost?(): Promise<void>;
   getClipperStatus?(test?: boolean): Promise<XiaozhaoClipperStatus>;

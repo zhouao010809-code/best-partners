@@ -15,6 +15,8 @@ import { validateAssistantLoginUrl } from './assistant-login.js';
 import { runClipperHost } from './clipper-host.js';
 import { clipperPaths, installClipperHost, readClipperBridgeConfig } from './clipper-installer.js';
 import { createBridgeConfig } from './clipper-installer.js';
+import { createSkillCatalogService } from '../server/services/skill-catalog.js';
+import { createDesktopSkillNavigation } from './skill-navigation.js';
 
 app.setName('最佳拍档');
 let started: StartedServer | undefined;
@@ -126,6 +128,7 @@ async function bootstrap(): Promise<void> {
     return;
   }
   await saveDesktopSettings({ userDataDir, config: settings });
+  const skillCatalog = createSkillCatalogService({ skillsRoot: join(settings.vaultRoot, '.claude', 'skills') });
   const gateway = await FileSystemVaultGateway.create({
     vaultRoot: settings.vaultRoot, nativeReader,
     openExternal: async (url) => {
@@ -141,10 +144,12 @@ async function bootstrap(): Promise<void> {
     vaultRealRoot: settings.vaultRoot, clientRoot: join(import.meta.dirname, '../client'),
     modelBaseUrl: 'https://api.deepseek.com', gateway, adapter: 'filesystem',
     modelCredentials: createModelKeyStore({ directory: join(userDataDir, 'model-credentials'), safeStorage }),
+    skillCatalog,
     personalArchiveAddonPath: join(import.meta.dirname, '../native/personal-archive.node')
   });
   window = createMainWindow(started.origin);
   const navigation = createDesktopVaultNavigation({ reader: await nativeReader.create(settings.vaultRoot), shell });
+  const skillNavigation = createDesktopSkillNavigation({ catalog: skillCatalog, shell });
   ipcMain.handle('desktop:get-app-version', (event) => { assertMainSender(event); return app.getVersion(); });
   ipcMain.handle('desktop:assistant-login', async (event, url: unknown) => { assertMainSender(event); await shell.openExternal(validateAssistantLoginUrl(url)); });
   ipcMain.handle('desktop:get-vault-info', (event) => { assertMainSender(event); return navigation.getVaultInfo(); });
@@ -152,6 +157,10 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('desktop:reveal-document', async (event, relativePath: unknown) => {
     assertMainSender(event);
     await navigation.revealDocument(relativePath);
+  });
+  ipcMain.handle('desktop:reveal-skill', async (event, id: unknown) => {
+    assertMainSender(event);
+    await skillNavigation.revealSkill(id);
   });
   const clipperConfigPath = join(userDataDir, 'clipper-bridge.json');
   ipcMain.handle('desktop:open-clipper-install', async (event) => {
