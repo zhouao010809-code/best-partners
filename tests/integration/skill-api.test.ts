@@ -41,9 +41,11 @@ it('serves strict list and detail envelopes without exposing filesystem paths', 
 
 async function sessionHeaders(app: ReturnType<typeof buildServer>): Promise<Record<string, string>> {
   const bootstrap = await app.inject({ url: '/api/v1/bootstrap', headers });
-  const cookie = bootstrap.headers['set-cookie'];
+  const cookieHeader = bootstrap.headers['set-cookie'];
+  const cookie = Array.isArray(cookieHeader) ? cookieHeader[0] : cookieHeader;
+  if (cookie === undefined) throw new Error('bootstrap response did not set a session cookie');
   const csrf = bootstrap.json().data.csrfToken;
-  return { ...headers, cookie: Array.isArray(cookie) ? cookie[0] : cookie, 'x-csrf-token': csrf, 'content-type': 'application/json' };
+  return { ...headers, cookie, 'x-csrf-token': csrf, 'content-type': 'application/json' };
 }
 
 it('creates folders and moves skills through protected strict mutation endpoints', async () => {
