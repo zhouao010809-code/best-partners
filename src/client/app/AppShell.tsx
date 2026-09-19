@@ -229,7 +229,7 @@ function pageIdentity(pathname: string): PageIdentity {
       return {
         eyebrow: 'SKILLS / LOCAL METHODS',
         title: 'Skill 库',
-        description: '浏览本地可复用的方法说明，保持只读。'
+        description: '浏览本地可复用的方法说明；可创建文件夹并手动整理，Skill 内容保持只读。'
       };
     case '/trash':
       return { eyebrow: 'RECYCLE / LOCAL STORAGE', title: '回收站', description: '收件箱、档案库、提炼队列与知识库的暂存处。' };
@@ -627,9 +627,9 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
               <h1 ref={headingRef} tabIndex={-1}>{identity.title}</h1>
               <p className="page-heading__description">{identity.description}</p>
             </div>
-            {location.pathname !== '/' && location.pathname !== '/operations' && <div className="read-only-seal" aria-label={location.pathname === '/intake' ? '当前模式：归档需确认' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? '当前模式：入库需确认' : '当前模式：候选不入库' : location.pathname === '/settings' ? '当前模式：本地设置' : ['/trash', '/library', '/knowledge'].includes(location.pathname) && api.trash ? '当前模式：删除需确认' : '当前模式：只读'}>
+            {location.pathname !== '/' && location.pathname !== '/operations' && <div className="read-only-seal" aria-label={location.pathname === '/intake' ? '当前模式：归档需确认' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? '当前模式：入库需确认' : '当前模式：候选不入库' : location.pathname === '/settings' ? '当前模式：本地设置' : location.pathname === '/skills' ? '当前模式：内容只读，整理可编辑' : ['/trash', '/library', '/knowledge'].includes(location.pathname) && api.trash ? '当前模式：删除需确认' : '当前模式：只读'}>
               <span aria-hidden="true" />
-              {location.pathname === '/intake' ? 'CONFIRM TO ARCHIVE' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? 'CONFIRM TO KEEP' : 'CANDIDATES ONLY' : location.pathname === '/settings' ? 'LOCAL SETTINGS' : (location.pathname === '/trash' || location.pathname.startsWith('/library') || location.pathname === '/knowledge') && api.trash ? 'MANUAL CONFIRM' : 'READ ONLY'}
+              {location.pathname === '/intake' ? 'CONFIRM TO ARCHIVE' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? 'CONFIRM TO KEEP' : 'CANDIDATES ONLY' : location.pathname === '/settings' ? 'LOCAL SETTINGS' : location.pathname === '/skills' ? 'ORGANIZE LOCALLY' : (location.pathname === '/trash' || location.pathname.startsWith('/library') || location.pathname === '/knowledge') && api.trash ? 'MANUAL CONFIRM' : 'READ ONLY'}
             </div>}
           </header>
 

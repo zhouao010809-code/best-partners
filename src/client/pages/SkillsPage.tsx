@@ -236,13 +236,13 @@ export function SkillsPage() {
         <div className="skills-page__intro">
           <span className="skills-page__mark" aria-hidden="true"><Sparkles size={18} /></span>
           <div>
-            <p className="skills-page__eyebrow">LOCAL METHODS / READ ONLY</p>
+            <p className="skills-page__eyebrow">LOCAL METHODS / ORGANIZE</p>
             <h2>可复用的方法</h2>
-            <p>从本地 <code>.claude/skills</code> 读取 Skill 说明；文件夹仅用于整理和浏览。</p>
+            <p>从本地 <code>.claude/skills</code> 读取 Skill 说明；可新建一层文件夹并手动移动，Skill 内容仍由本地文件维护。</p>
           </div>
         </div>
         <div className="skills-page__actions">
-          <span className="skills-page__seal">只读目录</span>
+          <span className="skills-page__seal">内容只读 · 可整理</span>
           {canWrite && !selected && <button type="button" className="skills-page__refresh" onClick={() => { setFolderFormOpen(true); setMutationError(undefined); }}>新建文件夹</button>}
           {!selected && <button
             type="button"

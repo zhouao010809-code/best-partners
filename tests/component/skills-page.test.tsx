@@ -66,14 +66,14 @@ afterEach(() => {
 });
 
 describe('SkillsPage', () => {
-  it('loads the local catalog and presents read-only skill summaries', async () => {
+  it('loads the local catalog and presents read-only skill summaries with organization controls', async () => {
     renderPage();
 
     expect(await screen.findByRole('heading', { name: '公众号排版发布' })).toBeVisible();
     expect(screen.getByText(skill.description)).toBeVisible();
     expect(screen.getByText(`版本 ${skill.revision.slice(0, 8)}`)).toBeVisible();
     expect(screen.getByRole('button', { name: '查看方法：公众号排版发布' })).toBeEnabled();
-    expect(screen.getByText('只读目录')).toBeVisible();
+    expect(screen.getByText('内容只读 · 可整理')).toBeVisible();
     expect(screen.queryByRole('button', { name: /执行|编辑|保存/u })).not.toBeInTheDocument();
     expect(list).toHaveBeenCalledWith(expect.any(AbortSignal));
   });
