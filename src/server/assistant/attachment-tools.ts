@@ -23,6 +23,8 @@ export type AttachmentArchiveProposalRequest = {
 /** Combines file and vault tools while keeping file scope and write intent outside the model. */
 export function createAssistantTools(input: {
   readService: ReadService; extractionService?: ExtractionService; attachmentService?: AttachmentPort;
+  /** Company tools are opt-in and must be supplied by the company composition root. */
+  companyTools?: readonly AssistantTool[];
   proposeArchive?: (request: AttachmentArchiveProposalRequest, signal?: AbortSignal) => Promise<AssistantPlanAction>;
   markActionPending?: () => void;
   attachments: AttachmentSelection[]; userMessage: string; scope: 'brain' | 'current'; contextPath?: string;
@@ -84,7 +86,7 @@ export function createAssistantTools(input: {
     return { offset, length: next - offset, label: `${attachment.name} · 第 ${startPage}–${endPage} 页`, sourceRawSha256: detail.versionMarker.rawSha256,
       coversWholeSource: startPage === 1 && endPage === attachment.pageCount };
   }
-  const brainTools = createBrainTools({ ...input, additionalPaths, sourceOffset: selected.size,
+  const brainTools = createBrainTools({ ...input, ...(input.companyTools === undefined ? {} : { companyTools: input.companyTools }), additionalPaths, sourceOffset: selected.size,
     canPreparePath: path => !paths.has(path) || intent.extract, resolveExtractionRange: sourceRange });
   if (!selected.size) return brainTools;
   function tool<T extends z.ZodType>(name: string, description: string, schema: T, execute: (value: z.output<T>) => Promise<unknown>, effect?: AssistantToolEffect): AssistantTool {

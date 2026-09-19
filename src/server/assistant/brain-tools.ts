@@ -28,6 +28,8 @@ export function createBrainTools(input: {
   canPreparePath?: (path: string) => boolean;
   resolveExtractionRange?: (path: string) => Promise<{ offset: number; length: number; label: string; sourceRawSha256?: string; coversWholeSource?: boolean } | undefined>;
   sourceOffset?: number;
+  /** Explicit company-runtime registration point; omitted in the personal runtime. */
+  companyTools?: readonly AssistantTool[];
   model: string;
   signal: AbortSignal;
   emit: (event: AssistantEvent) => void;
@@ -108,7 +110,7 @@ export function createBrainTools(input: {
     return { sourceId, path: record.path, title: record.title, sourcePlatform: record.sourcePlatform, knowledgeStatus: record.knowledgeStatus,
       topics: record.topics?.slice(0, 12) ?? [] };
   }
-  return [
+  const baseTools: AssistantTool[] = [
     makeTool('search_knowledge', '根据标题、关键词、适用场景和结论检索知识。默认排除过时知识，最多返回 10 条可追溯的召回信息；未读取正文前不要声称已经读过原文。', searchInput, async ({ query, limit }) => {
       if (input.scope === 'current') {
         if (!input.contextPath?.startsWith('02知识库/')) return { items: [], scope: 'current' };
@@ -197,4 +199,5 @@ export function createBrainTools(input: {
         message: candidateCount ? '候选已保存，正式入库需由用户在审阅界面确认。原文与正式知识未修改。' : '提炼已完成，本轮没有知识候选，可查看导读。原文与正式知识未修改。' };
     })
   ];
+  return [...baseTools, ...(input.companyTools ?? [])];
 }
