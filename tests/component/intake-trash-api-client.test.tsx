@@ -4,7 +4,7 @@ const id = '12345678-1234-4123-8123-123456789abc';
 const entry = { id, name: '资料 #1', title: '资料 #1', kind: 'directory', bytes: 20, fileCount: 2, createdAt: '2026-09-07T00:00:00.000Z', status: 'trashed' };
 const envelope = (data: unknown) => new Response(JSON.stringify({ version: 1, data }));
 it('exposes separate packet endpoints and retains authenticated explicit operation ids', async () => {
-  const fetcher = vi.fn().mockImplementation(async (url: string) => url.endsWith('bootstrap') ? envelope({ csrfToken: 'c'.repeat(43) })
+  const fetcher = vi.fn().mockImplementation(async (url: string) => url.endsWith('bootstrap') ? envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })
     : url.endsWith('/preview') ? envelope({ id, name: entry.name, title: entry.title, kind: entry.kind, bytes: 20, fileCount: 2, expiresAt: '2099-01-01T00:00:00.000Z' }) : envelope(entry));
   const api = createBrowserReadConsoleApi(fetcher); expect(api.intakeTrash).toBeDefined();
   const signal = new AbortController().signal;

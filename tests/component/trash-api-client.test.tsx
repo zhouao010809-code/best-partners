@@ -7,7 +7,7 @@ const entry = { id, materialPath: path, title: '原始资料', createdAt: '2026-
 const envelope = (data: unknown) => new Response(JSON.stringify({ data, version: 1 }));
 
 it('retains the explicit deletion origin in a document preview request', async () => {
-  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43) })).mockResolvedValueOnce(envelope({ id, materialPath: path, title: entry.title, origin: 'queue', bytes: 512, referencedKnowledge: [], expiresAt: '2099-01-01T00:00:00Z' }));
+  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })).mockResolvedValueOnce(envelope({ id, materialPath: path, title: entry.title, origin: 'queue', bytes: 512, referencedKnowledge: [], expiresAt: '2099-01-01T00:00:00Z' }));
   await createBrowserReadConsoleApi(fetcher).trash!.preview(path, 'queue');
   expect(fetcher).toHaveBeenLastCalledWith('/api/v1/trash/preview', expect.objectContaining({ body: JSON.stringify({ materialPath: path, origin: 'queue' }) }));
 });
@@ -24,7 +24,7 @@ it('provides authenticated trash reads with encoded ids and cancellation', async
 
 it('serializes only the explicit operation inputs and shares the CSRF bootstrap', async () => {
   const preview = { id, materialPath: path, title: entry.title, bytes: 512, referencedKnowledge: [], expiresAt: '2099-01-01T00:00:00Z' };
-  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43) }))
+  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' }))
     .mockResolvedValueOnce(envelope(preview)).mockResolvedValue(envelope(entry));
   const api = createBrowserReadConsoleApi(fetcher); expect(api.trash).toBeDefined();
   expect(await api.trash!.preview(path)).toEqual({ ok: true, value: preview });
@@ -49,7 +49,7 @@ it('previews deletion with cancellation and sends only the confirmed token throu
   const token = '6e2553b8-5a80-41c6-858b-30f98e7a91c0';
   const preview = { id, token, materialPath: path, title: entry.title, bytes: 512, referencedKnowledge: [], expiresAt: '2099-01-01T00:00:00Z' };
   const deleted = { ...entry, status: 'deleted', deletedAt: '2026-09-07T02:00:00Z' };
-  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43) })).mockResolvedValueOnce(envelope(preview)).mockResolvedValueOnce(envelope(deleted));
+  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })).mockResolvedValueOnce(envelope(preview)).mockResolvedValueOnce(envelope(deleted));
   const api = createBrowserReadConsoleApi(fetcher); const signal = new AbortController().signal;
   expect(api.trash?.previewDelete).toBeTypeOf('function'); expect(api.trash?.delete).toBeTypeOf('function');
   expect(await api.trash!.previewDelete('id /#', signal)).toEqual({ ok: true, value: preview });
@@ -60,7 +60,7 @@ it('previews deletion with cancellation and sends only the confirmed token throu
 });
 
 it('rejects a deletion preview without a valid confirmation token and retains deletion failure codes', async () => {
-  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43) }))
+  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' }))
     .mockResolvedValueOnce(envelope({ id, materialPath: path, title: entry.title, bytes: 512, referencedKnowledge: [], expiresAt: '2099-01-01T00:00:00Z', token: 'invalid' }))
     .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'TRASH_BUSY', message: '正在核验本次删除', operationId: '01J7K5GABQH6HNCWN8RB9X56S3' } }), { status: 409 }));
   const api = createBrowserReadConsoleApi(fetcher); expect(api.trash?.previewDelete).toBeTypeOf('function');
@@ -69,7 +69,7 @@ it('rejects a deletion preview without a valid confirmation token and retains de
 });
 
 it('posts queue visibility without modifying material paths', async () => {
-  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43) })).mockResolvedValueOnce(envelope({ item: null }));
+  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })).mockResolvedValueOnce(envelope({ item: null }));
   const api = createBrowserReadConsoleApi(fetcher); expect(api.extractionQueue?.setVisibility).toBeDefined();
   await api.extractionQueue!.setVisibility!(path, true);
   expect(fetcher).toHaveBeenLastCalledWith('/api/v1/extraction-queue/visibility', expect.objectContaining({ method: 'POST', body: JSON.stringify({ materialPath: path, removed: true }) }));

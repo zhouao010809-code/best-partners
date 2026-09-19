@@ -4,7 +4,7 @@ const ok = (data: unknown) => new Response(JSON.stringify({ data, version: 1 }),
 const settings = { available: true, configured: true, providerHost: 'api.deepseek.com', model: 'deepseek-v4-flash' };
 
 it('protects key saving with bootstrap + CSRF, puts it only in the POST body and never auto-retries', async () => {
-  const fetcher = vi.fn().mockResolvedValueOnce(ok({ csrfToken: 'c'.repeat(43) })).mockResolvedValueOnce(ok(settings));
+  const fetcher = vi.fn().mockResolvedValueOnce(ok({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })).mockResolvedValueOnce(ok(settings));
   const api = createBrowserReadConsoleApi(fetcher);
   expect(api.deepSeek).toBeDefined();
   const result = await api.deepSeek!.setKey('sk-fixture-only');
@@ -45,7 +45,7 @@ it('rejects a malformed summary rather than labelling it as pending', async () =
 
 it('verifies only the saved configuration with explicit CSRF POST and keeps failure feedback distinct', async () => {
   const verified = { ...settings, verification: { status: 'failed', checkedAt: '2026-09-09T03:00:00.000Z', message: 'DeepSeek 账户余额不足，请补充余额后重新验证。' } };
-  const fetcher = vi.fn().mockResolvedValueOnce(ok({ csrfToken: 'c'.repeat(43) })).mockResolvedValueOnce(ok(verified));
+  const fetcher = vi.fn().mockResolvedValueOnce(ok({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })).mockResolvedValueOnce(ok(verified));
   const api = createBrowserReadConsoleApi(fetcher);
   expect(await api.deepSeek!.verifyConnection!()).toEqual({ ok: true, value: verified });
   expect(fetcher).toHaveBeenNthCalledWith(2, '/api/v1/deepseek/verify', expect.objectContaining({ method: 'POST', credentials: 'same-origin',

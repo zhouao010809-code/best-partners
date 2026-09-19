@@ -11,7 +11,7 @@ it('exposes ingestion reads, encodes match queries and preserves cancellation', 
 });
 it('confirms a durable preview id once with CSRF and validates batch response', async () => {
   const batch = { id, runId: id, status: 'committed', indexed: false, createdAt: '2026-09-07T00:00:00Z', knowledgePaths: ['02知识库/知识.md'], pendingCount: 1, sourceStatus: '部分入库' };
-  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43) })).mockResolvedValueOnce(envelope(batch));
+  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })).mockResolvedValueOnce(envelope(batch));
   const api = createBrowserReadConsoleApi(fetcher);
   expect(api.ingestion).toBeDefined();
   expect(await api.ingestion!.commit(id)).toEqual({ ok: true, value: batch });
@@ -25,14 +25,14 @@ it('keeps the ingestion error code so a missing batch can be distinguished from 
 });
 it('requests a recovery source choice without resolving the batch', async () => {
   const data = { id, batchId: id, expiresAt: '2099-01-01T00:00:00Z', files: [], sourceChoice: 'preserved', hasPreservedSource: true };
-  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43) })).mockResolvedValueOnce(envelope(data));
+  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })).mockResolvedValueOnce(envelope(data));
   const result = await createBrowserReadConsoleApi(fetcher).ingestion!.recoveryPreview(id, 'preserved');
   expect(result).toEqual({ ok: true, value: data });
   expect(fetcher).toHaveBeenLastCalledWith(`/api/v1/ingestion/batches/${id}/recovery-preview`, expect.objectContaining({ body: JSON.stringify({ sourceChoice: 'preserved' }) }));
 });
 it('sends only explicitly chosen replacement paths in a recovery preview request', async () => {
   const data = { id, batchId: id, expiresAt: '2099-01-01T00:00:00Z', files: [], sourceChoice: 'current', hasPreservedSource: false };
-  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43) })).mockResolvedValueOnce(envelope(data));
+  const fetcher = vi.fn().mockResolvedValueOnce(envelope({ csrfToken: 'c'.repeat(43), runtimeMode: 'personal' })).mockResolvedValueOnce(envelope(data));
   const newTargets = { '02知识库/09学习/旧笔记.md': '02知识库/09学习/核对后的新笔记.md' };
   await createBrowserReadConsoleApi(fetcher).ingestion!.recoveryPreview(id, undefined, newTargets);
   expect(fetcher).toHaveBeenLastCalledWith(`/api/v1/ingestion/batches/${id}/recovery-preview`, expect.objectContaining({ body: JSON.stringify({ newTargets }) }));
