@@ -45,8 +45,20 @@ import { trashPreviewResponseSchema, trashDeletePreviewResponseSchema, trashEntr
   type TrashPreview, type TrashDeletePreview, type TrashEntry, type TrashList } from '../../shared/api/trash.js';
 import { intakeTrashPreviewResponseSchema, intakeTrashDeletePreviewResponseSchema, intakeTrashEntryResponseSchema, intakeTrashListResponseSchema,
   type IntakeTrashPreview, type IntakeTrashDeletePreview, type IntakeTrashEntry, type IntakeTrashList } from '../../shared/api/intake-trash.js';
-import { skillResponseSchema, skillsResponseSchema, skillFolderResponseSchema, skillMoveResponseSchema, type SkillDetail, type SkillsPage, type SkillFolder, type SkillSummary } from '../../shared/api/skills.js';
+import {
+  skillResponseSchema,
+  skillsResponseSchema,
+  skillFolderResponseSchema,
+  skillMoveResponseSchema,
+  skillsMatchResponseSchema,
+  type SkillDetail,
+  type SkillsPage,
+  type SkillFolder,
+  type SkillSummary,
+  type SkillMatchCandidate
+} from '../../shared/api/skills.js';
 export type { SkillDetail, SkillsPage, SkillFolder, SkillSummary } from '../../shared/api/skills.js';
+export type { SkillMatchCandidate } from '../../shared/api/skills.js';
 
 type ClientFailureStatus =
   | 'disconnected'
@@ -105,6 +117,7 @@ export interface ReadConsoleApi {
   readonly skills?: {
     list(signal?: AbortSignal): Promise<ApiClientResult<SkillsPage>>;
     get(id: string, signal?: AbortSignal): Promise<ApiClientResult<SkillDetail>>;
+    match?(message: string, signal?: AbortSignal): Promise<ApiClientResult<{ candidates: SkillMatchCandidate[] }>>;
     createFolder?(name: string, signal?: AbortSignal): Promise<ApiClientResult<SkillFolder>>;
     move?(id: string, folderId: string | null, signal?: AbortSignal): Promise<ApiClientResult<SkillSummary>>;
   };
@@ -407,6 +420,7 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
     skills: {
       list: signal => requestData(fetcher, '/api/v1/skills', skillsResponseSchema, getInit(signal)),
       get: (id, signal) => requestData(fetcher, `/api/v1/skills/${encodeURIComponent(id)}`, skillResponseSchema, getInit(signal)),
+      match: (message, signal) => postWithCsrf('/api/v1/skills/match', skillsMatchResponseSchema, { message }, undefined, signal),
       createFolder: (name, signal) => postWithCsrf('/api/v1/skills/folders', skillFolderResponseSchema, { name }, undefined, signal),
       move: (id, folderId, signal) => postWithCsrf(`/api/v1/skills/${encodeURIComponent(id)}/move`, skillMoveResponseSchema, { folderId }, undefined, signal)
     },

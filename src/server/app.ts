@@ -53,6 +53,7 @@ import { registerCompanyAuthRoutes } from './api/routes/company-auth.js';
 import { registerCompanyProjectRoutes } from './api/routes/company-projects.js';
 import { registerCompanySkillRoutes } from './api/routes/company-skills.js';
 import type { SkillCatalogService } from './services/skill-catalog.js';
+import { createSkillMatcherService } from './services/skill-matcher.js';
 import type { CompanyRuntimeMode } from '../shared/company/workspace.js';
 import { createCompanyRuntime, type CompanyRuntime } from './company/company-runtime.js';
 
@@ -334,7 +335,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     ...(readService === undefined ? {} : { service: readService }),
     operationId
   });
-  registerSkillRoutes(app, options.skillCatalog);
+  registerSkillRoutes(
+    app,
+    options.skillCatalog,
+    options.skillCatalog === undefined ? undefined : createSkillMatcherService({ catalog: options.skillCatalog })
+  );
   registerOperationRoutes(app, { database: options.readApi?.database,
     intakeHistory: options.intakeService?.history,
     trash: options.trashService ? () => options.trashService!.list() : undefined,

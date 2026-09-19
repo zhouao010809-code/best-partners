@@ -17,6 +17,7 @@ it('sends assistant messages once with the existing CSRF transport and request i
   expect(fetcher).toHaveBeenNthCalledWith(2, '/api/v1/assistant/messages', expect.objectContaining({ method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': 'a'.repeat(43) }, body: JSON.stringify(input) }));
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
+
 it('loads model catalogs with cancellation support and rejects malformed responses', async () => {
   const signal = new AbortController().signal; const fetcher = vi.fn().mockResolvedValueOnce(ok({ providers: [] })).mockResolvedValueOnce(ok({ providers: [{ id: 'bad' }] }));
   const service = createBrowserReadConsoleApi(fetcher).assistant!;
@@ -69,4 +70,36 @@ it('deletes a specific draft revision without declaring an empty JSON body', asy
   expect(fetcher.mock.calls[1]![0]).toMatch(/\?revision=4$/u);
   expect(fetcher.mock.calls[1]![1]).toMatchObject({ method: 'DELETE', headers: { 'x-csrf-token': 'a'.repeat(43) } });
   expect(fetcher.mock.calls[1]![1].headers).not.toHaveProperty('content-type');
+});
+
+it('matches local skills through the existing CSRF transport and cancellation signal', async () => {
+  const signal = new AbortController().signal;
+  const candidate = {
+    id: 'a'.repeat(64),
+    name: 'Writer',
+    description: 'Drafts copy',
+    folderName: 'Marketing',
+    revision: 'b'.repeat(64),
+    reason: 'Skill 名称与当前任务匹配'
+  };
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(ok({ csrfToken: 'a'.repeat(43), runtimeMode: 'personal' }))
+    .mockResolvedValueOnce(ok({ candidates: [candidate] }));
+  const result = await createBrowserReadConsoleApi(fetcher).skills!.match!('写一份文案', signal);
+  expect(result).toEqual({ ok: true, value: { candidates: [candidate] } });
+  expect(fetcher.mock.calls[1]![0]).toBe('/api/v1/skills/match');
+  expect(fetcher.mock.calls[1]![1]).toMatchObject({
+    method: 'POST',
+    signal,
+    headers: { 'content-type': 'application/json', 'x-csrf-token': 'a'.repeat(43) },
+    body: JSON.stringify({ message: '写一份文案' })
+  });
+});
+
+it('rejects malformed skill match responses through the shared client result', async () => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(ok({ csrfToken: 'a'.repeat(43), runtimeMode: 'personal' }))
+    .mockResolvedValueOnce(ok({ candidates: [{ id: 'bad' }] }));
+  const result = await createBrowserReadConsoleApi(fetcher).skills!.match!('写一份文案');
+  expect(result).toMatchObject({ ok: false, state: { status: 'validation-error' } });
 });

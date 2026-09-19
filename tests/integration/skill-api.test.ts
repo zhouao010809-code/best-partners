@@ -63,6 +63,17 @@ it('creates folders and moves skills through protected strict mutation endpoints
   expect(service.move).toHaveBeenCalledWith(summary.id, null);
 });
 
+it('protects matching with session and CSRF and rejects empty or unknown fields', async () => {
+  const { app, service } = fixture();
+  expect((await app.inject({ method: 'POST', url: '/api/v1/skills/match', headers, payload: { message: 'Draft copy' } })).statusCode).toBe(401);
+  const authHeaders = await sessionHeaders(app);
+  expect((await app.inject({ method: 'POST', url: '/api/v1/skills/match', headers: { ...authHeaders, 'x-csrf-token': 'bad' }, payload: { message: 'Draft copy' } })).statusCode).toBe(403);
+  expect((await app.inject({ method: 'POST', url: '/api/v1/skills/match', headers: authHeaders, payload: { message: '' } })).statusCode).toBe(400);
+  expect((await app.inject({ method: 'POST', url: '/api/v1/skills/match', headers: authHeaders, payload: { message: 'Draft copy', path: '/tmp/skill' } })).statusCode).toBe(400);
+  expect(service.list).not.toHaveBeenCalled();
+  expect(service.get).not.toHaveBeenCalled();
+});
+
 it('protects mutations and rejects strict payloads', async () => {
   const { app, service } = fixture();
   const noSession = await app.inject({ method: 'POST', url: '/api/v1/skills/folders', headers, payload: { name: 'Docs' } });
@@ -113,4 +124,53 @@ it('returns a typed 503 when no local catalog is configured', async () => {
   const move = await app.inject({ method: 'POST', url: `/api/v1/skills/${summary.id}/move`, headers: authHeaders, payload: { folderId: null } });
   expect(move.statusCode).toBe(503);
   expect(move.json().error.code).toBe('SKILL_CATALOG_UNAVAILABLE');
+  const match = await app.inject({ method: 'POST', url: '/api/v1/skills/match', headers: authHeaders, payload: { message: 'Draft copy' } });
+  expect(match.statusCode).toBe(503);
+  expect(match.json().error.code).toBe('SKILL_CATALOG_UNAVAILABLE');
+});
+
+it('matches skills through the protected strict endpoint without exposing paths', async () => {
+  const candidate = {
+    id: summary.id,
+    name: summary.name,
+    description: summary.description,
+    folderName: summary.folderName,
+    revision: summary.revision,
+    reason: 'Skill 名称与当前任务匹配'
+  };
+  const { app, service } = fixture({
+    matchDocuments: vi.fn(async () => [{ ...detail }])
+  });
+  const authHeaders = await sessionHeaders(app);
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/v1/skills/match',
+    headers: authHeaders,
+    payload: { message: '请用 Writer 写一份文案' }
+  });
+  expect(response.statusCode).toBe(200);
+  expect(response.headers['cache-control']).toBe('no-store');
+  expect(response.json()).toEqual({ version: 1, data: { candidates: [candidate] } });
+  expect(response.body).not.toContain('/private/path');
+  expect(service.matchDocuments).toHaveBeenCalledOnce();
+});
+
+it('returns a stable readable 503 when the catalog directory is unavailable', async () => {
+  const { app } = fixture({
+    matchDocuments: vi.fn(async () => {
+      throw new PublicApiError('SKILL_CATALOG_UNAVAILABLE', 'Skill catalog is unavailable.', 503);
+    })
+  });
+  const authHeaders = await sessionHeaders(app);
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/v1/skills/match',
+    headers: authHeaders,
+    payload: { message: '写文案' }
+  });
+  expect(response.statusCode).toBe(503);
+  expect(response.json().error).toMatchObject({
+    code: 'SKILL_CATALOG_UNAVAILABLE',
+    message: 'Skill catalog is unavailable.'
+  });
 });
