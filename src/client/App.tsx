@@ -1,6 +1,7 @@
 import { BrowserRouter } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { AppRouter } from './app/router.js';
+import { bootstrapResponseSchema } from '../shared/api/schemas.js';
 
 export default function App() {
   // Keep the personal shell as the synchronous fallback for existing desktop
@@ -17,13 +18,11 @@ export default function App() {
       .then(async response => {
         if (!response.ok) return undefined;
         const payload: unknown = await response.json();
-        if (typeof payload !== 'object' || payload === null || !('data' in payload)) return undefined;
-        const data = payload.data;
-        if (typeof data !== 'object' || data === null || !('runtimeMode' in data)) return undefined;
-        return data.runtimeMode === 'company' ? 'company' : 'personal';
+        const parsed = bootstrapResponseSchema.safeParse(payload);
+        return parsed.success ? parsed.data.data.runtimeMode : undefined;
       })
       .then(mode => { if (!disposed) setRuntimeMode(mode ?? 'personal'); })
-      .catch(() => undefined);
+      .catch(() => { if (!disposed) setRuntimeMode('personal'); });
     return () => { disposed = true; };
   }, []);
   return (
