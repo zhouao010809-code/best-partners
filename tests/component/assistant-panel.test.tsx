@@ -18,7 +18,8 @@ const provider: AssistantProvider = { id: 'deepseek', name: 'DeepSeek', status: 
 const secondary: AssistantProvider = { id: 'secondary-provider', name: '备用服务', status: 'ready', defaultModel: 'secondary-model-v1', defaultEffort: 'ultra', models: [{ id: 'secondary-model-v1', name: '备用模型 V1', reasoningEfforts: ['high', 'ultra'], recommended: true }] };
 const conversation: AssistantConversation = { id: '11c7a1d4-7cbf-4e92-9c64-ad175aa17d18', title: '学习方法', createdAt: '2026-09-09T06:00:00Z', updatedAt: '2026-09-09T06:00:01Z', status: 'idle', providerId: 'deepseek', model: 'deepseek-v4-pro', effort: 'high', scope: 'brain', messages: [{ id: 'm1', role: 'user', text: '帮我找到学习方法', sources: [], actions: [] }, { id: 'm2', role: 'assistant', text: '先提出一个**具体问题**。[S1]', model: 'deepseek-v4-pro', sources: [{ id: 'S1', path: '02知识库/09学习/学习方法.md', title: '学习方法' }], actions: [{ id: 'a1', type: 'review', label: '审阅知识候选', runId: 'run-123' }] }] };
 const service = { providers: vi.fn(), history: vi.fn(), get: vi.fn(), send: vi.fn(), stop: vi.fn(), confirmAction: vi.fn(), cancelAction: vi.fn(), login: vi.fn() };
-const api = { assistant: service } as unknown as ReadConsoleApi;
+const skills = { match: vi.fn() };
+const api = { assistant: service, skills } as unknown as ReadConsoleApi;
 function Harness({ path = '/knowledge?path=02知识库%2F09学习%2F学习方法.md', dataRevision = 0 }: { path?: string; dataRevision?: number }) {
   const [open, setOpen] = useState(true); const [running, setRunning] = useState(false); const [width, setWidth] = useState(430);
   const close = useCallback(() => setOpen(false), []);
@@ -26,6 +27,7 @@ function Harness({ path = '/knowledge?path=02知识库%2F09学习%2F学习方法
 }
 beforeEach(() => {
   service.providers.mockResolvedValue(ok({ providers: [provider, secondary] })); service.history.mockResolvedValue(ok({ conversations: [] })); service.send.mockResolvedValue(ok(conversation)); service.get.mockResolvedValue(ok(conversation)); service.stop.mockResolvedValue(ok({ ...conversation, status: 'stopped' }));
+  skills.match.mockResolvedValue(ok({ candidates: [] }));
   service.login.mockResolvedValue(ok({ authUrl: 'https://auth.example.com/secondary', message: '请完成登录。' }));
 });
 afterEach(() => { cleanup(); vi.resetAllMocks(); vi.useRealTimers(); Reflect.deleteProperty(window, 'xiaozhaoDesktop'); });

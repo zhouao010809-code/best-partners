@@ -27,3 +27,20 @@ it('renders an archive plan before the archive receipt branch', () => {
   expect(screen.getByRole('article', { name: '待确认的归档计划' })).toBeVisible();
   expect(screen.getByRole('button', { name: '确认归档' })).toBeVisible();
 });
+
+it('marks an assistant answer with the confirmed Skill name and short revision', () => {
+  render(<MemoryRouter><AssistantMessageView
+    message={{
+      id: 'message',
+      role: 'assistant',
+      text: '回答',
+      sources: [],
+      actions: [],
+      skillUse: { id: 'a'.repeat(64), name: '公众号写作', revision: 'b'.repeat(64), folderName: '写作' }
+    }}
+    onFollowUp={() => {}}
+  /></MemoryRouter>);
+  expect(screen.getByText(/已使用 Skill：公众号写作/u)).toBeVisible();
+  expect(screen.getByText(/写作 · b{8}/u)).toBeVisible();
+  expect(screen.queryByText(/[/\\]/u)).not.toBeInTheDocument();
+});

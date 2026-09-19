@@ -84,7 +84,7 @@ it('preserves attachment-only scope on restore and sends it without silently wid
   const user = userEvent.setup(); const attachment = fileRecord();
   const saved: AssistantDraft = { id: uuid(), revision: 1, text: '只解释已选文件', attachments: [{ id: attachment.id }], groupId: uuid(), scope: 'current', updatedAt: '2026-09-10', lastActive: '2026-09-10' };
   const f = draftService([saved]); const send = vi.fn(async (_input: unknown) => ({ ok: false, state: { status: 'operation-error', message: '测试未执行模型' } }));
-  const api = { assistantDrafts: f.service, attachments: { get: vi.fn(async () => ok({ attachment })) }, assistant: { providers: vi.fn(async () => ok({ providers: [{ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'model', name: 'Model', reasoningEfforts: [] }] }] })), history: vi.fn(async () => ok({ conversations: [] })), send } } as unknown as ReadConsoleApi;
+  const api = { assistantDrafts: f.service, attachments: { get: vi.fn(async () => ok({ attachment })) }, skills: { match: vi.fn(async () => ok({ candidates: [] })) }, assistant: { providers: vi.fn(async () => ok({ providers: [{ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'model', name: 'Model', reasoningEfforts: [] }] }] })), history: vi.fn(async () => ok({ conversations: [] })), send } } as unknown as ReadConsoleApi;
   render(<MemoryRouter><AssistantPanel api={api} open onClose={() => {}} width={430} onWidthChange={() => {}} onRunningChange={() => {}} /></MemoryRouter>);
   await screen.findByText(attachment.name); expect(screen.getByLabelText('资料范围')).toHaveValue('current'); expect(screen.getByRole('option', { name: '仅本轮附件' })).toBeEnabled();
   await user.click(screen.getByRole('button', { name: '发送消息' })); await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
@@ -117,7 +117,7 @@ it.each(['archive receipt', 'task completion'] as const)('refreshes selected fil
     return ok({ ...running, status: trigger === 'task completion' ? 'idle' as const : 'running' as const, messages: [{ ...running.messages[0]!, text: '文件归档已经完成', actions: trigger === 'archive receipt' ? [{ id: 'archive-action', type: 'archive' as const, attachmentId: attachment.id, operationId, materialPath: '01图书馆/阅读资料.md', materialTitle: '阅读资料', status: 'archived' as const, label: '查看归档资料' }] : [] }] });
   });
   const getAttachment = vi.fn(async () => ok({ attachment }));
-  const api = { assistantDrafts: f.service, attachments: { get: getAttachment }, assistant: { providers: vi.fn(async () => ok({ providers: [{ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'model', name: 'Model', reasoningEfforts: [] }] }] })), history: vi.fn(async () => ok({ conversations: [] })), get, send: vi.fn(async () => ok(running)) } } as unknown as ReadConsoleApi;
+  const api = { assistantDrafts: f.service, attachments: { get: getAttachment }, skills: { match: vi.fn(async () => ok({ candidates: [] })) }, assistant: { providers: vi.fn(async () => ok({ providers: [{ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'model', name: 'Model', reasoningEfforts: [] }] }] })), history: vi.fn(async () => ok({ conversations: [] })), get, send: vi.fn(async () => ok(running)) } } as unknown as ReadConsoleApi;
   render(<MemoryRouter><AssistantPanel api={api} open onClose={() => {}} width={430} onWidthChange={() => {}} onRunningChange={() => {}} /></MemoryRouter>);
   await screen.findByText('临时附件'); await user.click(screen.getByRole('button', { name: '发送消息' })); await screen.findByRole('button', { name: '停止回答' });
   const afterStarting = getAttachment.mock.calls.length;

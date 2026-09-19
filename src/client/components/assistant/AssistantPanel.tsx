@@ -5,16 +5,23 @@ import type { ApiClientResult, ReadConsoleApi } from '../../api/client.js';
 import type { AssistantConversation, AssistantProvider, AssistantSend, AssistantPlanAction } from '../../../shared/api/assistant.js';
 import type { Attachment, AttachmentSelection } from '../../../shared/api/attachments.js';
 import type { AssistantDraft } from '../../../shared/api/assistant-drafts.js';
+import type { SkillMatchCandidate } from '../../../shared/api/skills.js';
 import { AttachmentPicker } from './AttachmentPicker.js';
 import { ContextUsage } from './ContextUsage.js';
 import { AssistantContinuation } from './AssistantContinuation.js';
 import { useAssistantDrafts } from './useAssistantDrafts.js';
 import { AssistantMessageView } from './AssistantMessageView.js';
+import { SkillRecommendationCard } from './SkillRecommendationCard.js';
 import { ASSISTANT_INTENT_EVENT, ASSISTANT_REVIEW_EVENT, type AssistantIntent } from './assistantIntent.js';
 import '../../styles/assistant.css';
 import '../../styles/ai-glow.css';
 
 type HistoryItem = Omit<AssistantConversation, 'messages'>;
+type SkillRecommendation =
+  | { status: 'matching'; payload: AssistantSend; epoch: number }
+  | { status: 'ready'; payload: AssistantSend; candidates: SkillMatchCandidate[]; selectedIndex: number; epoch: number }
+  | { status: 'error' | 'unavailable'; payload: AssistantSend; message: string; epoch: number }
+  | { status: 'invalidated'; message: string; epoch: number };
 const titleFromPath = (path: string) => path.split('/').at(-1)?.replace(/\.md$/iu, '') ?? path;
 const errorMessage = <T,>(result: ApiClientResult<T>, fallback: string): string => !result.ok && 'state' in result ? result.state.message ?? fallback : fallback;
 const effortName = (value: string) => ({ low: '轻量', medium: '标准', high: '深入', xhigh: '更深入', max: '最高', ultra: 'Ultra', none: '关闭', minimal: '最低' })[value] ?? value;
@@ -84,11 +91,21 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const [error, setError] = useState('');
   const [pollError, setPollError] = useState<{ id: string; message: string }>();
   const [pollRevision, setPollRevision] = useState(0);
+  const interactionEpoch = useRef(0);
+  const [skillRecommendation, setSkillRecommendation] = useState<SkillRecommendation>();
+  const skillMatchAbort = useRef<AbortController | undefined>(undefined);
   const draft = draftStore.current.text;
-  const setDraft = (value: string | ((current: string) => string)) => draftStore.update({ text: typeof value === 'function' ? value(draftStore.currentRef.current.text) : value });
+  const setDraft = (value: string | ((current: string) => string)) => {
+    const next = typeof value === 'function' ? value(draftStore.currentRef.current.text) : value;
+    if (skillRecommendation && skillRecommendation.status !== 'invalidated' && next !== skillRecommendation.payload.message) {
+      skillMatchAbort.current?.abort();
+      interactionEpoch.current += 1;
+      setSkillRecommendation({ status: 'invalidated', message: '推荐已失效，请重新发送问题。', epoch: interactionEpoch.current });
+    }
+    draftStore.update({ text: next });
+  };
   const draftRef = useRef(draft); draftRef.current = draft;
   const [queuedIntent, setQueuedIntent] = useState<AssistantIntent>();
-  const interactionEpoch = useRef(0);
   const [pending, setPending] = useState(false);
   const [sending, setSending] = useState(false);
   const [failedSend, setFailedSend] = useState<AssistantSend>();
@@ -212,10 +229,11 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   useEffect(() => {
     if (!open) return;
     textArea.current?.focus();
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.isComposing && !document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) { event.preventDefault(); event.stopPropagation(); if (expanded) { setExpanded(false); return; } onClose(); document.getElementById('assistant-toggle')?.focus(); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.isComposing && !document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) { event.preventDefault(); event.stopPropagation(); if (expanded) { setExpanded(false); return; } clearSkillRecommendation(); onClose(); document.getElementById('assistant-toggle')?.focus(); } };
     window.addEventListener('keydown', escape, true);
     return () => window.removeEventListener('keydown', escape, true);
   }, [open, onClose, expanded]);
+  useEffect(() => { if (!open) clearSkillRecommendation(); }, [open]);
   useEffect(() => {
     setExtractionPath(undefined);
     if (!open || explicitPath || !api.extraction || !/^\/extractions\/[^/]+$/u.test(location.pathname)) return;
@@ -264,6 +282,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   async function loadIntent(intent: AssistantIntent) {
     if (intent.attachments?.length && !await startNewConversation(intent.prompt.slice(0, 16000), intent.attachments)) return;
     interactionEpoch.current += 1;
+    clearSkillRecommendation();
     setDraft(intent.prompt.slice(0, 16000)); setShowHistory(false); setQueuedIntent(undefined);
     if (intent.scope === 'brain') { draftStore.update({ scope: 'brain', contextPath: undefined }); setFollowPageContext(false); }
     if (intent.contextPath) { setPinnedPath(intent.contextPath); setScope('current'); }
@@ -284,13 +303,24 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     return () => window.removeEventListener(ASSISTANT_INTENT_EVENT, applyIntent);
   }, []);
 
-  async function send(input?: AssistantSend) {
-    if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady) return;
-    if (!input && (!draft.trim() || !provider || provider.status !== 'ready' || !model)) return;
-    const payload: AssistantSend = input ?? {
+  function clearSkillRecommendation(): void {
+    skillMatchAbort.current?.abort();
+    skillMatchAbort.current = undefined;
+    setSkillRecommendation(undefined);
+  }
+
+  function buildSendPayload(): AssistantSend | undefined {
+    if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady) return undefined;
+    if (!draft.trim() || !provider || provider.status !== 'ready' || !model) return undefined;
+    return {
       ...(conversation ? { conversationId: conversation.id } : {}), clientRequestId: crypto.randomUUID(), message: draft.trim(), providerId, model: modelId,
       ...(effort ? { effort } : {}), scope, ...(contextPath ? { contextPath } : {}), ...(draftStore.current.attachments.length ? { attachments: draftStore.current.attachments } : {})
     };
+  }
+
+  async function dispatchSend(payload: AssistantSend): Promise<void> {
+    if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady) return;
+    clearSkillRecommendation();
     interactionEpoch.current += 1; localStartedAt.current = Date.now(); setElapsed(0);
     pendingRef.current = true; setPending(true); setSending(true); setError(''); setFailedSend(undefined); followOutput.current = true;
     try {
@@ -301,6 +331,79 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       else { setError(errorMessage(result, '未能确认消息已发送，请重试。')); setFailedSend(payload); }
     } catch { setError('连接中断，尚未确认发送结果。可重试确认这条消息。'); setFailedSend(payload); }
     finally { pendingRef.current = false; setPending(false); setSending(false); }
+  }
+
+  async function matchSkill(payload: AssistantSend): Promise<void> {
+    const matcher = api.skills?.match;
+    if (!matcher) {
+      setSkillRecommendation({ status: 'unavailable', payload, message: '本地 Skill 匹配服务暂不可用。', epoch: interactionEpoch.current });
+      return;
+    }
+    skillMatchAbort.current?.abort();
+    const controller = new AbortController();
+    skillMatchAbort.current = controller;
+    const epoch = ++interactionEpoch.current;
+    setSkillRecommendation({ status: 'matching', payload, epoch });
+    setError('');
+    try {
+      const result = await matcher(payload.message, controller.signal);
+      if (controller.signal.aborted || epoch !== interactionEpoch.current) return;
+      if (!result.ok) {
+        setSkillRecommendation({ status: 'error', payload, message: errorMessage(result, '匹配服务暂不可用，请选择重试或继续普通问问。'), epoch });
+        return;
+      }
+      if (result.value.candidates.length === 0) {
+        clearSkillRecommendation();
+        await dispatchSend(payload);
+        return;
+      }
+      setSkillRecommendation({ status: 'ready', payload, candidates: result.value.candidates, selectedIndex: 0, epoch });
+    } catch {
+      if (!controller.signal.aborted && epoch === interactionEpoch.current) {
+        setSkillRecommendation({ status: 'error', payload, message: '匹配服务暂不可用，请选择重试或继续普通问问。', epoch });
+      }
+    } finally {
+      if (skillMatchAbort.current === controller) skillMatchAbort.current = undefined;
+    }
+  }
+
+  async function send(input?: AssistantSend): Promise<void> {
+    if (input) {
+      await dispatchSend(input);
+      return;
+    }
+    if (skillRecommendation && skillRecommendation.status !== 'invalidated') return;
+    if (skillRecommendation?.status === 'invalidated') clearSkillRecommendation();
+    const payload = buildSendPayload();
+    if (!payload) return;
+    await matchSkill(payload);
+  }
+
+  async function useRecommendedSkill(): Promise<void> {
+    if (!skillRecommendation || skillRecommendation.status !== 'ready') return;
+    const selected = skillRecommendation.candidates[skillRecommendation.selectedIndex];
+    if (!selected) return;
+    await dispatchSend({ ...skillRecommendation.payload, skillId: selected.id, skillRevision: selected.revision });
+  }
+
+  async function skipRecommendedSkill(): Promise<void> {
+    if (!skillRecommendation || (skillRecommendation.status !== 'ready' && skillRecommendation.status !== 'error' && skillRecommendation.status !== 'unavailable')) return;
+    await dispatchSend(skillRecommendation.payload);
+  }
+
+  async function retrySkillMatch(): Promise<void> {
+    if (!skillRecommendation) return;
+    if (skillRecommendation.status === 'invalidated') {
+      const payload = buildSendPayload();
+      if (payload) await matchSkill(payload);
+      return;
+    }
+    if (skillRecommendation.status === 'matching' || skillRecommendation.status === 'ready') return;
+    await matchSkill(skillRecommendation.payload);
+  }
+
+  function selectSkillCandidate(index: number): void {
+    setSkillRecommendation(current => current?.status === 'ready' ? { ...current, selectedIndex: index } : current);
   }
 
   async function stop() {
@@ -332,6 +435,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   async function openConversation(item: HistoryItem) {
     if (!service || locked) return;
     interactionEpoch.current += 1;
+    clearSkillRecommendation();
     pendingRef.current = true; setPending(true); setError('');
     try {
       const result = await service.get(item.id);
@@ -345,7 +449,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
 
   async function startNewConversation(text = '', attachments: AttachmentSelection[] = []): Promise<boolean> {
     if (pendingRef.current || isRunning || !draftStore.ready) return false;
-    pendingRef.current = true; setPending(true); interactionEpoch.current += 1;
+    pendingRef.current = true; setPending(true); interactionEpoch.current += 1; clearSkillRecommendation();
     try {
       if (!await draftStore.newDraft(text, attachments)) return false;
       conversationRef.current = undefined; setConversation(undefined); setPollError(undefined); setFollowPageContext(false);
@@ -354,7 +458,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   }
   async function openDraft(item: AssistantDraft) {
     if (locked) return;
-    interactionEpoch.current += 1; pendingRef.current = true; setPending(true);
+    interactionEpoch.current += 1; clearSkillRecommendation(); pendingRef.current = true; setPending(true);
     try {
       if (!await draftStore.select(item)) return;
       conversationRef.current = undefined; setConversation(undefined); setPollError(undefined); setFollowPageContext(false); setShowHistory(false); setFailedSend(undefined); setError('');
@@ -396,7 +500,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       <button type="button" className="assistant-icon-button" aria-label="历史对话" title="历史对话" aria-pressed={showHistory} onClick={() => { setShowHistory(value => !value); void loadHistory(); }}><History /></button>
       <button type="button" className="assistant-icon-button assistant-new-conversation" aria-label="新对话" title={locked ? '当前回答结束后可新建对话' : '新对话'} disabled={locked} onClick={() => void startNewConversation()}><Plus /><span>新对话</span></button>
       <button type="button" className="assistant-icon-button" aria-label={expanded ? '收起阅读' : '展开阅读'} title={expanded ? '收起阅读' : '展开阅读'} onClick={() => setExpanded(value => !value)}>{expanded ? <Minimize2 /> : <Maximize2 />}</button>
-      <button type="button" className="assistant-icon-button" aria-label="关闭问问" title="关闭 · Esc" onClick={onClose}><X /></button>
+      <button type="button" className="assistant-icon-button" aria-label="关闭问问" title="关闭 · Esc" onClick={() => { clearSkillRecommendation(); onClose(); }}><X /></button>
     </div></header>
 
     {showHistory && <div className="assistant-history"><div className="assistant-history__heading"><button className="assistant-text-button" onClick={() => setShowHistory(false)}><ChevronLeft />返回对话</button><span>历史对话</span></div>
@@ -437,6 +541,26 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       <div className="assistant-compose-area">
         {queuedIntent && <div className="assistant-queued-intent" role="status"><span>{locked ? '已准备新的提问，当前任务结束后可载入。' : draft.trim() ? '已保留正在编辑的问题，另有一条新提问待载入。' : '有一条新的提问待载入。'}</span><div><button type="button" disabled={locked} onClick={() => loadIntent(queuedIntent)}>载入新提问</button><button type="button" onClick={() => setQueuedIntent(undefined)}>暂不使用</button></div></div>}
 
+        {skillRecommendation?.status === 'matching' && <SkillRecommendationCard state="matching" />}
+        {skillRecommendation?.status === 'ready' && <SkillRecommendationCard
+          state="ready"
+          candidates={skillRecommendation.candidates}
+          selectedIndex={skillRecommendation.selectedIndex}
+          onSelect={selectSkillCandidate}
+          onUse={() => void useRecommendedSkill()}
+          onSkip={() => void skipRecommendedSkill()}
+        />}
+        {(skillRecommendation?.status === 'error' || skillRecommendation?.status === 'unavailable') && <SkillRecommendationCard
+          state={skillRecommendation.status}
+          message={skillRecommendation.message}
+          onRetry={() => void retrySkillMatch()}
+          onContinue={() => void skipRecommendedSkill()}
+        />}
+        {skillRecommendation?.status === 'invalidated' && <SkillRecommendationCard
+          state="invalidated"
+          message={skillRecommendation.message}
+          onRetry={() => void retrySkillMatch()}
+        />}
         {isRunning && pollError?.id === conversation?.id && <div className="assistant-notice" role="alert"><p>{pollError.message}</p><button onClick={() => setPollRevision(value => value + 1)}>重新读取进度</button></div>}
         {draftStore.error && <div className="assistant-notice" role="alert"><p>{draftStore.error}</p><button type="button" disabled={draftStore.saving} onClick={() => { void (draftStore.ready ? draftStore.flush() : draftStore.load()); }}>重试草稿保存或恢复</button>{draftStore.conflict && <button type="button" onClick={() => void draftStore.saveAsCopy()}>另存当前草稿</button>}</div>}
         {error && <div className="assistant-notice" role="alert"><p>{error}</p>{missingConversation && <button type="button" disabled={restoringConversation} onClick={() => void restoreConversation(draftStore.current.conversationId!)}>重新打开原对话</button>}{failedSend && <button disabled={pending} onClick={() => void send(failedSend)}>重试这条消息</button>}</div>}
@@ -446,7 +570,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
         {scope === 'current' && conversation?.messages.length ? <p className="assistant-context-note">{contextPath ? `本轮仅检索这份资料${draftStore.current.attachments.length ? '及已选文件' : ''}` : '本轮仅检索已选文件'}；对话仍保留之前的消息。</p> : null}
         <AttachmentPicker key={draftStore.current.id} api={api} value={draftStore.current.attachments} groupId={draftStore.current.groupId} refreshKey={attachmentRefreshKey} disabled={locked} onAttachmentsChange={setAttachmentRecords} onChange={async attachments => { draftStore.update({ attachments }); if (!await draftStore.flush()) throw new Error('draft not saved'); }}>
         {!attachmentsReady && draftStore.current.attachments.length > 0 && <p className="assistant-context-note">附件可阅读后再发送；无法读取的文件可移除或在收件箱归档原件。</p>}
-        <form className="assistant-composer" onSubmit={event => { event.preventDefault(); void send(); }}><textarea ref={textArea} aria-label="发送给问问的消息" placeholder={provider?.status === 'ready' ? '问问你的大脑…' : '连接 AI 后，问问你的大脑…'} value={draft} disabled={pending || !draftStore.ready || restoringConversation} maxLength={16000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} /><div className="assistant-composer__footer"><span>{isRunning ? '关闭面板后仍会继续' : 'Enter 发送 · Shift Enter 换行'}</span><ContextUsage conversation={conversation} model={model} draftChanged={Boolean(draft.trim())} attachmentCount={draftStore.current.attachments.length} disabled={locked} onContinue={() => setShowContinuation(true)} />{isRunning ? <button type="button" className="assistant-send" aria-label="停止回答" title="停止回答" disabled={pending} onClick={() => void stop()}><Square /></button> : <button type="submit" className="assistant-send ai-glow-control" aria-label={pending ? '正在发送' : '发送消息'} title="发送消息" disabled={pending || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || !draft.trim() || provider?.status !== 'ready' || !model || Boolean(providerError)}>{pending ? <LoaderCircle className="assistant-spin" /> : <ArrowUp />}</button>}</div></form></AttachmentPicker>
+        <form className="assistant-composer" onSubmit={event => { event.preventDefault(); void send(); }}><textarea ref={textArea} aria-label="发送给问问的消息" placeholder={provider?.status === 'ready' ? '问问你的大脑…' : '连接 AI 后，问问你的大脑…'} value={draft} disabled={pending || !draftStore.ready || restoringConversation} maxLength={16000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} /><div className="assistant-composer__footer"><span>{isRunning ? '关闭面板后仍会继续' : 'Enter 发送 · Shift Enter 换行'}</span><ContextUsage conversation={conversation} model={model} draftChanged={Boolean(draft.trim())} attachmentCount={draftStore.current.attachments.length} disabled={locked} onContinue={() => setShowContinuation(true)} />{isRunning ? <button type="button" className="assistant-send" aria-label="停止回答" title="停止回答" disabled={pending} onClick={() => void stop()}><Square /></button> : <button type="submit" className="assistant-send ai-glow-control" aria-label={pending ? '正在发送' : '发送消息'} title="发送消息" disabled={pending || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || !draft.trim() || provider?.status !== 'ready' || !model || Boolean(providerError) || Boolean(skillRecommendation && skillRecommendation.status !== 'invalidated')}>{pending ? <LoaderCircle className="assistant-spin" /> : <ArrowUp />}</button>}</div></form></AttachmentPicker>
         {api.assistantDrafts && <p className="assistant-draft-status" role="status">{draftStore.notice || (!draftStore.ready ? '正在恢复本机草稿…' : draftStore.saving || draftStore.dirty && !draftStore.error ? '正在保存到本机…' : draftStore.error ? '当前草稿尚未保存' : '草稿已保留在本机 · 新对话会保留旧记录')}</p>}
         <p className="assistant-disclosure">仅按问题读取所需资料，整理结果由你确认保存。</p>
       </div>
