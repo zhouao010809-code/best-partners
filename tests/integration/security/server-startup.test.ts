@@ -7,6 +7,7 @@ const startup = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   startServer: vi.fn(),
   openStateKernel: vi.fn(),
+  registerClientAssets: vi.fn(),
   localRest51Gateway: vi.fn(),
   companyRuntime: { workspace: { id: 'company' } },
   companyApp: { listen: vi.fn() },
@@ -30,6 +31,7 @@ vi.mock('../../../src/server/company/company-paths.js', () => ({
 vi.mock('../../../src/server/config.js', () => ({ loadConfig: startup.loadConfig }));
 vi.mock('../../../src/server/start-server.js', () => ({ startServer: startup.startServer }));
 vi.mock('../../../src/server/db/database.js', () => ({ openStateKernel: startup.openStateKernel }));
+vi.mock('../../../src/server/client-assets.js', () => ({ registerClientAssets: startup.registerClientAssets }));
 vi.mock('../../../src/server/vault/LocalRest51Gateway.js', () => ({
   LocalRest51Gateway: class { constructor(...args: unknown[]) { return startup.localRest51Gateway(...args); } }
 }));
@@ -50,6 +52,7 @@ beforeEach(() => {
   startup.localRest51Gateway.mockReturnValue(startup.gateway);
   startup.startServer.mockResolvedValue({ origin: 'http://127.0.0.1:4317', port: 4317, close: vi.fn() });
   startup.openStateKernel.mockReturnValue(startup.companyKernel);
+  startup.registerClientAssets.mockResolvedValue(undefined);
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
@@ -96,6 +99,10 @@ describe('legacy CLI startup adapter', () => {
     expect(startup.createCompanyRuntime).toHaveBeenCalledWith({
       workspaceRoot: '/canonical/company-workspace', database: startup.companyKernel.db
     });
+    expect(startup.registerClientAssets).toHaveBeenCalledWith(
+      startup.companyApp,
+      expect.stringMatching(/dist\/client$/u)
+    );
     expect(startup.ensureCompanyWorkspace.mock.invocationCallOrder[0]).toBeLessThan(
       startup.openStateKernel.mock.invocationCallOrder[0]!
     );

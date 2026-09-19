@@ -125,6 +125,22 @@ flowchart LR
 
 ## 在这台 Mac 上使用
 
+### 公司工作区（P0）
+
+公司版是独立的共享项目运行时，服务于同一办公室内的少量成员。它把项目原文件放在独立的 `incoming/`、`projects/`、`skills/`、`system/` 工作区，使用单独的公司数据库和两个公司账号，不读取个人 vault、Local REST 或个人密钥。当前 P0 的主入口只有项目数据看板、项目档案库和 Skill 库；平台后台抓取、视频号/抖音/小红书实时指标及私信读取尚未接入。
+
+在 Mac mini 上先完成完整构建，再用固定的局域网地址启动：
+
+```sh
+npm run build
+COMPANY_HOST=192.168.1.20 COMPANY_PORT=4399 \
+COMPANY_WORKSPACE_ROOT="/Users/Shared/BestPartners/company-workspace" \
+COMPANY_DATA_DIR="/Users/Shared/BestPartners/company-state" \
+npm run company-server
+```
+
+其他电脑打开 `http://192.168.1.20:4399/`。`COMPANY_HOST` 不能使用 `0.0.0.0` 等 wildcard；工作区和状态目录必须是彼此分离的绝对路径。Agent 只通过结构化公司项目工具分析和提交提案，项目文件的最终确认仍在公司工作区完成。完整的账号初始化、项目导入、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
+
 ### 给 Codex 使用独立的只读 MCP
 
 如果希望让 Codex 直接检索这套“大脑”，可以单独注册本地 `brain-mcp`。它通过 STDIO 读取 `01图书馆` 和 `02知识库` 的 Markdown，只提供搜索、阅读和来源证据；它不会接入“问问”、不会调用 DeepSeek、不会写入文件，也不提供 HTTP/URL 入口。

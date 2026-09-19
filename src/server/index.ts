@@ -8,6 +8,7 @@ import { createCompanyHttpPolicy } from './security/loopback-policy.js';
 import { openStateKernel } from './db/database.js';
 import { startServer } from './start-server.js';
 import { LocalRest51Gateway } from './vault/LocalRest51Gateway.js';
+import { registerClientAssets } from './client-assets.js';
 
 if (process.env.RUNTIME_MODE === 'company') {
   const listenOptions = resolveCompanyListenOptions(process.env);
@@ -30,6 +31,10 @@ if (process.env.RUNTIME_MODE === 'company') {
       httpPolicy: createCompanyHttpPolicy(listenOptions),
       onClose: closeKernel
     });
+    // The company runtime is a browser-accessible LAN application as well as
+    // an API. Keep its static client registration at the composition boundary
+    // so the company server still never loads the personal vault client setup.
+    await registerClientAssets(app, process.env.COMPANY_CLIENT_ROOT ?? resolve('dist/client'));
     await app.listen({ host: listenOptions.host, port: listenOptions.port });
   } catch (error) {
     closeKernel();
