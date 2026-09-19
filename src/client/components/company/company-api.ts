@@ -16,6 +16,13 @@ import {
   companyProjectScanRequestSchema,
   companyProjectScanResponseSchema
 } from '../../../shared/api/company-projects.js';
+import {
+  skillIdParamsSchema,
+  skillsResponseSchema,
+  skillResponseSchema,
+  type SkillDetail,
+  type SkillsPage
+} from '../../../shared/api/skills.js';
 import type { ApiClientResult, ClientFailureState } from '../../api/client.js';
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -52,6 +59,10 @@ export interface CompanyApi {
       readonly operationId: string;
     }>>;
     get(id: string, signal?: AbortSignal): Promise<CompanyApiResult<CompanyProject>>;
+  };
+  readonly skills: {
+    list(signal?: AbortSignal): Promise<CompanyApiResult<SkillsPage>>;
+    get(id: string, signal?: AbortSignal): Promise<CompanyApiResult<SkillDetail>>;
   };
 }
 
@@ -198,6 +209,15 @@ export function createBrowserCompanyApi(fetchImplementation?: FetchLike): Compan
           : Promise.resolve(parsed);
       },
       get: (id, signal) => data(fetcher, `/api/company/v1/projects/${encodeURIComponent(id)}`, companyProjectDetailResponseSchema, getInit(signal))
+    },
+    skills: {
+      list: signal => data(fetcher, '/api/company/v1/skills', skillsResponseSchema, getInit(signal)),
+      get: (id, signal) => {
+        const parsed = parseInput(skillIdParamsSchema, { id });
+        return parsed.ok
+          ? data(fetcher, `/api/company/v1/skills/${encodeURIComponent(parsed.value.id)}`, skillResponseSchema, getInit(signal))
+          : Promise.resolve(parsed);
+      }
     }
   };
 }

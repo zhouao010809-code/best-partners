@@ -139,7 +139,7 @@ COMPANY_DATA_DIR="/Users/Shared/BestPartners/company-state" \
 npm run company-server
 ```
 
-其他电脑打开 `http://192.168.1.20:4399/`。`COMPANY_HOST` 不能使用 `0.0.0.0` 等 wildcard；工作区和状态目录必须是彼此分离的绝对路径。Agent 只通过结构化公司项目工具分析和提交提案，项目文件的最终确认仍在公司工作区完成。完整的账号初始化、项目导入、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
+其他电脑打开 `http://192.168.1.20:4399/`。`COMPANY_HOST` 不能使用 `0.0.0.0` 等 wildcard；工作区和状态目录必须是彼此分离的绝对路径。Agent 只通过结构化公司项目工具分析和提交提案，并可在显式绑定公司会话后只读读取 `skills/` 下的 Skill；项目文件的最终确认仍在公司工作区完成。完整的账号初始化、项目导入、Skill 目录边界、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
 
 ### 给 Codex 使用独立的只读 MCP
 

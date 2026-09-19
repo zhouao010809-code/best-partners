@@ -24,7 +24,8 @@ function ok<T>(value: T) { return { ok: true as const, value }; }
 function apiFixture(overrides: Partial<CompanyApi['projects']> = {}): CompanyApi {
   return {
     auth: { bootstrap: vi.fn(), login: vi.fn(), session: vi.fn(async () => ok(session)), logout: vi.fn() },
-    projects: { list: vi.fn(async () => ok({ items: [completed, active] })), scan: vi.fn(async () => ok({ reused: false, run, project: { ...active, id: 'draft-1', name: '新教育项目', status: 'draft' as const }, proposal })), draft: vi.fn(), confirm: vi.fn(async () => ok({ project: active, run: { ...run, state: 'confirmed' as const }, operationId: 'op-2' })), get: vi.fn(), ...overrides }
+    projects: { list: vi.fn(async () => ok({ items: [completed, active] })), scan: vi.fn(async () => ok({ reused: false, run, project: { ...active, id: 'draft-1', name: '新教育项目', status: 'draft' as const }, proposal })), draft: vi.fn(), confirm: vi.fn(async () => ok({ project: active, run: { ...run, state: 'confirmed' as const }, operationId: 'op-2' })), get: vi.fn(), ...overrides },
+    skills: { list: vi.fn(), get: vi.fn() }
   } as CompanyApi;
 }
 

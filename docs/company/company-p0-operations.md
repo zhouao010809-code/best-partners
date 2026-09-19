@@ -4,8 +4,9 @@
 
 - 共享项目工作区与项目文件夹导入；
 - 项目档案、导入提案、确认和状态看板；
+- 公司 `skills/` 下的通用 / 行业 Skill 只读目录与正文浏览；
 - 两个公司账号（operator、reviewer）；
-- Codex / WorkBuddy 通过安全的公司项目工具读取、分析和提交提案。
+- Codex / WorkBuddy 通过安全的公司项目工具读取、分析和提交提案；在显式绑定公司会话的 Agent 适配器中，也可以只读读取 Skill。
 
 平台后台抓取、视频号/抖音/小红书的实时指标、私信读取和账号密码托管不在 P0 范围内。看板没有真实数据时必须显示“尚未接入”或“待建立基线”，不能把未知显示为 0。
 
@@ -88,7 +89,7 @@ rm /tmp/company-bootstrap.json
 5. 由有权限的用户明确确认；Agent 调用 `company.confirm_project` 时必须携带 `runId`、`sourceSha256`、名称、状态和 Skill ID。响应中的 `operationId` 和来源 hash 要写入操作记录。
 6. 确认完成后，项目文件位于 `projects/<projectId>/`，包含 `项目配置.yaml`、`项目说明.md` 和原始文件副本；原始 `incoming/` 来源不会被静默改写。
 
-公司 Agent 工具只有以下五个：
+公司项目 Agent 工具只有以下五个：
 
 ```text
 company.scan_project_folder
@@ -99,6 +100,19 @@ company.get_project
 ```
 
 它们返回结构化 JSON，不接受绝对路径、`..`、符号链接逃逸或模型生成的 shell/file-write 指令。个人版工具不会自动获得这五个公司工具。
+
+### Skill 目录
+
+`skills/` 是公司工作区的文件真源。第一层可以按 `通用`、`教育`、`餐饮` 等分类，分类目录下每个 Skill 文件夹必须包含 `SKILL.md`；没有分类的 Skill 也可以直接放在 `skills/` 下。网页的“Skill 库”只读展示名称、描述、版本、正文和同目录 Markdown 参考文件，不提供网页执行、移动或编辑按钮。
+
+Agent 只读工具为：
+
+```text
+company.list_skills
+company.get_skill
+```
+
+这两个工具必须由公司运行时显式绑定已经认证的公司会话和 `skills` 服务；当前 P0 不会自动把 Codex / WorkBuddy 的外部传输或模型提供商接进网页。Skill 正文中的命令只是内容，不具备执行权限；新增或修改 Skill 仍通过工作区文件和后续受控流程完成。
 
 ## 5. 中断和恢复
 
@@ -133,4 +147,3 @@ company.get_project
 - 访问未知 Host、错误 Origin、公司工作区外路径时应被拒绝；
 - 个人版仍只能访问个人 `/api/v1` 路由，公司 `/api/company/v1` 路由不应出现在个人运行时；
 - 看板对于尚未接入的平台数据显示缺口状态，不显示伪造的 0。
-

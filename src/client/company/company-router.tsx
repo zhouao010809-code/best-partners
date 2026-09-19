@@ -5,6 +5,7 @@ import { CompanyAppShell } from './CompanyAppShell.js';
 import { CompanyProjectDashboardPage } from '../pages/company/CompanyProjectDashboardPage.js';
 import { CompanyProjectLibraryPage } from '../pages/company/CompanyProjectLibraryPage.js';
 import { CompanyProjectDetailPage } from '../pages/company/CompanyProjectDetailPage.js';
+import { CompanySkillLibraryPage } from '../pages/company/CompanySkillLibraryPage.js';
 
 export interface CompanyRouterProps {
   readonly api?: CompanyApi;
@@ -18,7 +19,7 @@ export function CompanyRouter({ api }: CompanyRouterProps = {}): ReactElement {
         <Route path="company/dashboard" element={<CompanyProjectDashboardPage />} />
         <Route path="company/projects" element={<CompanyProjectLibraryPage />} />
         <Route path="company/projects/:id" element={<CompanyProjectDetailPage />} />
-        <Route path="company/skills" element={<section className="company-page company-placeholder-page"><p className="company-eyebrow">SKILL LIBRARY / CONNECTING</p><h1>Skill 库</h1><p>公司 Skill 目录将由 Codex / WorkBuddy 接管；本版先保留统一入口。</p></section>} />
+        <Route path="company/skills" element={<CompanySkillLibraryPage />} />
         <Route index element={<Navigate to="/company/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/company/dashboard" replace />} />
       </Route>

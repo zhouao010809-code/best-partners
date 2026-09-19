@@ -12,6 +12,10 @@ import {
   createProjectService,
   type ProjectService
 } from './project-service.js';
+import {
+  createSkillCatalogService,
+  type SkillCatalogService
+} from '../services/skill-catalog.js';
 
 export interface CompanyPathResolver {
   readonly rootPath: string;
@@ -40,6 +44,7 @@ export interface CompanyRuntime {
   readonly database: CompanyDatabaseProjection;
   readonly auth: CompanyAuthService;
   readonly projects: CompanyProjectService;
+  readonly skills: SkillCatalogService;
 }
 
 export interface CompanyRuntimeOptions {
@@ -47,6 +52,7 @@ export interface CompanyRuntimeOptions {
   readonly database?: Database.Database;
   readonly auth?: CompanyAuthService;
   readonly projects?: CompanyProjectService;
+  readonly skills?: SkillCatalogService;
 }
 
 function unavailableAuth(): CompanyAuthService {
@@ -102,6 +108,10 @@ export function createCompanyRuntime(options: CompanyRuntimeOptions = {}): Compa
           workspace: { id: workspace.id, displayName: workspace.displayName, rootPath }
         })
     ),
-    projects
+    projects,
+    skills: options.skills ?? createSkillCatalogService({
+      skillsRoot: workspace.skillsPath,
+      allowNonCanonicalRoot: true
+    })
   };
 }

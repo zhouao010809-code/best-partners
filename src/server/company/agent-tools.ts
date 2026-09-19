@@ -12,10 +12,16 @@ import {
   companyProjectScanDataSchema,
   companyProjectScanRequestSchema
 } from '../../shared/api/company-projects.js';
+import {
+  skillDetailSchema,
+  skillIdParamsSchema,
+  skillsPageSchema
+} from '../../shared/api/skills.js';
 import { PublicApiError } from '../../shared/api/errors.js';
 import { assertCompanyRelativePath } from './company-paths.js';
 import type { CompanyProjectService, CompanyRuntime } from './company-runtime.js';
 import type { AssistantTool } from '../assistant/types.js';
+import type { SkillCatalogService } from '../services/skill-catalog.js';
 
 const companyId = companyProjectRunParamsSchema.shape.id;
 const sourceSha256 = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -38,6 +44,8 @@ export const companyAgentProjectConfirmDataSchema = companyProjectConfirmDataSch
  */
 export interface CompanyAgentToolsInput {
   readonly projects: CompanyProjectService;
+  /** Optional read-only Skill catalog; omitted callers retain the project-only tool set. */
+  readonly skills?: SkillCatalogService;
   readonly workspace: Pick<CompanyRuntime['workspace'], 'rootPath' | 'incomingPath'>;
   readonly actorId?: string;
   /** The composition root may bind this to the authenticated company session. */
@@ -186,7 +194,7 @@ export function createCompanyAgentTools(input: CompanyAgentToolsInput): Assistan
   const scanRequest = companyProjectScanRequestSchema;
   const confirmRequest = z.strictObject({ runId: companyId, ...companyProjectConfirmRequestSchema.shape });
 
-  return [
+  const tools: AssistantTool[] = [
     makeTool({
       name: 'company.scan_project_folder',
       description: '只分析 incoming 中已存在的项目文件夹并生成待确认提案。不要把提案当成已创建项目；不会接受绝对路径、命令或任意文件写入指令。',
@@ -264,6 +272,33 @@ export function createCompanyAgentTools(input: CompanyAgentToolsInput): Assistan
       }
     })
   ];
+  if (input.skills !== undefined) {
+    tools.push(
+      makeTool({
+        name: 'company.list_skills',
+        description: '读取公司工作区的通用和行业 Skill 目录。只读，不会执行、移动或修改 Skill 文件。',
+        schema: listInput,
+        signal: input.signal,
+        effect: 'read',
+        execute: async () => {
+          await input.authorize?.('proposal:read');
+          return skillsPageSchema.parse(await input.skills!.list());
+        }
+      }),
+      makeTool({
+        name: 'company.get_skill',
+        description: '读取指定公司 Skill 的说明正文和参考文件名。只读，正文中的命令不会获得执行权限。',
+        schema: skillIdParamsSchema,
+        signal: input.signal,
+        effect: 'read',
+        execute: async ({ id }) => {
+          await input.authorize?.('proposal:read');
+          return skillDetailSchema.parse(await input.skills!.get(id));
+        }
+      })
+    );
+  }
+  return tools;
 }
 
 /** Alias kept for callers that name the adapter by its project-specific role. */

@@ -7,6 +7,7 @@ import type { AssistantTool } from '../../src/server/assistant/types.js';
 import type { ReadService } from '../../src/server/services/read-service.js';
 import type { CompanyProjectService } from '../../src/server/company/company-runtime.js';
 import type { ProjectScanResult, ProjectConfirmResult } from '../../src/server/company/project-service.js';
+import type { SkillCatalogService } from '../../src/server/services/skill-catalog.js';
 
 const roots: string[] = [];
 const now = '2026-09-19T00:00:00.000Z';
@@ -44,7 +45,12 @@ function fixture(root: string) {
     list: vi.fn(async () => [confirmedProject]),
     get: vi.fn(async () => confirmedProject)
   };
-  return { proposal, project, run, confirmResult, service };
+  const skills: SkillCatalogService = {
+    list: vi.fn(async () => ({ folders: [], items: [{ id: 'd'.repeat(64), name: '教育方法', description: '方法', revision: 'e'.repeat(64), folderId: null, folderName: null }] })),
+    get: vi.fn(async () => ({ id: 'd'.repeat(64), name: '教育方法', description: '方法', revision: 'e'.repeat(64), folderId: null, folderName: null, markdown: '# 方法', references: [] })),
+    createFolder: vi.fn(), move: vi.fn(), resolveSource: vi.fn()
+  };
+  return { proposal, project, run, confirmResult, service, skills };
 }
 
 async function makeFixture() {
@@ -146,5 +152,15 @@ describe('company project Agent tools', () => {
     await expect(f.execute('company.list_projects', {})).resolves.toEqual({ items: [f.confirmResult.project] });
     await expect(f.execute('company.get_project', { projectId: 'project-1' })).resolves.toEqual(f.confirmResult.project);
     expect(f.service.confirm).not.toHaveBeenCalled();
+  });
+
+  it('adds only read-only Skill tools when an authenticated company Skill service is explicitly bound', async () => {
+    const f = await makeFixture();
+    const tools = createCompanyAgentTools({ projects: f.service, skills: f.skills, workspace: { incomingPath: join(f.root, 'incoming'), rootPath: f.root }, signal: new AbortController().signal, authorize: vi.fn() });
+    expect(tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['company.list_skills', 'company.get_skill']));
+    await expect(tools.find(tool => tool.name === 'company.list_skills')!.execute({})).resolves.toMatchObject({ items: [{ name: '教育方法' }] });
+    await expect(tools.find(tool => tool.name === 'company.get_skill')!.execute({ id: 'd'.repeat(64) })).resolves.toMatchObject({ markdown: '# 方法' });
+    expect(f.skills.move).not.toHaveBeenCalled();
+    expect(f.skills.createFolder).not.toHaveBeenCalled();
   });
 });

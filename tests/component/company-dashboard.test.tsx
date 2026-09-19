@@ -17,7 +17,7 @@ const items = [
 ];
 
 function apiFixture(): CompanyApi {
-  return { auth: { bootstrap: vi.fn(), login: vi.fn(), session: vi.fn(async () => ({ ok: true as const, value: session })), logout: vi.fn() }, projects: { list: vi.fn(async () => ({ ok: true as const, value: { items } })), scan: vi.fn(), draft: vi.fn(), confirm: vi.fn(), get: vi.fn() } } as CompanyApi;
+  return { auth: { bootstrap: vi.fn(), login: vi.fn(), session: vi.fn(async () => ({ ok: true as const, value: session })), logout: vi.fn() }, projects: { list: vi.fn(async () => ({ ok: true as const, value: { items } })), scan: vi.fn(), draft: vi.fn(), confirm: vi.fn(), get: vi.fn() }, skills: { list: vi.fn(), get: vi.fn() } } as CompanyApi;
 }
 
 afterEach(() => cleanup());

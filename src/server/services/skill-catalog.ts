@@ -123,8 +123,16 @@ async function readBoundedFile(path: string): Promise<Buffer | undefined> {
 
 export function createSkillCatalogService(input: {
   skillsRoot: string;
+  /**
+   * Company workspaces keep their Skill catalog under workspace/skills rather
+   * than the personal vault's .claude/skills path. The relaxed root still
+   * rejects symlinked roots and all unsafe descendants; it only removes the
+   * personal layout-name requirement.
+   */
+  allowNonCanonicalRoot?: boolean;
 }): SkillCatalogService {
   const configuredRoot = resolve(input.skillsRoot);
+  const allowNonCanonicalRoot = input.allowNonCanonicalRoot === true;
   const configuredParent = dirname(configuredRoot);
   const configuredVault = dirname(configuredParent);
 
@@ -133,32 +141,30 @@ export function createSkillCatalogService(input: {
   }
 
   async function fixedRoot(): Promise<string> {
-    if (!hasCanonicalNames()) throw unavailable();
+    if (!hasCanonicalNames() && !allowNonCanonicalRoot) throw unavailable();
     try {
-      const [vaultStat, parentStat, rootStat] = await Promise.all([
+      const rootStat = await lstat(configuredRoot);
+      if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw unavailable();
+      const canonicalRoot = await realpath(configuredRoot);
+      if (allowNonCanonicalRoot) {
+        return canonicalRoot;
+      }
+      const [vaultStat, parentStat] = await Promise.all([
         lstat(configuredVault),
-        lstat(configuredParent),
-        lstat(configuredRoot)
+        lstat(configuredParent)
       ]);
       if (
         !vaultStat.isDirectory()
         || vaultStat.isSymbolicLink()
         || !parentStat.isDirectory()
         || parentStat.isSymbolicLink()
-        || !rootStat.isDirectory()
-        || rootStat.isSymbolicLink()
-      ) {
-        throw unavailable();
-      }
+      ) throw unavailable();
 
       const canonicalVault = await realpath(configuredVault);
       const canonicalParent = await realpath(configuredParent);
-      const canonicalRoot = await realpath(configuredRoot);
       const expectedParent = join(canonicalVault, basename(configuredParent));
       const expectedRoot = join(expectedParent, basename(configuredRoot));
-      if (canonicalParent !== expectedParent || canonicalRoot !== expectedRoot) {
-        throw unavailable();
-      }
+      if (canonicalParent !== expectedParent || canonicalRoot !== expectedRoot) throw unavailable();
       return canonicalRoot;
     } catch (error) {
       if (error instanceof PublicApiError) throw error;
@@ -185,8 +191,9 @@ export function createSkillCatalogService(input: {
   }
 
   async function ensureRoot(): Promise<string> {
-    if (!hasCanonicalNames()) throw unavailable();
+    if (!hasCanonicalNames() && !allowNonCanonicalRoot) throw unavailable();
     try {
+      if (allowNonCanonicalRoot) return await fixedRoot();
       const vaultStat = await lstat(configuredVault);
       if (!vaultStat.isDirectory() || vaultStat.isSymbolicLink()) {
         throw unavailable();

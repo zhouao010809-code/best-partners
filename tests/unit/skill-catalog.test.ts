@@ -98,6 +98,25 @@ it('rejects a catalog configured outside .claude/skills', async () => {
   });
 });
 
+it('supports an explicitly relaxed company root without weakening child containment', async () => {
+  const vault = await fixture();
+  const root = join(vault, 'workspace', 'skills');
+  await mkdir(join(root, '教育'), { recursive: true });
+  await skill(join(root, '教育'), '内容策划', '# Education method');
+  const service = createSkillCatalogService({ skillsRoot: root, allowNonCanonicalRoot: true });
+  await expect(service.list()).resolves.toMatchObject({
+    folders: [expect.objectContaining({ name: '教育', skillCount: 1 })],
+    items: [expect.objectContaining({ name: '内容策划', folderName: '教育' })]
+  });
+
+  const outside = await fixture();
+  await skill(outside, 'outside', '# Outside');
+  const link = join(vault, 'workspace', 'linked-skills');
+  await symlink(outside, link);
+  await expect(createSkillCatalogService({ skillsRoot: link, allowNonCanonicalRoot: true }).list())
+    .rejects.toMatchObject({ code: 'SKILL_CATALOG_UNAVAILABLE', statusCode: 503 });
+});
+
 it('ignores symlinked custom folders and does not traverse them', async () => {
   const root = await skillRootFixture();
   const outside = await fixture();

@@ -51,6 +51,7 @@ import { registerAssistantDraftRoutes } from './api/routes/assistant-drafts.js';
 import { registerSkillRoutes } from './api/routes/skills.js';
 import { registerCompanyAuthRoutes } from './api/routes/company-auth.js';
 import { registerCompanyProjectRoutes } from './api/routes/company-projects.js';
+import { registerCompanySkillRoutes } from './api/routes/company-skills.js';
 import type { SkillCatalogService } from './services/skill-catalog.js';
 import type { CompanyRuntimeMode } from '../shared/company/workspace.js';
 import { createCompanyRuntime, type CompanyRuntime } from './company/company-runtime.js';
@@ -330,6 +331,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   if (companyRuntime !== undefined) {
     registerCompanyAuthRoutes(app, companyRuntime);
     registerCompanyProjectRoutes(app, { ...companyRuntime, runtime: companyRuntime });
+    registerCompanySkillRoutes(app, companyRuntime);
   }
   app.get('/api/v1/bootstrap', async (request, reply) => {
     let sessionId = sessions.read(request.headers.cookie);
