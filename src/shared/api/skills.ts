@@ -38,6 +38,19 @@ export const skillMoveRequestSchema = z.strictObject({
   folderId: skillFolderIdSchema.nullable()
 });
 
+export const skillMatchRequestSchema = z.strictObject({
+  message: z.string().trim().min(1).max(16_000)
+});
+
+export const skillMatchCandidateSchema = z.strictObject({
+  id: skillIdSchema,
+  name: skillNameSchema,
+  description: skillDescriptionSchema,
+  folderName: z.string().min(1).max(255).nullable(),
+  revision: sha256Schema,
+  reason: z.string().min(1).max(300)
+});
+
 export const skillsPageSchema = z.strictObject({
   folders: z.array(skillFolderSchema).max(1_000),
   items: z.array(skillSummarySchema).max(1_000)
@@ -50,6 +63,9 @@ export const skillResponseSchema = successEnvelopeSchema(skillDetailSchema);
 export const skillFolderResponseSchema = successEnvelopeSchema(skillFolderSchema);
 export const skillFolderCreateResponseSchema = skillFolderResponseSchema;
 export const skillMoveResponseSchema = successEnvelopeSchema(skillSummarySchema);
+export const skillsMatchResponseSchema = successEnvelopeSchema(z.strictObject({
+  candidates: z.array(skillMatchCandidateSchema).max(3)
+}));
 
 export type SkillSummary = z.output<typeof skillSummarySchema>;
 export type SkillDetail = z.output<typeof skillDetailSchema>;
@@ -57,8 +73,11 @@ export type SkillsPage = z.output<typeof skillsPageSchema>;
 export type SkillFolder = z.output<typeof skillFolderSchema>;
 export type SkillFolderCreateRequest = z.output<typeof skillFolderCreateRequestSchema>;
 export type SkillMoveRequest = z.output<typeof skillMoveRequestSchema>;
+export type SkillMatchRequest = z.output<typeof skillMatchRequestSchema>;
+export type SkillMatchCandidate = z.output<typeof skillMatchCandidateSchema>;
 export type SkillResponse = z.output<typeof skillResponseSchema>;
 export type SkillMoveResponse = z.output<typeof skillMoveResponseSchema>;
 export type SkillFolderResponse = z.output<typeof skillFolderResponseSchema>;
 export type SkillFolderCreateResponse = z.output<typeof skillFolderCreateResponseSchema>;
 export type SkillsResponse = z.output<typeof skillsResponseSchema>;
+export type SkillsMatchResponse = z.output<typeof skillsMatchResponseSchema>;

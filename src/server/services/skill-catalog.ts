@@ -28,10 +28,13 @@ const RESERVED_DIRECTORY_NAMES = new Set(['env', 'scripts']);
 export interface SkillCatalogService {
   list(): Promise<SkillsPage>;
   get(id: string): Promise<SkillDetail>;
+  matchDocuments?(): Promise<SkillMatchDocument[]>;
   createFolder(name: string): Promise<SkillFolder>;
   move(skillId: string, folderId: string | null): Promise<SkillSummary>;
   resolveSource(skillId: string): Promise<string>;
 }
+
+export type SkillMatchDocument = Omit<SkillDetail, 'references'>;
 
 type DiscoveredSkill = {
   readonly directoryName: string;
@@ -431,6 +434,16 @@ export function createSkillCatalogService(input: {
     };
   }
 
+  async function matchDocuments(): Promise<SkillMatchDocument[]> {
+    const root = await fixedRoot();
+    const catalog = await layout(root);
+    return catalog.skills
+      .map(parseMetadata)
+      .filter((entry): entry is { summary: SkillSummary; markdown: string } => !!entry)
+      .map((entry) => ({ ...entry.summary, markdown: entry.markdown }))
+      .slice(0, MAX_ENTRIES);
+  }
+
   async function createFolder(name: string): Promise<SkillFolder> {
     if (!isSafeName(name)) {
       throw failure('SKILL_FOLDER_INVALID', 'Skill folder is invalid.');
@@ -558,6 +571,7 @@ export function createSkillCatalogService(input: {
   return {
     list,
     get,
+    matchDocuments,
     createFolder,
     move,
     resolveSource
