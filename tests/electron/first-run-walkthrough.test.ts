@@ -34,7 +34,7 @@ test(`${mode}/${scenario}: a zero-config user can find the first useful path wit
     const window = await instance.firstWindow();
     await expect(window).toHaveTitle('最佳拍档');
 
-    await expect(window.getByText(/把收藏的资料变成可复用的知识/u)).toBeVisible();
+    await expect(window.getByText('把收藏的资料变成可复用的知识。', { exact: true })).toBeVisible();
     await expect(window.getByText(/“待提炼”表示还没有生成知识候选/u)).toBeVisible();
     const setupPrompt = window.getByRole('link', { name: /开始提炼前需要配置 DeepSeek 密钥/u });
     if (scenario === 'pending-material') {
