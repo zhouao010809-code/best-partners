@@ -4,8 +4,7 @@ import type {
   ApiClientResult,
   ClientFailureState,
   SkillDetail,
-  SkillsPage as SkillsPageData,
-  SkillFolder
+  SkillsPage as SkillsPageData
 } from '../api/client.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { PageState } from '../components/PageState.js';
@@ -206,7 +205,7 @@ export function SkillsPage() {
   }
 
   async function moveSkill(skill: SkillSummary, target: string): Promise<void> {
-    if (!skillsApi?.move || target === (skill.folderId ?? '')) return;
+    if (!skillsApi?.move || movingId !== undefined || target === (skill.folderId ?? '')) return;
     setMovingId(skill.id); setMutationError(undefined);
     const controller = new AbortController();
     mutationControllersRef.current.add(controller);
@@ -305,7 +304,7 @@ export function SkillsPage() {
             <p>{skill.description}</p>
             <div className="skills-card__footer"><code>版本 {skill.revision.slice(0, 8)}</code><button type="button" onClick={(event) => openDetail(skill, event.currentTarget)} aria-label={`查看方法：${skill.name}`}>查看方法<ArrowLeft size={14} aria-hidden="true" /></button></div>
             {revealSkill && <button type="button" className="skills-card__reveal" onClick={() => void reveal(skill.id)} disabled={revealingId === skill.id} aria-label={`在 Finder 中打开：${skill.name}`}>{revealingId === skill.id ? '正在打开…' : '在 Finder 中打开'}</button>}
-            {skillsApi?.move && <label className="skills-card__move">移动到：<select aria-label={`移动到：${skill.name}`} value={skill.folderId ?? ''} disabled={movingId === skill.id} onChange={(event) => void moveSkill(skill, event.target.value)}><option value="">未分类</option>{(listData.folders ?? []).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>}
+            {skillsApi?.move && <label className="skills-card__move">移动到：<select aria-label={`移动到：${skill.name}`} value={skill.folderId ?? ''} disabled={movingId !== undefined} onChange={(event) => void moveSkill(skill, event.target.value)}><option value="">未分类</option>{(listData.folders ?? []).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>}
           </article>)}</section>}
         </>
       )}
