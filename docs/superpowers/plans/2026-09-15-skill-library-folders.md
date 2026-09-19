@@ -481,4 +481,3 @@ git commit -m "docs: document skill folder management"
 - 没有删除、回收站、AI 分类、拖拽依赖或 Skill 编辑任务，符合已确认的最简范围。
 - SkillCatalogService.list、createFolder、move、resolveSource 与 API schema、Electron bridge 的名称保持一致。
 - 所有写操作都经过现有 CSRF hook；所有 Electron 调用都经过 assertMainSender；测试只使用临时 vault。
-
