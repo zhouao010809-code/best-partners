@@ -11,9 +11,9 @@ const SHA = 'c'.repeat(64);
 const date = '2026-09-18T08:00:00.000Z';
 const session = { user: { id: 'operator', displayName: '运营', role: 'operator' as const }, csrfToken: 'd'.repeat(43) };
 const items = [
-  { id: 'done', workspaceId: 'company', name: '已完成项目', clientName: '旧客户', status: 'completed' as const, projectRoot: 'projects/done', sourceRoot: 'incoming/done', configSha256: SHA, confidence: {}, createdAt: date, updatedAt: date, dataCoverage: 'not_configured' as const },
-  { id: 'accept', workspaceId: 'company', name: '验收项目', clientName: '验收客户', status: 'acceptance' as const, projectRoot: 'projects/accept', sourceRoot: 'incoming/accept', configSha256: SHA, confidence: {}, createdAt: date, updatedAt: date, dataCoverage: 'not_configured' as const },
-  { id: 'active', workspaceId: 'company', name: '服务中项目', clientName: '当前客户', status: 'active' as const, projectRoot: 'projects/active', sourceRoot: 'incoming/active', configSha256: SHA, confidence: {}, createdAt: date, updatedAt: date, dataCoverage: 'not_configured' as const }
+  { id: 'done', workspaceId: 'company', name: '已完成项目', clientName: '旧客户', status: 'completed' as const, projectRoot: 'projects/done', sourceRoot: 'incoming/done', configSha256: SHA, confidence: {}, selectedSkillIds: [], createdAt: date, updatedAt: date, dataCoverage: 'not_configured' as const },
+  { id: 'accept', workspaceId: 'company', name: '验收项目', clientName: '验收客户', status: 'acceptance' as const, projectRoot: 'projects/accept', sourceRoot: 'incoming/accept', configSha256: SHA, confidence: {}, selectedSkillIds: [], createdAt: date, updatedAt: date, dataCoverage: 'not_configured' as const },
+  { id: 'active', workspaceId: 'company', name: '服务中项目', clientName: '当前客户', status: 'active' as const, projectRoot: 'projects/active', sourceRoot: 'incoming/active', configSha256: SHA, confidence: {}, selectedSkillIds: [], createdAt: date, updatedAt: date, dataCoverage: 'not_configured' as const }
 ];
 
 function apiFixture(): CompanyApi {
@@ -32,7 +32,7 @@ describe('CompanyProjectDashboardPage', () => {
     expect(screen.getByText('尚未接入')).toBeVisible();
     expect(screen.getByText('待建立基线')).toBeVisible();
     expect(screen.queryByText('播放量 0')).not.toBeInTheDocument();
-    expect(screen.getByText('需核对')).toBeVisible();
+    expect(screen.getByText('草稿项目')).toBeVisible();
   });
 
   it('shows a truthful empty state when no projects exist', async () => {

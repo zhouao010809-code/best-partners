@@ -91,6 +91,7 @@ export interface CompanyProjectProjection {
   readonly sourceRoot: string;
   readonly configSha256: string;
   readonly confidence: Readonly<Record<string, unknown>>;
+  readonly selectedSkillIds: readonly string[];
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly dataCoverage: 'not_configured';
@@ -127,6 +128,7 @@ interface ProjectRow {
   source_root: string;
   config_sha256: string;
   confidence_json: string;
+  selected_skill_ids_json: string;
   created_at: string;
   updated_at: string;
 }
@@ -181,6 +183,16 @@ function parseConfidence(value: string): Readonly<Record<string, unknown>> {
   }
 }
 
+function parseSelectedSkillIds(value: string): readonly string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === 'string' && item.length > 0).slice(0, 1000);
+  } catch {
+    return [];
+  }
+}
+
 function projection(row: ProjectRow): CompanyProjectProjection {
   return {
     id: row.id,
@@ -192,6 +204,7 @@ function projection(row: ProjectRow): CompanyProjectProjection {
     sourceRoot: row.source_root,
     configSha256: row.config_sha256,
     confidence: parseConfidence(row.confidence_json),
+    selectedSkillIds: parseSelectedSkillIds(row.selected_skill_ids_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     dataCoverage: 'not_configured'
@@ -478,8 +491,8 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       options.database.prepare(`
         INSERT INTO company_projects (
           id, workspace_id, name, client_name, status, project_root, source_root,
-          config_sha256, confidence_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)
+          config_sha256, confidence_json, selected_skill_ids_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)
       `).run(
         projectId,
         options.workspace.id,
@@ -489,6 +502,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         stagedProposal.sourceRoot,
         stagedProposal.sourceSha256,
         safeJson(stagedProposal.fields),
+        safeJson(stagedProposal.selectedSkillIds),
         timestamp,
         timestamp
       );
@@ -659,9 +673,9 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           ? null
           : ((options.database.prepare('SELECT id FROM company_users WHERE id = ? AND workspace_id = ?').get(input.actorId, options.workspace.id) as { id: string } | undefined)?.id ?? null);
         options.database.prepare(`
-          UPDATE company_projects
+        UPDATE company_projects
           SET name = ?, client_name = ?, status = ?, project_root = ?, source_root = ?,
-              config_sha256 = ?, confidence_json = ?, updated_at = ?
+              config_sha256 = ?, confidence_json = ?, selected_skill_ids_json = ?, updated_at = ?
           WHERE id = ? AND workspace_id = ?
         `).run(
           name,
@@ -671,6 +685,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           runProjection(run).proposal.sourceRoot,
           sha256(configBytes),
           safeJson(runProjection(run).proposal.fields),
+          safeJson(input.selectedSkillIds ?? runProjection(run).proposal.selectedSkillIds),
           timestamp,
           projectId,
           options.workspace.id

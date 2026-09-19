@@ -11,8 +11,8 @@ import type { CompanyApi } from '../../src/client/components/company/company-api
 const SHA = 'a'.repeat(64);
 const time = '2026-09-18T08:00:00.000Z';
 const session = { user: { id: 'owner', displayName: '老板', role: 'owner' as const }, csrfToken: 'c'.repeat(43) };
-const completed = { id: 'completed', workspaceId: 'company', name: 'B 餐饮项目', clientName: 'B 餐饮', status: 'completed' as const, projectRoot: 'projects/completed', sourceRoot: 'incoming/completed', configSha256: SHA, confidence: {}, createdAt: time, updatedAt: time, dataCoverage: 'not_configured' as const };
-const active = { id: 'active', workspaceId: 'company', name: 'A 教育项目', clientName: 'A 培训机构', status: 'active' as const, projectRoot: 'projects/active', sourceRoot: 'incoming/active', configSha256: SHA, confidence: {}, createdAt: time, updatedAt: time, dataCoverage: 'not_configured' as const };
+const completed = { id: 'completed', workspaceId: 'company', name: 'B 餐饮项目', clientName: 'B 餐饮', status: 'completed' as const, projectRoot: 'projects/completed', sourceRoot: 'incoming/completed', configSha256: SHA, confidence: {}, selectedSkillIds: [], createdAt: time, updatedAt: time, dataCoverage: 'not_configured' as const };
+const active = { id: 'active', workspaceId: 'company', name: 'A 教育项目', clientName: 'A 培训机构', status: 'active' as const, projectRoot: 'projects/active', sourceRoot: 'incoming/active', configSha256: SHA, confidence: {}, selectedSkillIds: ['education-content'], createdAt: time, updatedAt: time, dataCoverage: 'not_configured' as const };
 const proposal = {
   sourceRoot: 'incoming/new-project', sourceSha256: SHA, suggestedName: '新教育项目', suggestedClientName: '新培训机构', suggestedStatus: 'draft' as const,
   fields: { clientName: { value: '新培训机构', confidence: 'inferred' as const, evidencePaths: ['项目说明.md'] }, serviceStart: { confidence: 'unknown' as const, evidencePaths: [] } },

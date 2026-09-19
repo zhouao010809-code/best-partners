@@ -22,6 +22,7 @@ import { assertCompanyRelativePath } from './company-paths.js';
 import type { CompanyProjectService, CompanyRuntime } from './company-runtime.js';
 import type { AssistantTool } from '../assistant/types.js';
 import type { SkillCatalogService } from '../services/skill-catalog.js';
+import { companyDisplayPath } from './project-public.js';
 
 const companyId = companyProjectRunParamsSchema.shape.id;
 const sourceSha256 = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -170,22 +171,50 @@ function makeTool<T extends z.ZodType>(input: {
   };
 }
 
-function scanOutput(value: unknown): unknown {
-  const parsed = companyProjectScanDataSchema.parse(value);
-  return companyAgentProjectScanDataSchema.parse({ ...parsed, operationId: parsed.run.operationId, sourceSha256: parsed.run.sourceSha256 });
+function publicProposal<T extends { readonly sourceRoot: string }>(value: T, workspaceRoot: string): T {
+  return { ...value, sourceRoot: companyDisplayPath(value.sourceRoot, workspaceRoot) };
 }
 
-function proposalOutput(value: unknown): unknown {
+function publicProject<T extends { readonly projectRoot: string; readonly sourceRoot: string }>(value: T, workspaceRoot: string): T {
+  return {
+    ...value,
+    projectRoot: companyDisplayPath(value.projectRoot, workspaceRoot),
+    sourceRoot: companyDisplayPath(value.sourceRoot, workspaceRoot)
+  };
+}
+
+function scanOutput(value: unknown, workspaceRoot: string): unknown {
+  const parsed = companyProjectScanDataSchema.parse(value);
+  const proposal = publicProposal(parsed.proposal, workspaceRoot);
+  return companyAgentProjectScanDataSchema.parse({
+    ...parsed,
+    project: publicProject(parsed.project, workspaceRoot),
+    proposal,
+    run: { ...parsed.run, proposal: publicProposal(parsed.run.proposal, workspaceRoot) },
+    operationId: parsed.run.operationId,
+    sourceSha256: parsed.run.sourceSha256
+  });
+}
+
+function proposalOutput(value: unknown, workspaceRoot: string): unknown {
   const parsed = companyProjectDraftDataSchema.parse(value);
   // Parse the nested proposal separately so a malformed persisted JSON value
   // cannot be passed through as opaque Agent context.
   companyProjectProposalSchema.parse(parsed.run.proposal);
-  return parsed;
+  return {
+    run: { ...parsed.run, proposal: publicProposal(parsed.run.proposal, workspaceRoot) },
+    project: publicProject(parsed.project, workspaceRoot)
+  };
 }
 
-function confirmOutput(value: unknown): unknown {
+function confirmOutput(value: unknown, workspaceRoot: string): unknown {
   const parsed = companyProjectConfirmDataSchema.parse(value);
-  return companyAgentProjectConfirmDataSchema.parse({ ...parsed, sourceSha256: parsed.run.sourceSha256 });
+  return companyAgentProjectConfirmDataSchema.parse({
+    ...parsed,
+    project: publicProject(parsed.project, workspaceRoot),
+    run: { ...parsed.run, proposal: publicProposal(parsed.run.proposal, workspaceRoot) },
+    sourceSha256: parsed.run.sourceSha256
+  });
 }
 
 /** Create the five company-only project tools for one authenticated Agent turn. */
@@ -211,7 +240,7 @@ export function createCompanyAgentTools(input: CompanyAgentToolsInput): Assistan
         const sourceRoot = await resolveIncomingPath(input.workspace, requested);
         const scan = requiredMethod(input.projects, 'scan');
         const result = await scan({ sourceRoot, ...actorInput(input.actorId) });
-        return scanOutput(result);
+        return scanOutput(result, input.workspace.rootPath);
       }
     }),
     makeTool({
@@ -223,7 +252,7 @@ export function createCompanyAgentTools(input: CompanyAgentToolsInput): Assistan
       execute: async ({ runId }) => {
         await input.authorize?.('proposal:read');
         const getDraft = requiredMethod(input.projects, 'getDraft');
-        return proposalOutput(await getDraft(runId));
+        return proposalOutput(await getDraft(runId), input.workspace.rootPath);
       }
     }),
     makeTool({
@@ -243,7 +272,7 @@ export function createCompanyAgentTools(input: CompanyAgentToolsInput): Assistan
           ...(value.clientName === undefined ? {} : { clientName: value.clientName }),
           ...actorInput(input.actorId)
         });
-        return confirmOutput(result);
+        return confirmOutput(result, input.workspace.rootPath);
       }
     }),
     makeTool({
@@ -256,7 +285,10 @@ export function createCompanyAgentTools(input: CompanyAgentToolsInput): Assistan
         await input.authorize?.('proposal:read');
         const list = requiredMethod(input.projects, 'list');
         const items = await list();
-        return companyProjectListDataSchema.parse({ items });
+        return companyProjectListDataSchema.parse({
+          items: companyProjectListDataSchema.shape.items.parse(items)
+            .map(project => publicProject(project, input.workspace.rootPath))
+        });
       }
     }),
     makeTool({
@@ -268,7 +300,7 @@ export function createCompanyAgentTools(input: CompanyAgentToolsInput): Assistan
       execute: async ({ projectId }) => {
         await input.authorize?.('proposal:read');
         const get = requiredMethod(input.projects, 'get');
-        return companyProjectSchema.parse(await get(projectId));
+        return publicProject(companyProjectSchema.parse(await get(projectId)), input.workspace.rootPath);
       }
     })
   ];

@@ -7,7 +7,7 @@ const proposal = {
   fields: { clientName: { value: '星河培训', confidence: 'inferred', evidencePaths: ['项目说明.md'] }, serviceStart: { confidence: 'unknown', evidencePaths: [] } }, selectedSkillIds: [], entries: [{ relativePath: '项目说明.md', kind: 'file', bytes: 20, sha256: SHA }], issues: []
 };
 const run = { id: 'run-e2e', projectId: 'project-e2e', sourceSha256: SHA, state: 'proposed', proposal, operationId: 'op-e2e', createdAt: '2026-09-18T08:00:00.000Z', updatedAt: '2026-09-18T08:00:00.000Z' };
-const active = { id: 'project-e2e', workspaceId: 'company', name: '培训机构项目', clientName: '星河培训', status: 'active', projectRoot: 'projects/project-e2e', sourceRoot: 'incoming/培训机构', configSha256: SHA, confidence: {}, createdAt: '2026-09-18T08:00:00.000Z', updatedAt: '2026-09-18T08:01:00.000Z', dataCoverage: 'not_configured' };
+const active = { id: 'project-e2e', workspaceId: 'company', name: '培训机构项目', clientName: '星河培训', status: 'active', projectRoot: 'projects/project-e2e', sourceRoot: 'incoming/培训机构', configSha256: SHA, confidence: {}, selectedSkillIds: [], createdAt: '2026-09-18T08:00:00.000Z', updatedAt: '2026-09-18T08:01:00.000Z', dataCoverage: 'not_configured' };
 
 test('company onboarding keeps the source on the Mac mini and confirms an Agent proposal', async ({ page }) => {
   let confirmed = false;

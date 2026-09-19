@@ -63,6 +63,7 @@ describe('company project service', () => {
       name: '明德培训教育代运营',
       clientName: '明德培训',
       status: 'active',
+      selectedSkillIds: ['education-content'],
       actorId: 'operator-1'
     });
     expect(confirmed.project.status).toBe('active');
@@ -70,6 +71,7 @@ describe('company project service', () => {
 
     const projectRoot = join(workspace.projectsPath, confirmed.project.id);
     expect(await readFile(join(projectRoot, '项目配置.yaml'), 'utf8')).toContain('name: 明德培训教育代运营');
+    expect(await readFile(join(projectRoot, '项目配置.yaml'), 'utf8')).toContain('education-content');
     expect(await readFile(join(projectRoot, '项目说明.md'), 'utf8')).toContain('明德培训教育代运营');
     expect(await readFile(join(projectRoot, 'source-manifest.json'), 'utf8')).toContain(draft.proposal.sourceSha256);
     expect(await readFile(join(projectRoot, 'raw', '课程表.md'), 'utf8')).toBe('周一 试听课');
@@ -77,7 +79,7 @@ describe('company project service', () => {
 
     const listed = await service.list();
     expect(listed).toHaveLength(1);
-    expect(listed[0]).toMatchObject({ id: confirmed.project.id, status: 'active', dataCoverage: 'not_configured' });
+    expect(listed[0]).toMatchObject({ id: confirmed.project.id, status: 'active', selectedSkillIds: ['education-content'], dataCoverage: 'not_configured' });
 
     const repeated = await service.scan({ sourceRoot: source, actorId: 'operator-1' });
     expect(repeated.run.id).not.toBe(draft.run.id);
@@ -163,12 +165,16 @@ describe('company project ingestion routes', () => {
     expect(read.statusCode).toBe(200);
     const confirm = await server.inject({ method: 'POST', url: `/api/company/v1/projects/drafts/${draft.run.id}/confirm`, headers, payload: {
       name: '明德培训代运营', clientName: '明德培训', status: 'active',
-      sourceSha256: draft.proposal.sourceSha256, selectedSkillIds: []
+      sourceSha256: draft.proposal.sourceSha256, selectedSkillIds: ['education-content']
     } });
     expect(confirm.statusCode).toBe(200);
     const projectId = confirm.json().data.project.id as string;
     const detail = await server.inject({ url: `/api/company/v1/projects/${projectId}`, headers });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().data.status).toBe('active');
+    expect(detail.json().data.selectedSkillIds).toEqual(['education-content']);
+    expect(detail.json().data.projectRoot).toBe(`projects/${projectId}`);
+    expect(detail.json().data.sourceRoot).toBe('incoming/upload-1');
+    expect(JSON.stringify(detail.json())).not.toContain(workspace.rootPath);
   });
 });

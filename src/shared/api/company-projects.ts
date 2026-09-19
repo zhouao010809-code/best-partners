@@ -59,6 +59,7 @@ export const companyProjectSchema = z.object({
   sourceRoot: pathSchema,
   configSha256: sha256Schema,
   confidence: z.record(z.string(), z.unknown()),
+  selectedSkillIds: z.array(idSchema).max(1000),
   createdAt: dateTimeSchema,
   updatedAt: dateTimeSchema,
   dataCoverage: z.literal('not_configured')

@@ -137,6 +137,7 @@ describe('runtime mode boundary', () => {
       id: 'project-1', workspaceId: 'company', name: '教育代运营', clientName: '明德培训',
       status: 'draft' as const, projectRoot: '/srv/company-workspace/projects/project-1',
       sourceRoot: '/srv/uploads/project-1', configSha256: 'a'.repeat(64), confidence: {},
+      selectedSkillIds: [],
       createdAt: '2026-09-16T00:00:00.000Z', updatedAt: '2026-09-16T00:00:00.000Z', dataCoverage: 'not_configured' as const
     };
     const proposal = {

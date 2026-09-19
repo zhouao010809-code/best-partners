@@ -44,6 +44,7 @@ function fixture() {
         sourceRoot: '/srv/company-workspace/incoming/project-1',
         configSha256: 'a'.repeat(64),
         confidence: {},
+        selectedSkillIds: [],
         createdAt: '2026-09-16T00:00:00.000Z',
         updatedAt: '2026-09-16T00:00:00.000Z',
         dataCoverage: 'not_configured'

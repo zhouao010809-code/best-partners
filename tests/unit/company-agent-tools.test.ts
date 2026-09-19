@@ -30,7 +30,7 @@ function fixture(root: string) {
   const project = {
     id: 'project-1', workspaceId: 'company', name: 'education-project', status: 'draft' as const,
     projectRoot: join(root, 'projects', 'project-1'), sourceRoot: proposal.sourceRoot,
-    configSha256: 'c'.repeat(64), confidence: proposal.fields, createdAt: now, updatedAt: now,
+    configSha256: 'c'.repeat(64), confidence: proposal.fields, selectedSkillIds: [], createdAt: now, updatedAt: now,
     dataCoverage: 'not_configured' as const
   };
   const run = { id: 'run-1', projectId: project.id, sourceSha256: proposal.sourceSha256, state: 'proposed' as const,
@@ -67,6 +67,18 @@ async function makeFixture() {
     signal: new AbortController().signal
   });
   return { ...f, root, tools, execute: (name: string, input: unknown) => tools.find(tool => tool.name === name)!.execute(input) };
+}
+
+function publicProject<T extends { projectRoot: string; sourceRoot: string }>(project: T) {
+  return {
+    ...project,
+    projectRoot: `projects/${project.projectRoot.split('/').at(-1)}`,
+    sourceRoot: `incoming/${project.sourceRoot.split('/').at(-1)}`
+  };
+}
+
+function publicProposal<T extends { sourceRoot: string }>(proposal: T) {
+  return { ...proposal, sourceRoot: `incoming/${proposal.sourceRoot.split('/').at(-1)}` };
 }
 
 describe('company project Agent tools', () => {
@@ -107,7 +119,12 @@ describe('company project Agent tools', () => {
   it('returns a structured proposal and never turns model fields into a filesystem write', async () => {
     const f = await makeFixture();
     const result = await f.execute('company.scan_project_folder', { incomingPath: 'incoming/education-project' });
-    expect(result).toMatchObject({ reused: false, run: f.run, project: f.project, proposal: f.proposal });
+    expect(result).toMatchObject({
+      reused: false,
+      run: { ...f.run, proposal: publicProposal(f.run.proposal) },
+      project: publicProject(f.project),
+      proposal: publicProposal(f.proposal)
+    });
     expect(result).not.toHaveProperty('command');
     expect(result).not.toHaveProperty('write');
     expect(f.service.scan).toHaveBeenCalledWith({ sourceRoot: expect.stringMatching(/\/incoming\/education-project$/u), actorId: 'operator-1' });
@@ -115,12 +132,19 @@ describe('company project Agent tools', () => {
 
   it('keeps proposal retrieval read-only and confirmation explicit', async () => {
     const f = await makeFixture();
-    await expect(f.execute('company.get_project_proposal', { runId: 'run-1' })).resolves.toEqual({ run: f.run, project: f.project });
+    await expect(f.execute('company.get_project_proposal', { runId: 'run-1' })).resolves.toEqual({
+      run: { ...f.run, proposal: publicProposal(f.run.proposal) },
+      project: publicProject(f.project)
+    });
     expect(f.service.confirm).not.toHaveBeenCalled();
     const result = await f.execute('company.confirm_project', {
       runId: 'run-1', sourceSha256: f.proposal.sourceSha256, name: '明德培训教育代运营', clientName: '明德培训', status: 'active', selectedSkillIds: []
     });
-    expect(result).toMatchObject(f.confirmResult);
+    expect(result).toMatchObject({
+      ...f.confirmResult,
+      project: publicProject(f.confirmResult.project),
+      run: { ...f.confirmResult.run, proposal: publicProposal(f.confirmResult.run.proposal) }
+    });
     expect(result).toMatchObject({ operationId: 'op-confirm-1', run: { sourceSha256: f.proposal.sourceSha256 } });
     expect(f.service.confirm).toHaveBeenCalledWith('run-1', {
       sourceSha256: f.proposal.sourceSha256, name: '明德培训教育代运营', clientName: '明德培训', status: 'active', selectedSkillIds: [], actorId: 'operator-1'
@@ -149,8 +173,8 @@ describe('company project Agent tools', () => {
 
   it('lists and reads projects through the service without mutation', async () => {
     const f = await makeFixture();
-    await expect(f.execute('company.list_projects', {})).resolves.toEqual({ items: [f.confirmResult.project] });
-    await expect(f.execute('company.get_project', { projectId: 'project-1' })).resolves.toEqual(f.confirmResult.project);
+    await expect(f.execute('company.list_projects', {})).resolves.toEqual({ items: [publicProject(f.confirmResult.project)] });
+    await expect(f.execute('company.get_project', { projectId: 'project-1' })).resolves.toEqual(publicProject(f.confirmResult.project));
     expect(f.service.confirm).not.toHaveBeenCalled();
   });
 

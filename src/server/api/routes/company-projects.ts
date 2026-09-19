@@ -23,6 +23,8 @@ import {
   type CompanyPrincipal
 } from '../../company/company-auth-service.js';
 import type { CompanyProjectService, CompanyRuntime } from '../../company/company-runtime.js';
+import { publicProjectProjection, publicProjectProposal, publicProjectRun } from '../../company/project-public.js';
+import type { CompanyProjectProjection } from '../../company/project-service.js';
 import { parseApiInput, parseApiOutput } from '../route-validation.js';
 
 function authRequest(request: FastifyRequest): CompanyAuthRequest {
@@ -121,7 +123,10 @@ export function registerCompanyProjectRoutes(
   app.get('/api/company/v1/projects', async (request, reply) => {
     const user = await requireCompanyUser(auth, authRequest(request));
     forbidden(auth, user, 'proposal:read');
-    const items = await projects.list(user);
+    const items = (await projects.list(user)).map(item => publicProjectProjection(
+      item as CompanyProjectProjection,
+      dependencies.runtime?.workspace.rootPath ?? ''
+    ));
     reply.header('cache-control', 'no-store');
     return parseApiOutput(companyProjectListResponseSchema, { data: { items }, version: API_VERSION });
   });
@@ -137,7 +142,16 @@ export function registerCompanyProjectRoutes(
     const scan = requiredMethod(projects, 'scan');
     const result = await scan({ sourceRoot, actorId: user.id });
     reply.header('cache-control', 'no-store');
-    return parseApiOutput(companyProjectScanResponseSchema, { data: result, version: API_VERSION });
+    const workspaceRoot = dependencies.runtime?.workspace.rootPath ?? '';
+    return parseApiOutput(companyProjectScanResponseSchema, {
+      data: {
+        ...result,
+        run: publicProjectRun(result.run, workspaceRoot),
+        project: publicProjectProjection(result.project, workspaceRoot),
+        proposal: publicProjectProposal(result.proposal, workspaceRoot)
+      },
+      version: API_VERSION
+    });
   });
 
   app.get('/api/company/v1/projects/drafts/:id', async (request, reply) => {
@@ -147,7 +161,14 @@ export function registerCompanyProjectRoutes(
     const getDraft = requiredMethod(projects, 'getDraft');
     const result = await getDraft(id);
     reply.header('cache-control', 'no-store');
-    return parseApiOutput(companyProjectDraftResponseSchema, { data: result, version: API_VERSION });
+    const workspaceRoot = dependencies.runtime?.workspace.rootPath ?? '';
+    return parseApiOutput(companyProjectDraftResponseSchema, {
+      data: {
+        run: publicProjectRun(result.run, workspaceRoot),
+        project: publicProjectProjection(result.project, workspaceRoot)
+      },
+      version: API_VERSION
+    });
   });
 
   app.post('/api/company/v1/projects/drafts/:id/confirm', async (request, reply) => {
@@ -165,7 +186,15 @@ export function registerCompanyProjectRoutes(
       ...(body.clientName === undefined ? {} : { clientName: body.clientName })
     });
     reply.header('cache-control', 'no-store');
-    return parseApiOutput(companyProjectConfirmResponseSchema, { data: result, version: API_VERSION });
+    const workspaceRoot = dependencies.runtime?.workspace.rootPath ?? '';
+    return parseApiOutput(companyProjectConfirmResponseSchema, {
+      data: {
+        ...result,
+        run: publicProjectRun(result.run, workspaceRoot),
+        project: publicProjectProjection(result.project, workspaceRoot)
+      },
+      version: API_VERSION
+    });
   });
 
   app.get('/api/company/v1/projects/:id', async (request, reply) => {
@@ -175,6 +204,9 @@ export function registerCompanyProjectRoutes(
     const get = requiredMethod(projects, 'get');
     const project = await get(id);
     reply.header('cache-control', 'no-store');
-    return parseApiOutput(companyProjectDetailResponseSchema, { data: project, version: API_VERSION });
+    return parseApiOutput(companyProjectDetailResponseSchema, {
+      data: publicProjectProjection(project, dependencies.runtime?.workspace.rootPath ?? ''),
+      version: API_VERSION
+    });
   });
 }

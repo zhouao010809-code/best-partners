@@ -159,7 +159,7 @@ describe('SQLite state kernel', () => {
     const input = makeRoots();
     const first = requireNormal(input);
 
-    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18].map((version) => ({ version }));
+    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19].map((version) => ({ version }));
     expect(first.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
       .toEqual(expectedVersions);
     const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
@@ -240,7 +240,7 @@ describe('SQLite state kernel', () => {
       applyMigrations(db);
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18].map((version) => ({ version })));
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19].map((version) => ({ version })));
       expect(db.prepare('SELECT project_id, state, operation_id FROM company_project_ingestion_runs WHERE id = ?').get('run-1'))
         .toEqual({ project_id: 'project-1', state: 'confirmed', operation_id: 'op-1' });
       // 017 had no event operation_id; 018 derives a traceable migration value from the legacy event id.
@@ -271,7 +271,7 @@ describe('SQLite state kernel', () => {
       applyMigrations(db);
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18].map((version) => ({ version })));
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19].map((version) => ({ version })));
     } finally {
       db.close();
     }
@@ -330,7 +330,7 @@ describe('SQLite state kernel', () => {
     expect(tableColumns('company_workspaces')).toEqual(['id', 'display_name', 'root_path', 'created_at', 'updated_at']);
     expect(tableColumns('company_users')).toEqual(['id', 'workspace_id', 'display_name', 'role', 'password_salt', 'password_hash', 'disabled', 'created_at', 'updated_at']);
     expect(tableColumns('company_sessions')).toEqual(['id_hash', 'user_id', 'expires_at', 'created_at', 'last_seen_at']);
-    expect(tableColumns('company_projects')).toEqual(['id', 'workspace_id', 'name', 'client_name', 'status', 'project_root', 'source_root', 'config_sha256', 'confidence_json', 'created_at', 'updated_at']);
+    expect(tableColumns('company_projects')).toEqual(['id', 'workspace_id', 'name', 'client_name', 'status', 'project_root', 'source_root', 'config_sha256', 'confidence_json', 'created_at', 'updated_at', 'selected_skill_ids_json']);
     expect(tableColumns('company_project_ingestion_runs')).toEqual(['id', 'project_id', 'source_sha256', 'state', 'proposal_json', 'operation_id', 'created_at', 'updated_at']);
     expect(tableColumns('company_project_events')).toEqual(['id', 'project_id', 'actor_id', 'operation_id', 'event_type', 'payload_json', 'created_at']);
     expect(kernel.db.prepare(`
