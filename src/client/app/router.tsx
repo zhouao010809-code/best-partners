@@ -12,6 +12,9 @@ import { IntakePage } from '../pages/IntakePage.js';
 import { ExtractionPage } from '../pages/ExtractionPage.js';
 import { SkillsPage } from '../pages/SkillsPage.js';
 import { AppShell } from './AppShell.js';
+import { CompanyRouter } from '../company/company-router.js';
+
+export type ClientRuntimeMode = 'pending' | 'personal' | 'company';
 
 function WritePlanPlaceholder() {
   return (
@@ -37,12 +40,15 @@ function NotFoundPlaceholder() {
 
 export interface AppRouterProps {
   readonly api?: ReadConsoleApi;
+  /** App passes the server bootstrap mode; an injected API remains personal for tests. */
+  readonly runtimeMode?: ClientRuntimeMode;
 }
 
-export function AppRouter({ api }: AppRouterProps = {}) {
+export function AppRouter({ api, runtimeMode = 'personal' }: AppRouterProps = {}) {
+  if (runtimeMode === 'company' && api === undefined) return <CompanyRouter />;
   return (
     <Routes>
-      <Route element={<AppShell {...(api === undefined ? {} : { api })} />}>
+      <Route element={<AppShell {...(api === undefined ? {} : { api })} suspendDataEffects={runtimeMode === 'pending'} />}>
         <Route index element={<DashboardPage />} />
         <Route path="queue" element={<QueuePage />} />
         <Route path="intake" element={<IntakePage />} />

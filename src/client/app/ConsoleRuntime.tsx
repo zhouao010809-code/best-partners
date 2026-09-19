@@ -17,6 +17,10 @@ export type Resource<T> =
 
 export interface ConsoleRuntime {
   readonly api: ReadConsoleApi;
+  /** Present when a host explicitly selected a runtime; personal consumers may omit it. */
+  readonly runtimeMode?: 'personal' | 'company';
+  /** Company session state is owned by CompanyAppShell; this optional slot keeps the outlet contract extensible. */
+  readonly companySession?: unknown;
   readonly health: Resource<HealthSnapshot>;
   readonly dataRevision: number;
   readonly refreshHealth: () => Promise<void>;

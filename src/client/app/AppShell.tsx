@@ -257,9 +257,12 @@ function pageIdentity(pathname: string): PageIdentity {
 
 export interface AppShellProps {
   readonly api?: ReadConsoleApi;
+  /** Keep the synchronous personal shell visible while the host runtime is resolving,
+   * but do not call any personal data endpoints during that window. */
+  readonly suspendDataEffects?: boolean;
 }
 
-export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
+export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = false }: AppShellProps) {
   const location = useLocation();
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -287,7 +290,7 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   const publishedIndexVersionRef = useRef<number | undefined>(undefined);
   const [health, setHealth] = useState<Resource<HealthSnapshot>>({ status: 'loading' });
   const [dataRevision, setDataRevision] = useState(0);
-  const trashInventory = useTrashInventory(api, dataRevision);
+  const trashInventory = useTrashInventory(api, dataRevision, !suspendDataEffects);
   const trashCountDescription = trashInventory.complete
     ? `${trashInventory.active.length} 份暂存`
     : trashInventory.loading ? '正在读取回收站数量' : '回收站数量暂不可用';
@@ -450,6 +453,7 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
   }, [executeFocusCycle]);
 
   useEffect(() => {
+    if (suspendDataEffects) return undefined;
     mountedRef.current = true;
     const initialOwner = healthOwnerSequenceRef.current;
     const request = readHealth();
@@ -477,9 +481,10 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
       latestHealthRequestRef.current = undefined;
       focusCycleRef.current = undefined;
     };
-  }, [publishHealth, readHealth]);
+  }, [publishHealth, readHealth, suspendDataEffects]);
 
   useEffect(() => {
+    if (suspendDataEffects) return undefined;
     let disposed = false;
     let timer: number;
     const poll = async (): Promise<void> => {
@@ -494,15 +499,16 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
       disposed = true;
       window.clearTimeout(timer);
     };
-  }, [refreshHealth]);
+  }, [refreshHealth, suspendDataEffects]);
 
   useEffect(() => {
+    if (suspendDataEffects) return undefined;
     const handleFocus = (): void => {
       void runFocusCycle();
     };
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
-  }, [runFocusCycle]);
+  }, [runFocusCycle, suspendDataEffects]);
 
   useEffect(() => {
     if (previousPath.current !== undefined && previousPath.current !== location.pathname) {
@@ -513,6 +519,7 @@ export function AppShell({ api = browserReadConsoleApi }: AppShellProps) {
 
   const runtime = useMemo<ConsoleRuntime>(() => ({
     api,
+    runtimeMode: 'personal',
     health,
     dataRevision,
     refreshHealth
