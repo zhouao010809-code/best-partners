@@ -91,9 +91,7 @@ describe('MaterialDeck source boundary', () => {
   it('records internal provenance without claiming a public license or runtime dependency', () => {
     const sourceNote = readSource('SOURCE.md');
 
-    expect(sourceNote).toContain(
-      '/Users/ao/Desktop/production-deck-source-kit-2026-08-31 2/portable/src'
-    );
+    expect(sourceNote).toContain('<内部源码包路径>');
     expect(sourceNote).toContain('2026-09-01');
     expect(sourceNote).toContain('cf4db16fb6bf4498abce8279d310fdc5992ed4d7');
     expect(sourceNote).toContain(
