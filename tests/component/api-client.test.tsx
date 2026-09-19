@@ -229,7 +229,7 @@ describe('read console API facade', () => {
   ])('rejects extra fields in the $name public response schema', async ({ payload, invoke }) => {
     const fetchMock = vi.fn((path: RequestInfo | URL) => (
       path === '/api/v1/bootstrap'
-        ? Promise.resolve(success({ csrfToken: CSRF }))
+        ? Promise.resolve(success({ csrfToken: CSRF, runtimeMode: 'personal' }))
         : Promise.resolve(success(payload))
     ));
     const api = createBrowserReadConsoleApi(fetchMock);
@@ -243,7 +243,7 @@ describe('read console API facade', () => {
   });
 
   it('validates the lazy bootstrap response strictly before sending a command', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(success({ csrfToken: CSRF, unexpected: true }));
+    const fetchMock = vi.fn().mockResolvedValue(success({ csrfToken: CSRF, runtimeMode: 'personal', unexpected: true }));
     const api = createBrowserReadConsoleApi(fetchMock);
 
     const result = await api.openKnowledge('02知识库/alpha.md');
@@ -259,9 +259,9 @@ describe('read console API facade', () => {
   it.each(['SESSION_REQUIRED', 'CSRF_INVALID'])('refreshes authentication once after a pre-handler %s rejection', async (code) => {
     const freshToken = 'f'.repeat(43);
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(success({ csrfToken: CSRF }))
+      .mockResolvedValueOnce(success({ csrfToken: CSRF, runtimeMode: 'personal' }))
       .mockResolvedValueOnce(jsonResponse({ error: { code, message: 'Authentication rejected', operationId: 'auth-1' } }, code === 'SESSION_REQUIRED' ? 401 : 403))
-      .mockResolvedValueOnce(success({ csrfToken: freshToken }))
+      .mockResolvedValueOnce(success({ csrfToken: freshToken, runtimeMode: 'personal' }))
       .mockResolvedValueOnce(success({ opened: true, path: '02知识库/alpha.md' }));
     const api = createBrowserReadConsoleApi(fetchMock);
     expect(await api.openKnowledge('02知识库/alpha.md')).toEqual({ ok: true, value: { opened: true, path: '02知识库/alpha.md' } });
@@ -272,7 +272,7 @@ describe('read console API facade', () => {
   it('does not replay a mutation after an uncertain failure or loop on an authentication failure', async () => {
     for (const code of ['INTERNAL_ERROR', 'CSRF_INVALID']) {
       const fetchMock = vi.fn((path: RequestInfo | URL) => Promise.resolve(path === '/api/v1/bootstrap'
-        ? success({ csrfToken: CSRF })
+        ? success({ csrfToken: CSRF, runtimeMode: 'personal' })
         : jsonResponse({ error: { code, message: 'Rejected', operationId: 'failure-1' } }, code === 'CSRF_INVALID' ? 403 : 500)));
       expect((await createBrowserReadConsoleApi(fetchMock).openKnowledge('02知识库/alpha.md')).ok).toBe(false);
       expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/knowledge/open')).toHaveLength(code === 'CSRF_INVALID' ? 2 : 1);
@@ -301,7 +301,7 @@ describe('read console API facade', () => {
     const rebuildPromise = api.rebuildIndex(7, 'focus-cycle-1');
     expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/bootstrap')).toHaveLength(1);
 
-    releaseBootstrap(success({ csrfToken: CSRF }));
+    releaseBootstrap(success({ csrfToken: CSRF, runtimeMode: 'personal' }));
     await expect(openPromise).resolves.toMatchObject({ ok: true });
     await expect(rebuildPromise).resolves.toMatchObject({ ok: true });
 
@@ -314,7 +314,7 @@ describe('read console API facade', () => {
 
   it('uses CSRF for open, adds idempotency only for rebuild, and posts strict JSON bodies', async () => {
     const fetchMock = vi.fn((path: RequestInfo | URL) => {
-      if (path === '/api/v1/bootstrap') return Promise.resolve(success({ csrfToken: CSRF }));
+      if (path === '/api/v1/bootstrap') return Promise.resolve(success({ csrfToken: CSRF, runtimeMode: 'personal' }));
       if (path === '/api/v1/knowledge/open') {
         return Promise.resolve(success({ opened: true, path: '02知识库/alpha.md' }));
       }
