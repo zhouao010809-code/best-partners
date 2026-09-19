@@ -1,6 +1,7 @@
 import { join, resolve } from 'node:path';
 import { buildServer } from './app.js';
 import { createCompanyRuntime } from './company/company-runtime.js';
+import { ensureCompanyWorkspace } from './company/company-paths.js';
 import { loadConfig } from './config.js';
 import { resolveCompanyListenOptions, resolveLoopbackListenOptions } from './security/origin-host.js';
 import { createCompanyHttpPolicy } from './security/loopback-policy.js';
@@ -10,9 +11,10 @@ import { LocalRest51Gateway } from './vault/LocalRest51Gateway.js';
 
 if (process.env.RUNTIME_MODE === 'company') {
   const listenOptions = resolveCompanyListenOptions(process.env);
-  const workspaceRoot = process.env.COMPANY_WORKSPACE_ROOT ?? join(process.cwd(), 'company-workspace');
+  const configuredWorkspaceRoot = process.env.COMPANY_WORKSPACE_ROOT ?? join(process.cwd(), 'company-workspace');
   const appDataDir = process.env.COMPANY_DATA_DIR ?? join(process.cwd(), 'company-state');
-  const kernel = openStateKernel({ appDataDir, vaultRealRoot: workspaceRoot });
+  const workspace = await ensureCompanyWorkspace(configuredWorkspaceRoot, appDataDir);
+  const kernel = openStateKernel({ appDataDir, vaultRealRoot: workspace.rootPath });
   if (kernel.mode !== 'normal') throw new Error('COMPANY_DATABASE_UNAVAILABLE');
   let closed = false;
   const closeKernel = () => {
@@ -21,7 +23,7 @@ if (process.env.RUNTIME_MODE === 'company') {
     kernel.close();
   };
   try {
-    const companyRuntime = createCompanyRuntime({ workspaceRoot, database: kernel.db });
+    const companyRuntime = createCompanyRuntime({ workspaceRoot: workspace.rootPath, database: kernel.db });
     const app = buildServer({
       runtimeMode: 'company',
       companyRuntime,

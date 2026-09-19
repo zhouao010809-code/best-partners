@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const startup = vi.hoisted(() => ({
   buildServer: vi.fn(),
   createCompanyRuntime: vi.fn(),
+  ensureCompanyWorkspace: vi.fn(),
   loadConfig: vi.fn(),
   startServer: vi.fn(),
   openStateKernel: vi.fn(),
@@ -23,6 +24,9 @@ vi.mock('../../../src/server/app.js', () => ({ buildServer: startup.buildServer 
 vi.mock('../../../src/server/company/company-runtime.js', () => ({
   createCompanyRuntime: startup.createCompanyRuntime
 }));
+vi.mock('../../../src/server/company/company-paths.js', () => ({
+  ensureCompanyWorkspace: startup.ensureCompanyWorkspace
+}));
 vi.mock('../../../src/server/config.js', () => ({ loadConfig: startup.loadConfig }));
 vi.mock('../../../src/server/start-server.js', () => ({ startServer: startup.startServer }));
 vi.mock('../../../src/server/db/database.js', () => ({ openStateKernel: startup.openStateKernel }));
@@ -35,6 +39,13 @@ async function importEntrypoint() { vi.resetModules(); await import('../../../sr
 beforeEach(() => {
   startup.buildServer.mockReturnValue(startup.companyApp);
   startup.createCompanyRuntime.mockReturnValue(startup.companyRuntime);
+  startup.ensureCompanyWorkspace.mockResolvedValue({
+    rootPath: '/canonical/company-workspace',
+    incomingPath: '/canonical/company-workspace/incoming',
+    projectsPath: '/canonical/company-workspace/projects',
+    skillsPath: '/canonical/company-workspace/skills',
+    systemPath: '/canonical/company-workspace/system'
+  });
   startup.loadConfig.mockReturnValue(startup.config);
   startup.localRest51Gateway.mockReturnValue(startup.gateway);
   startup.startServer.mockResolvedValue({ origin: 'http://127.0.0.1:4317', port: 4317, close: vi.fn() });
@@ -77,13 +88,17 @@ describe('legacy CLI startup adapter', () => {
     expect(startup.loadConfig).not.toHaveBeenCalled();
     expect(startup.localRest51Gateway).not.toHaveBeenCalled();
     expect(startup.startServer).not.toHaveBeenCalled();
+    expect(startup.ensureCompanyWorkspace).toHaveBeenCalledWith('/srv/company-workspace', expect.stringMatching(/company-state$/u));
     expect(startup.openStateKernel).toHaveBeenCalledWith({
       appDataDir: expect.stringMatching(/company-state$/u),
-      vaultRealRoot: '/srv/company-workspace'
+      vaultRealRoot: '/canonical/company-workspace'
     });
     expect(startup.createCompanyRuntime).toHaveBeenCalledWith({
-      workspaceRoot: '/srv/company-workspace', database: startup.companyKernel.db
+      workspaceRoot: '/canonical/company-workspace', database: startup.companyKernel.db
     });
+    expect(startup.ensureCompanyWorkspace.mock.invocationCallOrder[0]).toBeLessThan(
+      startup.openStateKernel.mock.invocationCallOrder[0]!
+    );
     expect(startup.buildServer).toHaveBeenCalledWith(expect.objectContaining({
       runtimeMode: 'company',
       companyRuntime: startup.companyRuntime
