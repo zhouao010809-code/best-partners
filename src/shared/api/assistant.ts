@@ -15,6 +15,14 @@ export const assistantContextSchema = z.object({
   history: z.object({ availableMessages: tokenCount, selectedMessages: tokenCount, omittedMessages: tokenCount, messageLimit: z.literal(24), conversationMessageLimit: z.literal(100), conversationMessages: tokenCount, remainingMessages: tokenCount, firstMessageId: z.string().optional(), lastMessageId: z.string().optional() })
 });
 export const assistantProviderSchema = z.object({ id: z.string(), name: z.string(), status: z.enum(['ready', 'unconfigured', 'unavailable']), models: z.array(assistantModelSchema), defaultModel: z.string().optional(), defaultEffort: z.string().optional(), problem: z.string().optional() });
+const assistantSkillIdSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+const assistantSkillRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+export const assistantSkillUseSchema = z.strictObject({
+  id: assistantSkillIdSchema,
+  name: z.string().min(1).max(256),
+  revision: assistantSkillRevisionSchema,
+  folderName: z.string().min(1).max(255).nullable()
+});
 // Offsets and lengths are UTF-16 code units in the original Markdown; lines are 1-based.
 export const assistantEvidenceSchema = z.object({ excerpt: z.string(), revision: z.string(), offset: z.number().int().nonnegative(), length: z.number().int().nonnegative(), startLine: z.number().int().positive(), endLine: z.number().int().positive(), page: z.number().int().positive().optional() });
 export const assistantSourceSchema = z.object({ id: z.string(), path: z.string(), title: z.string(), kind: z.enum(['search', 'read']).optional(), evidence: z.array(assistantEvidenceSchema).optional(), attachmentId: z.uuid().optional() });
@@ -46,11 +54,23 @@ export const assistantMessageSchema = z.object({
   scope: z.enum(['brain', 'current']).optional(), contextPath: z.string().optional(), contextTitle: z.string().optional(),
   startedAt: z.string().optional(), finishedAt: z.string().optional(), steps: z.array(assistantStepSchema).optional(),
   usage: assistantUsageSchema.optional(), context: assistantContextSchema.optional(),
+  skillUse: assistantSkillUseSchema.optional(),
   attachmentArchives: z.array(z.uuid()).max(8).optional(),
   attachments: z.array(attachmentSchema.extend({ startPage: z.number().int().positive().optional(), endPage: z.number().int().positive().optional() })).max(8).optional()
 });
 export const assistantConversationSchema = z.object({ id: z.string(), title: z.string(), createdAt: z.string(), updatedAt: z.string(), status: z.enum(['idle', 'running', 'failed', 'stopped']), providerId: z.string(), model: z.string(), effort: z.string().optional(), scope: z.enum(['brain', 'current']), contextPath: z.string().optional(), messages: z.array(assistantMessageSchema), problem: z.string().optional() });
-export const assistantSendSchema = z.strictObject({ conversationId: z.uuid().optional(), clientRequestId: z.uuid(), message: z.string().trim().min(1).max(16000), providerId: z.string().min(1).max(80), model: z.string().min(1).max(160), effort: z.string().max(40).optional(), scope: z.enum(['brain', 'current']), contextPath: z.string().min(1).max(1024).optional(), attachments: z.array(attachmentSelectionSchema).max(8).refine(items => new Set(items.map(item => item.id)).size === items.length, '附件不可重复选择').optional() });
+export const assistantSendSchema = z.strictObject({
+  conversationId: z.uuid().optional(), clientRequestId: z.uuid(), message: z.string().trim().min(1).max(16000),
+  providerId: z.string().min(1).max(80), model: z.string().min(1).max(160), effort: z.string().max(40).optional(),
+  scope: z.enum(['brain', 'current']), contextPath: z.string().min(1).max(1024).optional(),
+  attachments: z.array(attachmentSelectionSchema).max(8).refine(items => new Set(items.map(item => item.id)).size === items.length, '附件不可重复选择').optional(),
+  skillId: assistantSkillIdSchema.optional(),
+  skillRevision: assistantSkillRevisionSchema.optional()
+}).superRefine((value, context) => {
+  if ((value.skillId === undefined) !== (value.skillRevision === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['skillId'], message: 'skillId 和 skillRevision 必须同时提供' });
+  }
+});
 export const assistantIdSchema = z.strictObject({ id: z.uuid() });
 export const assistantProvidersResponseSchema = successEnvelopeSchema(z.object({ providers: z.array(assistantProviderSchema) }));
 export const assistantConversationResponseSchema = successEnvelopeSchema(assistantConversationSchema);
@@ -69,6 +89,7 @@ export type AssistantUsage = z.infer<typeof assistantUsageSchema>;
 export type AssistantContextEstimate = z.infer<typeof assistantContextEstimateSchema>;
 export type AssistantContext = z.infer<typeof assistantContextSchema>;
 export type AssistantProvider = z.infer<typeof assistantProviderSchema>;
+export type AssistantSkillUse = z.infer<typeof assistantSkillUseSchema>;
 export type AssistantSource = z.infer<typeof assistantSourceSchema>;
 export type AssistantEvidence = z.infer<typeof assistantEvidenceSchema>;
 export type AssistantStep = z.infer<typeof assistantStepSchema>;

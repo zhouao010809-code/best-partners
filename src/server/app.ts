@@ -229,6 +229,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   actionPlans?.recover();
   const assistant = options.assistantAdapters && options.readApi && readService
     ? createAssistantService({ database: options.readApi.database, adapters: options.assistantAdapters,
+      ...(options.skillCatalog ? { skillCatalog: options.skillCatalog } : {}),
       ...(actionPlans ? { actionPlans } : {}),
       ...(options.attachmentService ? { resolveAttachment: (id: string) => options.attachmentService!.get(id) } : {}),
       createTools: context => createAssistantTools({ ...context, readService,

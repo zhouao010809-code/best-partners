@@ -6,16 +6,18 @@ import { applyMigrations } from '../../src/server/db/migrate.js';
 import { createIndexRepository } from '../../src/server/index/index-repository.js';
 import { FakeVaultGateway } from '../../src/server/vault/FakeVaultGateway.js';
 import type { AssistantRunInput } from '../../src/server/assistant/types.js';
+import type { SkillCatalogService } from '../../src/server/services/skill-catalog.js';
 
 const host = '127.0.0.1:4317'; const origin = `http://${host}`;
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
-async function fixture(closeKernel = false) {
+async function fixture(closeKernel = false, skillCatalog?: SkillCatalogService) {
   const database = new Database(':memory:'); applyMigrations(database);
   const run = vi.fn(async (input: AssistantRunInput) => { input.emit({ type: 'text', text: '连接成功' }); });
   const gateway = Object.assign(new FakeVaultGateway({}), { openInObsidian: async () => {} });
   const finalStates: string[] = [];
   const app = buildServer({ assistantAdapters: [{ id: 'test', describe: async () => ({ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'pro', name: 'Pro', reasoningEfforts: [] }] }), run }],
+    ...(skillCatalog ? { skillCatalog } : {}),
     ...(closeKernel ? { onClose: () => { for (const row of database.prepare('SELECT payload FROM assistant_conversations').all() as Array<{payload:string}>) finalStates.push(JSON.parse(row.payload).status); database.close(); } } : {}),
     readApi: { database, gateway, repository: createIndexRepository(database), currentIndexVersion: () => 1, indexScheduler: {
       requestFocusRefresh: async () => ({ generation: 1, outcome: 'succeeded', refresh: { status: 'ready', checked: 0, total: 0, version: 1 } }),
@@ -43,6 +45,29 @@ it('protects AI calls with the existing origin/session/CSRF contract and validat
   expect(found.json().data).toMatchObject({ hasMore: false, conversations: [{ id }] });
   expect((await f.app.inject({ method: 'GET', url: '/api/v1/assistant/conversations?limit=101', headers: { host } })).statusCode).toBe(400);
   expect((await f.app.inject({ method: 'GET', url: '/api/v1/assistant/conversations?cursor=invalid', headers: { host } })).statusCode).toBe(400);
+});
+
+it('keeps skill fields strict and rejects stale confirmed skills before provider calls', async () => {
+  const skillId = 'a'.repeat(64);
+  const catalog = { get: vi.fn(async () => ({
+    id: skillId,
+    name: '公众号写作',
+    description: '写作',
+    revision: 'b'.repeat(64),
+    folderId: null,
+    folderName: null,
+    markdown: '方法说明',
+    references: []
+  })) } as unknown as SkillCatalogService;
+  const f = await fixture(false, catalog);
+  const base = { clientRequestId: randomUUID(), message: 'test', providerId: 'test', model: 'pro', scope: 'brain' };
+
+  expect((await f.app.inject({ method: 'POST', url: '/api/v1/assistant/messages', headers: f.headers, payload: { ...base, skillId } })).statusCode).toBe(400);
+  expect((await f.app.inject({ method: 'POST', url: '/api/v1/assistant/messages', headers: f.headers, payload: {
+    ...base, clientRequestId: randomUUID(), skillId, skillRevision: 'c'.repeat(64)
+  } })).statusCode).toBe(409);
+  expect(f.run).not.toHaveBeenCalled();
+  expect(catalog.get).toHaveBeenCalledTimes(1);
 });
 it('exposes provider choices without starting inference and returns unavailable cleanly without services', async () => {
   const f = await fixture();
