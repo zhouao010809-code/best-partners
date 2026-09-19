@@ -105,6 +105,27 @@ describe('runtime mode boundary', () => {
     expect(companyRuntime).not.toHaveProperty('gateway');
   });
 
+  it('does not expose personal API routes from a company runtime', async () => {
+    const companyRuntime = createCompanyRuntime({ workspaceRoot: '/srv/company-workspace' });
+    const server = buildServer({ runtimeMode: 'company', companyRuntime });
+    servers.push(server);
+
+    const personalRoutes = await Promise.all([
+      server.inject({ url: '/api/v1/health', headers: { host: '127.0.0.1:4317' } }),
+      server.inject({ url: '/api/v1/library', headers: { host: '127.0.0.1:4317' } }),
+      server.inject({ url: '/api/v1/skills', headers: { host: '127.0.0.1:4317' } }),
+      server.inject({ url: '/api/v1/assistant/providers', headers: { host: '127.0.0.1:4317' } })
+    ]);
+
+    expect(personalRoutes.map(response => response.statusCode)).toEqual([404, 404, 404, 404]);
+    expect(personalRoutes.map(response => response.json().error.code)).toEqual([
+      'NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND'
+    ]);
+    const bootstrap = await server.inject({ url: '/api/v1/bootstrap', headers: { host: '127.0.0.1:4317' } });
+    expect(bootstrap.statusCode).toBe(200);
+    expect(bootstrap.json().data.runtimeMode).toBe('company');
+  });
+
   it('exposes strict typed project responses only in company mode', async () => {
     const root = await mkdtemp(join(tmpdir(), 'company-route-'));
     roots.push(root);

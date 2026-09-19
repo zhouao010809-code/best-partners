@@ -268,6 +268,18 @@ export function buildServer(options: BuildServerOptions = {}) {
       ?? isAllowedOrigin(request.headers.origin, nodeEnv, originRequired))) {
       return reply.code(403).send(safeError('ORIGIN_FORBIDDEN', 'Origin rejected', operationId()));
     }
+    // A company process has its own authenticated namespace and must never
+    // accidentally become a personal-vault HTTP server.  Keep only the public
+    // bootstrap probe so the browser can select the company route tree; all
+    // other personal endpoints fail closed instead of returning a misleading
+    // health snapshot or a 503 from an unconfigured personal service.
+    if (
+      runtimeMode === 'company'
+      && pathname.startsWith('/api/v1/')
+      && pathname !== '/api/v1/bootstrap'
+    ) {
+      return reply.code(404).send(safeError('NOT_FOUND', 'Resource not found', operationId()));
+    }
     // In personal mode the company namespace is intentionally absent. Let the
     // request reach the router (and return 404) without requiring a personal
     // mutation session first.
