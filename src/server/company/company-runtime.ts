@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type Database from 'better-sqlite3';
 import { PublicApiError } from '../../shared/api/errors.js';
@@ -16,6 +17,11 @@ import {
   createSkillCatalogService,
   type SkillCatalogService
 } from '../services/skill-catalog.js';
+import {
+  createCompanyMetricsService,
+  createUnavailableCompanyMetricsService,
+  type CompanyMetricsService
+} from './company-metrics-service.js';
 
 export interface CompanyPathResolver {
   readonly rootPath: string;
@@ -45,6 +51,7 @@ export interface CompanyRuntime {
   readonly auth: CompanyAuthService;
   readonly projects: CompanyProjectService;
   readonly skills: SkillCatalogService;
+  readonly metrics: CompanyMetricsService;
 }
 
 export interface CompanyRuntimeOptions {
@@ -53,6 +60,8 @@ export interface CompanyRuntimeOptions {
   readonly auth?: CompanyAuthService;
   readonly projects?: CompanyProjectService;
   readonly skills?: SkillCatalogService;
+  readonly metrics?: CompanyMetricsService;
+  readonly metricsPollIntervalMs?: number;
 }
 
 function unavailableAuth(): CompanyAuthService {
@@ -96,6 +105,13 @@ export function createCompanyRuntime(options: CompanyRuntimeOptions = {}): Compa
           systemPath: workspace.systemPath
         }
       }));
+  const metrics = options.metrics ?? (options.database === undefined || !existsSync(workspace.rootPath)
+    ? createUnavailableCompanyMetricsService()
+    : createCompanyMetricsService({
+      database: options.database,
+      workspace: { id: workspace.id, rootPath: workspace.rootPath },
+      ...(options.metricsPollIntervalMs === undefined ? {} : { pollIntervalMs: options.metricsPollIntervalMs })
+    }));
   return {
     workspace,
     paths: { rootPath, resolve: relativePath => join(rootPath, assertCompanyRelativePath(relativePath)) },
@@ -109,6 +125,7 @@ export function createCompanyRuntime(options: CompanyRuntimeOptions = {}): Compa
         })
     ),
     projects,
+    metrics,
     skills: options.skills ?? createSkillCatalogService({
       skillsRoot: workspace.skillsPath,
       allowNonCanonicalRoot: true

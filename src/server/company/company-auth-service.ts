@@ -35,6 +35,7 @@ export type CompanyPermission =
   | 'project:confirm'
   | 'proposal:read'
   | 'proposal:approve'
+  | 'metrics:import'
   | 'workspace:path:update';
 
 export interface CompanyAuthRequest {

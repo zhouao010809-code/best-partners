@@ -31,7 +31,7 @@ describe('company MCP stdio protocol', () => {
     expect(stderr).not.toContain('COMPANY_PASSWORD');
   }, 15_000);
 
-  it('lists exactly the seven bounded company tools', async () => {
+  it('lists exactly the eleven bounded company tools', async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: ['node_modules/tsx/dist/cli.mjs', 'company-mcp-server/index.ts'],
@@ -54,7 +54,11 @@ describe('company MCP stdio protocol', () => {
       'company.get_project_proposal',
       'company.confirm_project',
       'company.list_skills',
-      'company.get_skill'
+      'company.get_skill',
+      'company.list_data_sources',
+      'company.get_project_metrics',
+      'company.get_sync_status',
+      'company.import_platform_export'
     ]);
     expect(listed.tools.find(tool => tool.name === 'company.confirm_project')?.description)
       .toMatch(/explicitly confirm/u);

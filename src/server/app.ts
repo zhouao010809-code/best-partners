@@ -52,6 +52,7 @@ import { registerSkillRoutes } from './api/routes/skills.js';
 import { registerCompanyAuthRoutes } from './api/routes/company-auth.js';
 import { registerCompanyProjectRoutes } from './api/routes/company-projects.js';
 import { registerCompanySkillRoutes } from './api/routes/company-skills.js';
+import { registerCompanyMetricRoutes } from './api/routes/company-metrics.js';
 import type { SkillCatalogService } from './services/skill-catalog.js';
 import { createSkillMatcherService } from './services/skill-matcher.js';
 import type { CompanyRuntimeMode } from '../shared/company/workspace.js';
@@ -356,6 +357,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     });
     registerCompanyProjectRoutes(app, { ...companyRuntime, runtime: companyRuntime });
     registerCompanySkillRoutes(app, companyRuntime);
+    registerCompanyMetricRoutes(app, companyRuntime);
   }
   app.get('/api/v1/bootstrap', async (request, reply) => {
     let sessionId = sessions.read(request.headers.cookie);

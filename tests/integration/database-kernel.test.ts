@@ -159,7 +159,7 @@ describe('SQLite state kernel', () => {
     const input = makeRoots();
     const first = requireNormal(input);
 
-    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19].map((version) => ({ version }));
+    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20].map((version) => ({ version }));
     expect(first.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
       .toEqual(expectedVersions);
     const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
@@ -193,6 +193,8 @@ describe('SQLite state kernel', () => {
       .toContain('plan_json');
     expect(first.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'company_%' ORDER BY name").all())
       .toEqual([
+        { name: 'company_platform_metric_imports' },
+        { name: 'company_platform_metric_snapshots' },
         { name: 'company_project_events' },
         { name: 'company_project_ingestion_runs' },
         { name: 'company_projects' },
@@ -240,7 +242,7 @@ describe('SQLite state kernel', () => {
       applyMigrations(db);
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19].map((version) => ({ version })));
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20].map((version) => ({ version })));
       expect(db.prepare('SELECT project_id, state, operation_id FROM company_project_ingestion_runs WHERE id = ?').get('run-1'))
         .toEqual({ project_id: 'project-1', state: 'confirmed', operation_id: 'op-1' });
       // 017 had no event operation_id; 018 derives a traceable migration value from the legacy event id.
@@ -271,7 +273,7 @@ describe('SQLite state kernel', () => {
       applyMigrations(db);
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19].map((version) => ({ version })));
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20].map((version) => ({ version })));
     } finally {
       db.close();
     }
@@ -333,6 +335,17 @@ describe('SQLite state kernel', () => {
     expect(tableColumns('company_projects')).toEqual(['id', 'workspace_id', 'name', 'client_name', 'status', 'project_root', 'source_root', 'config_sha256', 'confidence_json', 'created_at', 'updated_at', 'selected_skill_ids_json']);
     expect(tableColumns('company_project_ingestion_runs')).toEqual(['id', 'project_id', 'source_sha256', 'state', 'proposal_json', 'operation_id', 'created_at', 'updated_at']);
     expect(tableColumns('company_project_events')).toEqual(['id', 'project_id', 'actor_id', 'operation_id', 'event_type', 'payload_json', 'created_at']);
+    expect(tableColumns('company_platform_metric_imports')).toEqual([
+      'id', 'workspace_id', 'project_id', 'platform', 'source_relative_path', 'source_sha256',
+      'raw_relative_path', 'source_type', 'state', 'row_count', 'imported_count', 'rejected_count',
+      'error_json', 'created_at', 'updated_at', 'imported_at'
+    ]);
+    expect(tableColumns('company_platform_metric_snapshots')).toEqual([
+      'id', 'workspace_id', 'project_id', 'platform', 'account_ref', 'content_id', 'content_title',
+      'metric_date', 'metric_kind', 'observed_at', 'metrics_json', 'source_type',
+      'source_relative_path', 'raw_relative_path', 'source_sha256', 'source_row', 'header_row',
+      'sheet_name', 'raw_row_sha256', 'created_at'
+    ]);
     expect(kernel.db.prepare(`
       SELECT name
       FROM sqlite_master

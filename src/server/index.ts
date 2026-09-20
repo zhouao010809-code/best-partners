@@ -16,6 +16,7 @@ import { registerClientAssets } from './client-assets.js';
 import { ensurePrivateDirectory } from './db/permissions.js';
 import { acquireCompanyServerLock } from './company/company-operations.js';
 import { installCompanySignalHandlers } from './company/graceful-shutdown.js';
+import { resolveCompanyMetricsPollInterval } from './company/company-metrics-service.js';
 
 if (process.env.RUNTIME_MODE === 'company') {
   const listenOptions = resolveCompanyListenOptions(process.env);
@@ -43,13 +44,24 @@ if (process.env.RUNTIME_MODE === 'company') {
     throw new Error('COMPANY_DATABASE_UNAVAILABLE');
   }
   let closed = false;
-  const closeCompanyResources = () => {
+  let stopCompanyMetrics: (() => Promise<void>) | undefined;
+  const closeCompanyResources = async () => {
     if (closed) return;
     closed = true;
-    try { kernel.close(); } finally { serverLock.release(); }
+    try {
+      await stopCompanyMetrics?.();
+    } finally {
+      try { kernel.close(); } finally { serverLock.release(); }
+    }
   };
   try {
-    const companyRuntime = createCompanyRuntime({ workspaceRoot: workspace.rootPath, database: kernel.db });
+    const metricsPollIntervalMs = resolveCompanyMetricsPollInterval(process.env.COMPANY_METRICS_POLL_MS);
+    const companyRuntime = createCompanyRuntime({
+      workspaceRoot: workspace.rootPath,
+      database: kernel.db,
+      ...(metricsPollIntervalMs === undefined ? {} : { metricsPollIntervalMs })
+    });
+    stopCompanyMetrics = companyRuntime.metrics.start().stop;
     const app = buildServer({
       runtimeMode: 'company',
       companyRuntime,
@@ -64,7 +76,7 @@ if (process.env.RUNTIME_MODE === 'company') {
     await app.listen({ host: listenOptions.host, port: listenOptions.port });
     installCompanySignalHandlers(() => app.close());
   } catch (error) {
-    closeCompanyResources();
+    await closeCompanyResources();
     throw error;
   }
 } else {

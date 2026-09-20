@@ -12,7 +12,10 @@ const startup = vi.hoisted(() => ({
   installCompanySignalHandlers: vi.fn(),
   registerClientAssets: vi.fn(),
   localRest51Gateway: vi.fn(),
-  companyRuntime: { workspace: { id: 'company' } },
+  companyRuntime: {
+    workspace: { id: 'company' },
+    metrics: { start: vi.fn(() => ({ stop: vi.fn() })) }
+  },
   companyApp: { listen: vi.fn() },
   companyKernel: { mode: 'normal', db: { fixture: 'company-db' }, close: vi.fn() },
   companyServerLock: { path: '/tmp/company-server.lock.json', release: vi.fn() },

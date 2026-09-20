@@ -4,11 +4,12 @@
 
 - 共享项目工作区与项目文件夹导入；
 - 项目档案、导入提案、确认和状态看板；
+- 抖音、视频号、小红书官方导出文件的自动发现、校验、去重和指标看板；
 - 公司 `skills/` 下的通用 / 行业 Skill 只读目录与正文浏览；
 - 两个公司账号（operator、reviewer）；
 - Codex / WorkBuddy 通过安全的公司项目工具读取、分析和提交提案；在显式绑定公司会话的 Agent 适配器中，也可以只读读取 Skill。
 
-平台后台抓取、视频号/抖音/小红书的实时指标、私信读取和账号密码托管不在 P0 范围内。看板没有真实数据时必须显示“尚未接入”或“待建立基线”，不能把未知显示为 0。
+平台私有接口抓取、私信读取和账号密码托管不在 P0 范围内。第一版的平台数据采用“官方后台点击导出一次 + Mac mini 自动入库”，不是无人授权的实时 API 同步。看板没有真实数据时必须显示“尚未接入”“待导出”或“数据过期”，不能把未知显示为 0。
 
 ## 1. 目录边界
 
@@ -16,10 +17,10 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `COMPANY_WORKSPACE_ROOT` | 文件真源：`incoming/`、`projects/`、`skills/`、`system/` |
+| `COMPANY_WORKSPACE_ROOT` | 文件真源：`incoming/`、`projects/`、`skills/`、`system/`、`platform-data/` |
 | `COMPANY_DATA_DIR` | SQLite 投影、WAL、`backups/` 和 `recovery/` |
 
-首次启动会创建四个工作区子目录，目录权限为仅当前用户可读写。工作区不能等于、也不能位于 `COMPANY_DATA_DIR` 内；生产环境也不要把它放进个人“我的大脑”目录。
+首次启动会创建四个基础工作区子目录；公司数据库初始化后还会创建独立的 `platform-data/` 与 `platform-data/raw/`，目录权限为仅当前用户可读写。工作区不能等于、也不能位于 `COMPANY_DATA_DIR` 内；生产环境也不要把它放进个人“我的大脑”目录。
 
 推荐使用固定的绝对路径，例如：
 
@@ -109,7 +110,23 @@ curl --fail-with-body -sS --config "$curl_config"
 5. 由有权限的用户明确确认；Agent 调用 `company.confirm_project` 时必须携带 `runId`、`sourceSha256`、名称、状态和 Skill ID。响应中的 `operationId` 和来源 hash 要写入操作记录。
 6. 确认完成后，项目文件位于 `projects/<projectId>/`，包含 `项目配置.yaml`、`项目说明.md` 和原始文件副本；原始 `incoming/` 来源不会被静默改写。
 
-公司 MCP 只暴露以下七个有界工具：
+### 平台导出自动入库
+
+项目确认后，在平台官方后台导出数据文件，不要把账号密码、Cookie 或后台网页地址交给系统。把文件完整复制到 Mac mini 的项目目录（复制完成后服务才会读取）：
+
+```text
+platform-data/douyin/<projectId>/导出.csv
+platform-data/wechat-channels/<projectId>/导出.xlsx
+platform-data/xiaohongshu/<projectId>/导出.xlsx
+```
+
+只允许 `.csv`、`.xlsx`、`.xls`。服务会按平台和 `projectId` 绑定归属，不根据标题猜项目；先等待文件大小和修改时间稳定，再解析首个可识别表头。每一行必须有稳定内容 ID、数据日期和至少一个已识别的累计指标。原始文件会按 SHA-256 复制到 `platform-data/raw/<平台>/<projectId>/`，入库记录保存来源相对路径、行号、表头行、工作表名和原始行 hash。
+
+重复文件会显示“重复”而不新增快照；缺少内容 ID、未知列、负数或不支持的表头会显示“部分导入/失败”；同一项目、平台、内容和日期出现不同数值时标记“需处理”，绝不覆盖旧历史。看板累计指标按每个内容的最新快照汇总，粉丝数按账号最新值处理，不把所有历史快照直接相加。
+
+服务启动后立即扫描，默认每 30 秒扫描一次；`COMPANY_METRICS_POLL_MS` 可设置 5000–86400000 的整数毫秒。网页的“刷新数据”会立即触发一次扫描；也可以让 Codex / WorkBuddy 调用显式导入工具。没有真实导出时显示状态，不显示 0。
+
+公司 MCP 暴露以下十一个有界工具：
 
 ```text
 company.scan_project_folder
@@ -119,9 +136,13 @@ company.list_projects
 company.get_project
 company.list_skills
 company.get_skill
+company.list_data_sources
+company.get_project_metrics
+company.get_sync_status
+company.import_platform_export
 ```
 
-它们返回结构化 JSON，不接受绝对路径、`..`、符号链接逃逸或模型生成的 shell/file-write 指令。个人版工具不会自动获得这七个公司工具。
+它们返回结构化 JSON，不接受绝对路径、`..`、符号链接逃逸或模型生成的 shell/file-write 指令。`company.import_platform_export` 只接受 `platform-data/` 下的相对路径，并且与项目扫描一样需要显式打开 MCP 写入开关；个人版工具不会自动获得这些公司工具。
 
 ### Skill 目录
 
@@ -145,7 +166,7 @@ npm run build:company-mcp
 | `COMPANY_API_ORIGIN` | 公司服务完整 origin；HTTP 只允许回环，使用 `http://127.0.0.1:4399` |
 | `COMPANY_DISPLAY_NAME` | 专用于 Agent 的现有公司用户显示名 |
 | `COMPANY_PASSWORD` | 该用户密码；只保留在 Agent 所在的本机配置 |
-| `COMPANY_MCP_WRITE_ENABLED` | 可选；只有精确为 `true` 时才放行扫描 |
+| `COMPANY_MCP_WRITE_ENABLED` | 可选；只有精确为 `true` 时才放行项目扫描和官方导出入库 |
 | `COMPANY_MCP_CONFIRM_ENABLED` | 可选；最终确认还要额外精确为 `true` |
 | `COMPANY_MCP_CONFIRM_INTENT` | 确认时必填的精确 JSON 意图，与已核对提案一致 |
 
@@ -195,9 +216,9 @@ npm run company:restore-check -- \
 
 - `state.sqlite3` 及其 `-wal` / `-shm` 文件；
 - `backups/`、`recovery/`；
-- `incoming/`、`projects/`、`skills/`、`system/`。
+- `incoming/`、`projects/`、`skills/`、`system/`、`platform-data/`（包括 `platform-data/raw/` 原始证据）。
 
-不要只备份 SQLite，也不要把 `incoming` 当作临时缓存清空。如果断电留下 `company-server.lock.json`，先确认对应 Node 进程和 4399 端口都已停止，再把该锁文件移入 `recovery/` 保留后重启；不要在进程存活时删锁。P0 不提供自动平台数据同步，因此备份不会产生视频号、抖音或小红书的后台历史数据。
+不要只备份 SQLite，也不要把 `incoming` 或 `platform-data` 当作临时缓存清空。如果断电留下 `company-server.lock.json`，先确认对应 Node 进程和 4399 端口都已停止，再把该锁文件移入 `recovery/` 保留后重启；不要在进程存活时删锁。平台历史只来自已经导入的官方导出文件，备份不会替平台后台补抓新的数据。
 
 ### launchd 常驻
 
@@ -218,6 +239,7 @@ launchctl kickstart -k "gui/$(id -u)/com.bestpartners.company-console"
 - 电脑 A 用 `operator` 登录，导入一个教育培训项目文件夹，检查提案中的来源 hash 和 unknown 字段，确认项目；
 - 电脑 B 用 `reviewer` 登录，打开看板和项目详情，核对相同的 `projectId`、来源 hash、状态、更新时间和活动记录；
 - 两台电脑都不能看到个人 vault 路径、个人账号、模型密钥或平台 cookie；
+- 电脑 A 放入一份官方平台导出后，Mac mini 自动生成导入记录和 `platform-data/raw/` 证据副本，电脑 B 刷新后看到相同的指标与来源状态；
 - 访问未知 Host、错误 Origin、公司工作区外路径时应被拒绝；
 - 个人版仍只能访问个人 `/api/v1` 路由，公司 `/api/company/v1` 路由不应出现在个人运行时；
-- 看板对于尚未接入的平台数据显示缺口状态，不显示伪造的 0。
+- 看板对于尚未导出、过期或失败的平台数据显示缺口状态，不显示伪造的 0。

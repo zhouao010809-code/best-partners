@@ -67,6 +67,26 @@ export function createCompanyServer(client: CompanyMcpClient): McpServer {
     inputSchema: companyToolInputSchemas.get_skill,
     annotations: READ_ONLY
   }, input => handlers.get_skill(input));
+  server.registerTool('company.list_data_sources', {
+    description: companyToolDescriptions.list_data_sources,
+    inputSchema: companyToolInputSchemas.list_data_sources,
+    annotations: READ_ONLY
+  }, input => handlers.list_data_sources(input));
+  server.registerTool('company.get_project_metrics', {
+    description: companyToolDescriptions.get_project_metrics,
+    inputSchema: companyToolInputSchemas.get_project_metrics,
+    annotations: READ_ONLY
+  }, input => handlers.get_project_metrics(input));
+  server.registerTool('company.get_sync_status', {
+    description: companyToolDescriptions.get_sync_status,
+    inputSchema: companyToolInputSchemas.get_sync_status,
+    annotations: READ_ONLY
+  }, input => handlers.get_sync_status(input));
+  server.registerTool('company.import_platform_export', {
+    description: companyToolDescriptions.import_platform_export,
+    inputSchema: companyToolInputSchemas.import_platform_export,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+  }, input => handlers.import_platform_export(input));
   return server;
 }
 

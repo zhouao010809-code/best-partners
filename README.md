@@ -127,7 +127,7 @@ flowchart LR
 
 ### 公司工作区（P0）
 
-公司版是独立的共享项目运行时，服务于同一办公室内的少量成员。它把项目原文件放在独立的 `incoming/`、`projects/`、`skills/`、`system/` 工作区，使用单独的公司数据库和两个公司账号，不读取个人 vault、Local REST 或个人密钥。当前 P0 的主入口只有项目数据看板、项目档案库和 Skill 库；平台后台抓取、视频号/抖音/小红书实时指标及私信读取尚未接入。
+公司版是独立的共享项目运行时，服务于同一办公室内的少量成员。它把项目原文件和平台官方导出放在独立工作区，使用单独的公司数据库和两个公司账号，不读取个人 vault、Local REST 或个人密钥。当前 P0 的主入口是项目数据看板、项目档案库和 Skill 库；抖音、视频号、小红书不走抓包或私有接口，而是把官方后台导出的 CSV/XLSX/XLS 放入项目对应的 `platform-data/<平台>/<projectId>/` 文件夹，由 Mac mini 自动校验、去重、留存原始证据并刷新看板。平台没有官方 API 时仍需要点击一次“导出”，但不需要手填播放量。
 
 在 Mac mini 上先完成完整构建，再用固定的回环地址启动：
 
@@ -143,7 +143,7 @@ COMPANY_DATA_DIR="/Users/Shared/BestPartners/company-state" \
 npm run company-server
 ```
 
-两台 Mac 的推荐方式是让服务只绑定 `127.0.0.1`。第二台 Mac 先运行 `ssh -N -L 4399:127.0.0.1:4399 <Mac-mini-用户>@mac-mini.local`，再打开 `http://127.0.0.1:4399/`；密码、会话和 Agent 请求会走 SSH 加密通道。`COMPANY_HOST` 不能使用 wildcard 或公网地址。外部 Codex / WorkBuddy 通过独立的公司 MCP 桥接调用 7 个结构化工具；默认只读，扫描和最终确认分别有独立开关。网页里没有内置聊天控制台。完整的账号初始化、Agent 接入、项目导入、Skill 目录边界、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
+两台 Mac 的推荐方式是让服务只绑定 `127.0.0.1`。第二台 Mac 先运行 `ssh -N -L 4399:127.0.0.1:4399 <Mac-mini-用户>@mac-mini.local`，再打开 `http://127.0.0.1:4399/`；密码、会话和 Agent 请求会走 SSH 加密通道。`COMPANY_HOST` 不能使用 wildcard 或公网地址。外部 Codex / WorkBuddy 通过独立的公司 MCP 桥接调用 11 个结构化工具；默认只读，项目扫描、平台导入和最终确认分别受写入开关保护。网页里没有内置聊天控制台。完整的账号初始化、导出文件放置、自动扫描、Agent 接入、Skill 目录边界、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
 
 ### 给 Codex / WorkBuddy 使用公司 MCP
 
@@ -169,6 +169,16 @@ codex mcp list
 ```
 
 此配置默认只能列表和读取。当次需要创建扫描提案时设置 `COMPANY_MCP_WRITE_ENABLED=true`；要做最终确认时还必须另外设置 `COMPANY_MCP_CONFIRM_ENABLED=true`，并设置精确的 `COMPANY_MCP_CONFIRM_INTENT` JSON，包含 `runId`、`sourceSha256`、`name`、`status`、`selectedSkillIds` 和可选 `clientName`。桥接只允许完全匹配该意图的一次确认，调用前就消耗授权；完成或结果不明时先查询同一提案，不自动重试。WorkBuddy 使用同样的 STDIO 命令与环境变量即可，不需要把平台 cookie 或项目文件路径交给它。
+
+平台导出数据不通过浏览器上传。项目确认后，把官方后台导出的文件放到 Mac mini 的对应目录：
+
+```text
+<COMPANY_WORKSPACE_ROOT>/platform-data/douyin/<projectId>/
+<COMPANY_WORKSPACE_ROOT>/platform-data/wechat-channels/<projectId>/
+<COMPANY_WORKSPACE_ROOT>/platform-data/xiaohongshu/<projectId>/
+```
+
+服务启动时立即扫描，之后默认每 30 秒轮询；可用 `COMPANY_METRICS_POLL_MS` 调整为 5 秒至 24 小时之间的整数。原文件不会被改名或删除，系统会在 `platform-data/raw/` 留一份带 SHA-256 的只读证据副本。重复文件、缺少内容 ID、未知表头、同一内容日期指标冲突都会进入导入记录，不会覆盖历史或伪造 0。第一版只锁定已验证的最小表头别名，拿到真实平台样本后再扩展映射。
 
 ### 给 Codex 使用独立的只读 MCP
 

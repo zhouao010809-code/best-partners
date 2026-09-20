@@ -17,6 +17,13 @@ import {
   skillResponseSchema,
   skillsResponseSchema
 } from '../src/shared/api/skills.js';
+import {
+  companyMetricImportRequestSchema,
+  companyMetricImportResponseSchema,
+  companyMetricsStatusResponseSchema,
+  companyProjectMetricsResponseSchema,
+  type CompanyMetricImportRequest
+} from '../src/shared/api/company-metrics.js';
 import { isValidCompanyHost } from '../src/server/security/origin-host.js';
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -114,7 +121,7 @@ function responseError(response: Response, payload: unknown): CompanyMcpError {
     : new CompanyMcpError('COMPANY_RESPONSE_INVALID', 'Company service returned an invalid error response.', response.status);
 }
 
-const scalarPathKeys = new Set(['projectRoot', 'sourceRoot', 'relativePath']);
+const scalarPathKeys = new Set(['projectRoot', 'sourceRoot', 'relativePath', 'sourceRelativePath', 'rawRelativePath']);
 const pathArrayKeys = new Set(['evidencePaths', 'references']);
 
 function assertSafeRelativePath(value: string): void {
@@ -163,6 +170,10 @@ export interface CompanyMcpClient {
   confirmProject(runId: string, input: unknown): Promise<unknown>;
   listSkills(): Promise<unknown>;
   getSkill(id: string): Promise<unknown>;
+  listDataSources?: () => Promise<unknown>;
+  getProjectMetrics?: (projectId: string) => Promise<unknown>;
+  getSyncStatus?: () => Promise<unknown>;
+  importPlatformExport?: (input: CompanyMetricImportRequest) => Promise<unknown>;
 }
 
 export function createCompanyMcpClient(
@@ -334,6 +345,16 @@ export function createCompanyMcpClient(
     getSkill: async (rawId) => {
       const { id } = skillIdParamsSchema.parse({ id: rawId });
       return safeData((await request({ path: `/api/company/v1/skills/${encodeURIComponent(id)}`, schema: skillResponseSchema })).data);
+    },
+    listDataSources: async () => safeData((await request({ path: '/api/company/v1/metrics/status', schema: companyMetricsStatusResponseSchema })).data),
+    getProjectMetrics: async (rawProjectId) => {
+      const id = companyMcpIdSchema.parse(rawProjectId);
+      return safeData((await request({ path: `/api/company/v1/projects/${encodeURIComponent(id)}/metrics`, schema: companyProjectMetricsResponseSchema })).data);
+    },
+    getSyncStatus: async () => safeData((await request({ path: '/api/company/v1/metrics/status', schema: companyMetricsStatusResponseSchema })).data),
+    importPlatformExport: async (raw) => {
+      const body = companyMetricImportRequestSchema.parse(raw);
+      return safeData((await request({ path: '/api/company/v1/metrics/import', method: 'POST', body, schema: companyMetricImportResponseSchema, write: 'stage' })).data);
     }
   };
 }

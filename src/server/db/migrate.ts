@@ -31,7 +31,8 @@ function initialMigrations(): readonly Migration[] {
       sql: readFileSync(bundledMigrationPath('018_company_workspace_constraints.sql'), 'utf8'),
       requiresForeignKeysOff: true
     },
-    { version: 19, sql: readFileSync(bundledMigrationPath('019_company_project_skill_bindings.sql'), 'utf8') }
+    { version: 19, sql: readFileSync(bundledMigrationPath('019_company_project_skill_bindings.sql'), 'utf8') },
+    { version: 20, sql: readFileSync(bundledMigrationPath('020_company_platform_metrics.sql'), 'utf8') }
   ];
 }
 

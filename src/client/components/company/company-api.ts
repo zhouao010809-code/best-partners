@@ -23,6 +23,18 @@ import {
   type SkillDetail,
   type SkillsPage
 } from '../../../shared/api/skills.js';
+import {
+  companyMetricImportRequestSchema,
+  companyMetricImportResponseSchema,
+  companyMetricScanResponseSchema,
+  companyMetricsStatusResponseSchema,
+  companyProjectMetricsResponseSchema,
+  type CompanyMetricImport,
+  type CompanyMetricImportRequest,
+  type CompanyMetricsStatus,
+  type CompanyProjectMetrics,
+  type CompanyMetricScanResponseData
+} from '../../../shared/api/company-metrics.js';
 import type { ApiClientResult, ClientFailureState } from '../../api/client.js';
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -63,6 +75,12 @@ export interface CompanyApi {
   readonly skills: {
     list(signal?: AbortSignal): Promise<CompanyApiResult<SkillsPage>>;
     get(id: string, signal?: AbortSignal): Promise<CompanyApiResult<SkillDetail>>;
+  };
+  readonly metrics?: {
+    project(projectId: string, signal?: AbortSignal): Promise<CompanyApiResult<CompanyProjectMetrics>>;
+    status(projectId?: string, signal?: AbortSignal): Promise<CompanyApiResult<CompanyMetricsStatus>>;
+    scan(): Promise<CompanyApiResult<CompanyMetricScanResponseData>>;
+    import(input: CompanyMetricImportRequest): Promise<CompanyApiResult<CompanyMetricImport>>;
   };
 }
 
@@ -216,6 +234,28 @@ export function createBrowserCompanyApi(fetchImplementation?: FetchLike): Compan
         const parsed = parseInput(skillIdParamsSchema, { id });
         return parsed.ok
           ? data(fetcher, `/api/company/v1/skills/${encodeURIComponent(parsed.value.id)}`, skillResponseSchema, getInit(signal))
+          : Promise.resolve(parsed);
+      }
+    },
+    metrics: {
+      project: (projectId, signal) => data(fetcher, `/api/company/v1/projects/${encodeURIComponent(projectId)}/metrics`, companyProjectMetricsResponseSchema, getInit(signal)),
+      status: (projectId, signal) => data(
+        fetcher,
+        projectId === undefined
+          ? '/api/company/v1/metrics/status'
+          : `/api/company/v1/metrics/status?projectId=${encodeURIComponent(projectId)}`,
+        companyMetricsStatusResponseSchema,
+        getInit(signal)
+      ),
+      scan: async () => {
+        const token = await ensureCsrf();
+        if (!token.ok) return token;
+        return data(fetcher, '/api/company/v1/metrics/scan', companyMetricScanResponseSchema, postInit({}, token.value));
+      },
+      import: input => {
+        const parsed = parseInput(companyMetricImportRequestSchema, input);
+        return parsed.ok
+          ? mutation('/api/company/v1/metrics/import', companyMetricImportResponseSchema, parsed.value)
           : Promise.resolve(parsed);
       }
     }
