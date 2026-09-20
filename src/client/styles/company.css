@@ -203,6 +203,16 @@
 .company-drop-folder-panel p { max-width: 680px; }
 .company-drop-folder-list { display: grid; gap: 6px; margin-top: 12px; }
 .company-drop-folder-list code { padding: 8px 10px; border: 1px solid var(--border-hairline); border-radius: var(--radius-sm); color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; background: rgba(255,255,255,.018); }
+.company-metrics-upload-panel > p { max-width: 760px; }
+.company-metrics-upload-form { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 15px; }
+.company-metrics-upload-form label { display: grid; gap: 6px; min-width: 0; color: var(--text-muted); font-size: 11px; }
+.company-metrics-upload-form select, .company-metrics-upload-form input[type="file"] { width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid var(--border-muted); border-radius: var(--radius-sm); color: var(--text-secondary); background: rgba(0,0,0,.24); font: inherit; font-size: 11px; }
+.company-metrics-upload-form select:focus, .company-metrics-upload-form input[type="file"]:focus { border-color: var(--accent-primary); outline: 0; box-shadow: 0 0 0 2px rgba(76,242,139,.12); }
+.company-metrics-upload-form input[type="file"] { padding: 7px 8px; }
+.company-metrics-upload-file, .company-metrics-upload-note, .company-metrics-upload-success { margin-top: 10px !important; color: var(--text-faint); font-size: 10px; line-height: 1.6; }
+.company-metrics-upload-file strong { color: var(--text-secondary); font-weight: 560; }
+.company-metrics-upload-success { color: var(--accent-primary); }
+.company-metrics-upload-note { color: var(--text-faint); }
 .company-platform-mini-list { display: grid; gap: 6px; margin-top: 14px; }
 .company-platform-mini-list > div { display: grid; grid-template-columns: 72px 72px minmax(0, 1fr); gap: 8px; align-items: center; padding-top: 7px; border-top: 1px solid var(--border-hairline); color: var(--text-secondary); font-size: 10px; }
 .company-platform-mini-list strong { color: var(--text-primary); font-size: 10px; }
@@ -252,4 +262,6 @@
   .company-import-history__row { grid-template-columns: auto minmax(0, 1fr); }
   .company-import-history__row small { grid-column: 2; }
   .company-record-panel dl div { grid-template-columns: 1fr; gap: 4px; }
+  .company-metrics-upload-form { grid-template-columns: 1fr; align-items: stretch; }
+  .company-metrics-upload-form .company-primary-button { width: 100%; }
 }

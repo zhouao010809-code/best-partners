@@ -127,7 +127,7 @@ flowchart LR
 
 ### 公司工作区（P0）
 
-公司版是独立的共享项目运行时，服务于同一办公室内的少量成员。它把项目原文件和平台官方导出放在独立工作区，使用单独的公司数据库和两个公司账号，不读取个人 vault、Local REST 或个人密钥。当前 P0 的主入口是项目数据看板、项目档案库和 Skill 库；抖音、视频号、小红书不走抓包或私有接口，而是把官方后台导出的 CSV/XLSX/XLS 放入项目对应的 `platform-data/<平台>/<projectId>/` 文件夹，由 Mac mini 自动校验、去重、留存原始证据并刷新看板。平台没有官方 API 时仍需要点击一次“导出”，但不需要手填播放量。
+公司版是独立的共享项目运行时，服务于同一办公室内的少量成员。它把项目原文件和平台官方导出放在独立工作区，使用单独的公司数据库和两个公司账号，不读取个人 vault、Local REST 或个人密钥。当前 P0 的主入口是项目数据看板、项目档案库和 Skill 库；抖音、视频号、小红书不走抓包或私有接口，而是把官方后台导出的 CSV/XLSX/XLS 在项目详情页上传，或放入项目对应的 `platform-data/<平台>/<projectId>/` 文件夹，由 Mac mini 自动校验、去重、留存原始证据并刷新看板。平台没有官方 API 时仍需要点击一次“导出”，但不需要手填播放量。
 
 在 Mac mini 上先完成完整构建，再用固定的回环地址启动：
 
@@ -170,7 +170,7 @@ codex mcp list
 
 此配置默认只能列表和读取。当次需要创建扫描提案时设置 `COMPANY_MCP_WRITE_ENABLED=true`；要做最终确认时还必须另外设置 `COMPANY_MCP_CONFIRM_ENABLED=true`，并设置精确的 `COMPANY_MCP_CONFIRM_INTENT` JSON，包含 `runId`、`sourceSha256`、`name`、`status`、`selectedSkillIds` 和可选 `clientName`。桥接只允许完全匹配该意图的一次确认，调用前就消耗授权；完成或结果不明时先查询同一提案，不自动重试。WorkBuddy 使用同样的 STDIO 命令与环境变量即可，不需要把平台 cookie 或项目文件路径交给它。
 
-平台导出数据不通过浏览器上传。项目确认后，把官方后台导出的文件放到 Mac mini 的对应目录：
+平台导出数据有两种等价入口。推荐在项目详情页使用“导入官方导出”：选择平台和官方导出的 CSV/XLSX/XLS 文件，系统会以当前登录用户的 `metrics:import` 权限接收原始字节，校验后自动归档、入库并刷新看板；不要求平台账号、密码、Cookie，也不抓取私信。需要批量投递或浏览器不可用时，项目确认后仍可把文件放到 Mac mini 的对应目录：
 
 ```text
 <COMPANY_WORKSPACE_ROOT>/platform-data/douyin/<projectId>/

@@ -9,6 +9,22 @@ export const companyPlatformSchema = z.enum([
 
 export type CompanyPlatform = z.infer<typeof companyPlatformSchema>;
 
+/**
+ * Metadata accepted from the browser upload surface.  A filename is only a
+ * display/evidence label; it must never be allowed to select a directory or
+ * escape the project-scoped platform drop folder.
+ */
+export const companyMetricUploadMetadataSchema = z.object({
+  platform: companyPlatformSchema,
+  fileName: z.string()
+    .min(1)
+    .max(255)
+    .refine(value => !value.includes('\0') && !value.includes('/') && !value.includes('\\'), 'Filename must not contain a path')
+    .refine(value => /\.(?:csv|xlsx|xls)$/iu.test(value), 'Only CSV, XLSX, and XLS files are supported')
+}).strict();
+
+export type CompanyMetricUploadMetadata = z.infer<typeof companyMetricUploadMetadataSchema>;
+
 export const companyMetricNameSchema = z.enum([
   'views',
   'likes',

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   companyDataCoverageSchema,
   companyMetricSnapshotSchema,
+  companyMetricUploadMetadataSchema,
   companyPlatformSchema
 } from '../../src/shared/company/metrics.js';
 
@@ -38,5 +39,28 @@ describe('company metrics contracts', () => {
     expect(companyDataCoverageSchema.parse('stale')).toBe('stale');
     expect(companyDataCoverageSchema.parse('import_required')).toBe('import_required');
     expect(() => companyDataCoverageSchema.parse('0')).toThrow();
+  });
+
+  it('accepts safe browser-upload metadata and rejects path-like filenames', () => {
+    expect(companyMetricUploadMetadataSchema.parse({
+      platform: 'douyin',
+      fileName: '官方导出.csv'
+    })).toEqual({ platform: 'douyin', fileName: '官方导出.csv' });
+    expect(companyMetricUploadMetadataSchema.parse({
+      platform: 'wechat-channels',
+      fileName: 'metrics.XLSX'
+    })).toEqual({ platform: 'wechat-channels', fileName: 'metrics.XLSX' });
+    expect(() => companyMetricUploadMetadataSchema.parse({
+      platform: 'douyin',
+      fileName: '../secret.csv'
+    })).toThrow();
+    expect(() => companyMetricUploadMetadataSchema.parse({
+      platform: 'douyin',
+      fileName: 'nested/secret.csv'
+    })).toThrow();
+    expect(() => companyMetricUploadMetadataSchema.parse({
+      platform: 'douyin',
+      fileName: 'metrics.json'
+    })).toThrow();
   });
 });

@@ -61,6 +61,25 @@ describe('company metrics service', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM company_platform_metric_snapshots').get()).toEqual({ count: 1 });
   });
 
+  it('stages a browser upload into the project drop folder before importing it', async () => {
+    const { root, database } = fixture();
+    const service = createCompanyMetricsService({
+      database,
+      workspace: { id: 'company', rootPath: root },
+      stabilityDelayMs: 0
+    });
+    const result = await service.uploadFile({
+      projectId: 'project-1',
+      platform: 'douyin',
+      fileName: '官方导出.csv',
+      bytes: Buffer.from('作品ID,作品标题,数据日期,播放量,点赞\nitem-upload,试听课,2026-09-19,1300,9\n')
+    });
+
+    expect(result.state).toBe('imported');
+    expect(result.sourceRelativePath).toMatch(/^platform-data\/douyin\/project-1\/[a-f0-9]{64}-.*\.csv$/u);
+    expect(readFileSync(join(root, result.sourceRelativePath), 'utf8')).toContain('item-upload');
+  });
+
   it('is idempotent by source hash and does not duplicate snapshots', async () => {
     const { root, database } = fixture();
     const sourcePath = writeExport(root);

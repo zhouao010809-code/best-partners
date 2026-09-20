@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CompanyAppShell } from '../../src/client/company/CompanyAppShell.js';
@@ -41,7 +41,15 @@ function apiFixture(): CompanyApi {
           }]
         } as CompanyProjectMetrics
       })),
-      status: vi.fn(), scan: vi.fn(), import: vi.fn()
+      status: vi.fn(), scan: vi.fn(), import: vi.fn(), upload: vi.fn(async () => ({
+        ok: true as const,
+        value: {
+          id: 'import-upload', workspaceId: 'company', projectId: 'project-1', platform: 'douyin' as const,
+          sourceRelativePath: 'platform-data/douyin/project-1/hash-export.csv', rawRelativePath: 'platform-data/raw/douyin/project-1/hash-export.csv',
+          sourceSha256: SHA, sourceType: 'official-export' as const, state: 'imported' as const,
+          rowCount: 1, importedCount: 1, rejectedCount: 0, issues: [], createdAt: date, updatedAt: date, importedAt: date
+        }
+      }))
     }
   };
 }
@@ -57,5 +65,26 @@ describe('CompanyProjectDetailPage', () => {
     expect(screen.getByText(/来源：官方后台导出/u)).toBeVisible();
     expect(screen.getByText('platform-data/douyin/project-1/export.csv')).toBeVisible();
     expect(screen.getByText('platform-data/xiaohongshu/project-1/')).toBeVisible();
+  });
+
+  it('lets an operator choose a platform export and imports it without manual metric entry', async () => {
+    const api = apiFixture();
+    render(<MemoryRouter initialEntries={['/company/projects/project-1']}><Routes><Route element={<CompanyAppShell api={api} initialSession={session} />}><Route path="company/projects/:id" element={<CompanyProjectDetailPage />} /></Route></Routes></MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: '明德教育代运营' })).toBeVisible();
+
+    const file = new File(['作品ID,数据日期,播放量\nitem-upload,2026-09-19,1300\n'], '抖音官方导出.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByLabelText('官方导出文件'), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole('button', { name: '校验并导入' }));
+
+    await waitFor(() => expect(api.metrics?.upload).toHaveBeenCalledWith('project-1', 'douyin', file));
+    expect(await screen.findByText('文件已导入，指标看板已刷新。')).toBeVisible();
+  });
+
+  it('keeps the upload control read-only for reviewers', async () => {
+    const reviewerSession = { ...session, user: { ...session.user, role: 'reviewer' as const, displayName: '老板' } };
+    render(<MemoryRouter initialEntries={['/company/projects/project-1']}><Routes><Route element={<CompanyAppShell api={apiFixture()} initialSession={reviewerSession} />}><Route path="company/projects/:id" element={<CompanyProjectDetailPage />} /></Route></Routes></MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: '明德教育代运营' })).toBeVisible();
+    expect(screen.getByText(/当前账号只能查看导入记录/u)).toBeVisible();
+    expect(screen.queryByLabelText('官方导出文件')).not.toBeInTheDocument();
   });
 });

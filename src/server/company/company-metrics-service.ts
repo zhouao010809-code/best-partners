@@ -16,10 +16,12 @@ import { PublicApiError } from '../../shared/api/errors.js';
 import {
   companyDataCoverageSchema,
   companyMetricImportStateSchema,
+  companyMetricUploadMetadataSchema,
   companyMetricValuesSchema,
   companyPlatformSchema,
   type CompanyDataCoverage,
   type CompanyMetricImportState,
+  type CompanyMetricUploadMetadata,
   type CompanyMetricValues,
   type CompanyPlatform
 } from '../../shared/company/metrics.js';
@@ -35,6 +37,7 @@ import { assertCompanyRelativePath } from './company-paths.js';
 import { ensurePrivateDirectory, secureExistingPrivateFile } from '../db/permissions.js';
 import {
   MetricsImportError,
+  COMPANY_METRICS_MAX_BYTES,
   parsePlatformExport,
   type PlatformExportIssue,
 } from './metrics-importer.js';
@@ -81,10 +84,16 @@ export interface CompanyMetricScanResult extends Omit<CompanyMetricScanResponseD
 
 export interface CompanyMetricsService {
   importFile(input: { readonly relativePath: string }): Promise<CompanyMetricImportResult>;
+  uploadFile(input: CompanyMetricUploadInput): Promise<CompanyMetricImportResult>;
   scanIncoming(): Promise<CompanyMetricScanResult>;
   listProjectMetrics(projectId: string, range?: { readonly from?: string; readonly to?: string }): Promise<CompanyProjectMetrics>;
   getStatus(projectId?: string): Promise<CompanyMetricsStatus>;
   start(): { stop(): Promise<void> };
+}
+
+export interface CompanyMetricUploadInput extends CompanyMetricUploadMetadata {
+  readonly projectId: string;
+  readonly bytes: Uint8Array;
 }
 
 export interface CompanyMetricsServiceOptions {
@@ -159,7 +168,7 @@ function stableJson(value: unknown): string {
 }
 
 function safeFileName(value: string): string {
-  const cleaned = basename(value).replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  const cleaned = basename(value).replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^-+|-+$/gu, '');
   return cleaned.length > 0 ? cleaned.slice(-180) : 'export.bin';
 }
 
@@ -639,6 +648,42 @@ export function createCompanyMetricsService(options: CompanyMetricsServiceOption
     return rowToImport(options.database.prepare('SELECT * FROM company_platform_metric_imports WHERE id = ?').get(importId) as ImportRow);
   }
 
+  async function uploadFile(input: CompanyMetricUploadInput): Promise<CompanyMetricImportResult> {
+    const metadata = companyMetricUploadMetadataSchema.safeParse({
+      platform: input.platform,
+      fileName: input.fileName
+    });
+    if (!metadata.success) {
+      throw new PublicApiError('COMPANY_METRICS_UPLOAD_INVALID', '导入文件名或平台无效。', 400);
+    }
+    if (!/^[A-Za-z0-9._:-]+$/u.test(input.projectId) || input.projectId === '.' || input.projectId === '..') {
+      throw new PublicApiError('COMPANY_METRICS_PROJECT_INVALID', 'Metrics project is invalid', 400);
+    }
+    findProject(input.projectId);
+    if (!(input.bytes instanceof Uint8Array)) {
+      throw new PublicApiError('COMPANY_METRICS_FILE_INVALID', '导入内容不是有效文件。', 400);
+    }
+    if (input.bytes.byteLength > COMPANY_METRICS_MAX_BYTES) {
+      throw new PublicApiError('COMPANY_METRICS_FILE_TOO_LARGE', '导入文件不能超过 20 MB。', 413);
+    }
+
+    const sourceHash = sha256(input.bytes);
+    const destinationDirectory = join(platformDataRoot, metadata.data.platform, input.projectId);
+    ensurePrivateDirectory(join(platformDataRoot, metadata.data.platform));
+    ensurePrivateDirectory(destinationDirectory);
+    const relativePath = `${PLATFORM_DATA_DIRECTORY}/${metadata.data.platform}/${input.projectId}/${sourceHash}-${safeFileName(metadata.data.fileName)}`;
+    const destination = join(options.workspace.rootPath, ...relativePath.split('/'));
+    if (!secureExistingPrivateFile(destination)) {
+      try {
+        await writeFile(destination, input.bytes, { flag: 'wx', mode: 0o600 });
+      } catch (error) {
+        if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST')) throw error;
+      }
+      secureExistingPrivateFile(destination);
+    }
+    return importFile({ relativePath });
+  }
+
   async function scanIncoming(): Promise<CompanyMetricScanResult> {
     if (inFlight !== undefined) return inFlight;
     const run = (async (): Promise<CompanyMetricScanResult> => {
@@ -792,13 +837,14 @@ export function createCompanyMetricsService(options: CompanyMetricsServiceOption
     };
   }
 
-  return { importFile, scanIncoming, listProjectMetrics, getStatus, start };
+  return { importFile, uploadFile, scanIncoming, listProjectMetrics, getStatus, start };
 }
 
 export function createUnavailableCompanyMetricsService(): CompanyMetricsService {
   const unavailable = () => Promise.reject(new PublicApiError('COMPANY_METRICS_UNAVAILABLE', 'Company metrics are unavailable', 503));
   return {
     importFile: unavailable,
+    uploadFile: unavailable,
     scanIncoming: unavailable,
     listProjectMetrics: unavailable,
     getStatus: async () => ({ coverage: 'not_configured', platforms: [], recentImports: [], lastScanAt: null }),
