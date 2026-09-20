@@ -35,6 +35,7 @@ import {
   type CompanyProjectMetrics,
   type CompanyMetricScanResponseData
 } from '../../../shared/api/company-metrics.js';
+import { companyMetricUploadMetadataSchema, type CompanyPlatform } from '../../../shared/company/metrics.js';
 import type { ApiClientResult, ClientFailureState } from '../../api/client.js';
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -81,6 +82,7 @@ export interface CompanyApi {
     status(projectId?: string, signal?: AbortSignal): Promise<CompanyApiResult<CompanyMetricsStatus>>;
     scan(): Promise<CompanyApiResult<CompanyMetricScanResponseData>>;
     import(input: CompanyMetricImportRequest): Promise<CompanyApiResult<CompanyMetricImport>>;
+    upload(projectId: string, platform: CompanyPlatform, file: File): Promise<CompanyApiResult<CompanyMetricImport>>;
   };
 }
 
@@ -147,6 +149,15 @@ function postInit(body: unknown, csrfToken?: string): RequestInit {
       ...(csrfToken === undefined ? {} : { 'x-csrf-token': csrfToken })
     },
     body: JSON.stringify(body)
+  };
+}
+
+function binaryPostInit(file: Blob, csrfToken: string): RequestInit {
+  return {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/octet-stream', 'x-csrf-token': csrfToken },
+    body: file
   };
 }
 
@@ -257,6 +268,19 @@ export function createBrowserCompanyApi(fetchImplementation?: FetchLike): Compan
         return parsed.ok
           ? mutation('/api/company/v1/metrics/import', companyMetricImportResponseSchema, parsed.value)
           : Promise.resolve(parsed);
+      },
+      upload: async (projectId, platform, file) => {
+        const parsed = parseInput(companyMetricUploadMetadataSchema, { platform, fileName: file.name });
+        if (!parsed.ok) return parsed;
+        const token = await ensureCsrf();
+        if (!token.ok) return token;
+        const query = new URLSearchParams({ platform: parsed.value.platform, fileName: parsed.value.fileName });
+        return data(
+          fetcher,
+          `/api/company/v1/projects/${encodeURIComponent(projectId)}/metrics/upload?${query.toString()}`,
+          companyMetricImportResponseSchema,
+          binaryPostInit(file, token.value)
+        );
       }
     }
   };
