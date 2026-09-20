@@ -51,10 +51,14 @@ describe('CompanyProjectAssistant', () => {
     expect(task).toBeVisible();
     expect(task).toHaveTextContent('不会直接修改项目文件');
     expect(task).toHaveTextContent('明德教育代运营');
+    expect(task).toHaveTextContent('项目 ID：project-1');
+    expect(task).toHaveTextContent('已选 Skill：无');
     expect(task).toHaveTextContent('数据截至 2026-09-19');
     expect(task).not.toHaveTextContent('/Users/');
     expect(task).not.toHaveTextContent('api_key');
     expect(task).not.toHaveTextContent('密码');
+    expect(screen.getByText('项目状态')).toBeVisible();
+    expect(screen.getByText('已选 Skill')).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: '复制给 Codex' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));

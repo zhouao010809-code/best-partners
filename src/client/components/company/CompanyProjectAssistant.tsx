@@ -49,13 +49,16 @@ function dataGap(metrics?: CompanyProjectMetrics): string {
 
 function promptFor(task: string, project: CompanyProject, metrics: CompanyProjectMetrics | undefined, date: string, gap: string): string {
   const client = project.clientName === undefined ? '未提供' : project.clientName;
+  const selectedSkills = project.selectedSkillIds.length > 0 ? project.selectedSkillIds.join('、') : '无';
   const coverage = metrics === undefined ? '尚未建立平台数据基线' : `数据截至 ${date}；数据缺口：${gap}`;
   return [
     `请${task}。`,
     '你是一个只读项目助理，只能基于下方已提供的项目上下文提出分析、异常线索或计划建议。',
     `项目名称：${project.name}`,
+    `项目 ID：${project.id}`,
     `客户名称：${client}`,
     `项目状态：${STATUS_LABELS[project.status]}`,
+    `已选 Skill：${selectedSkills}`,
     `平台数据：${coverage}`,
     '不会直接修改项目文件，也不会要求或处理平台登录凭据。请把无法从当前上下文确认的内容标为待核实。'
   ].join('\n');
@@ -108,6 +111,8 @@ export function CompanyProjectAssistant({ project, metrics }: CompanyProjectAssi
         <h3 id="company-project-assistant-context-title">只读项目上下文</h3>
         <dl>
           <div><dt>项目</dt><dd>{project.name}</dd></div>
+          <div><dt>项目状态</dt><dd>{STATUS_LABELS[project.status]}</dd></div>
+          <div><dt>已选 Skill</dt><dd>{project.selectedSkillIds.length > 0 ? `${project.selectedSkillIds.length} 个` : '无'}</dd></div>
           <div><dt>数据日期</dt><dd>{latestDate}</dd></div>
           <div><dt>数据缺口</dt><dd>{gap}</dd></div>
         </dl>
