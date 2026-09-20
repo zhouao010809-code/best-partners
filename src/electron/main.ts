@@ -17,6 +17,8 @@ import { clipperPaths, installClipperHost, readClipperBridgeConfig } from './cli
 import { createBridgeConfig } from './clipper-installer.js';
 import { createSkillCatalogService } from '../server/services/skill-catalog.js';
 import { createDesktopSkillNavigation } from './skill-navigation.js';
+import { checkForUpdate, RELEASES_URL } from './update-check.js';
+import { validateUpdateUrl } from './update-navigation.js';
 
 app.setName('最佳拍档');
 let started: StartedServer | undefined;
@@ -151,6 +153,17 @@ async function bootstrap(): Promise<void> {
   const navigation = createDesktopVaultNavigation({ reader: await nativeReader.create(settings.vaultRoot), shell });
   const skillNavigation = createDesktopSkillNavigation({ catalog: skillCatalog, shell });
   ipcMain.handle('desktop:get-app-version', (event) => { assertMainSender(event); return app.getVersion(); });
+  ipcMain.handle('desktop:check-for-updates', async (event) => {
+    assertMainSender(event);
+    const releasesUrl = process.env.NODE_ENV === 'test'
+      ? (process.env.XIAOZHAO_TEST_UPDATE_FEED_URL ?? RELEASES_URL)
+      : RELEASES_URL;
+    return checkForUpdate({ currentVersion: app.getVersion(), releasesUrl });
+  });
+  ipcMain.handle('desktop:open-update-download', async (event, url: unknown) => {
+    assertMainSender(event);
+    await shell.openExternal(validateUpdateUrl(url));
+  });
   ipcMain.handle('desktop:assistant-login', async (event, url: unknown) => { assertMainSender(event); await shell.openExternal(validateAssistantLoginUrl(url)); });
   ipcMain.handle('desktop:get-vault-info', (event) => { assertMainSender(event); return navigation.getVaultInfo(); });
   ipcMain.handle('desktop:open-vault-directory', async (event) => { assertMainSender(event); await navigation.openVaultDirectory(); });
