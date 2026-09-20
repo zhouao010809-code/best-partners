@@ -11,16 +11,16 @@ const releaseSchema = z.object({
   html_url: z.string(),
   body: z.string().nullable().optional(),
   published_at: z.string().nullable().optional(),
-  assets: z.array(z.object({ name: z.string(), browser_download_url: z.string() })),
-});
+  assets: z.array(z.object({ name: z.string(), browser_download_url: z.string() }).strict()),
+}).strict();
 const releasesSchema = z.array(releaseSchema);
 
-type ParsedVersion = { major: number; minor: number; patch: number; prerelease: string[] };
+type ParsedVersion = { major: string; minor: string; patch: string; prerelease: string[] };
 
 export type UpdateCheckResult =
-  | { kind: 'up-to-date'; currentVersion: string; checkedAt: string }
-  | { kind: 'available'; currentVersion: string; version: string; releaseUrl: string; assetUrl: string; publishedAt?: string; notes?: string }
-  | { kind: 'error'; currentVersion: string; code: 'UPDATE_FEED_UNAVAILABLE' | 'UPDATE_FEED_INVALID' | 'UPDATE_VERSION_INVALID'; message: string; releaseUrl: string };
+  | { status: 'up-to-date'; currentVersion: string; checkedAt: string }
+  | { status: 'available'; currentVersion: string; version: string; releaseUrl: string; assetUrl: string; publishedAt?: string; notes: string }
+  | { status: 'error'; currentVersion: string; code: 'UPDATE_FEED_UNAVAILABLE' | 'UPDATE_FEED_INVALID' | 'UPDATE_VERSION_INVALID'; message: string; releaseUrl: string };
 
 export type UpdateCheckerInput = {
   currentVersion: string;
@@ -34,12 +34,20 @@ function parseVersion(value: string): ParsedVersion | null {
   if (!match) return null;
   const prerelease = match[4]?.split('.') ?? [];
   if (prerelease.some((part) => /^\d+$/.test(part) && (part.length > 1 && part.startsWith('0')))) return null;
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), prerelease };
+  return { major: match[1]!, minor: match[2]!, patch: match[3]!, prerelease };
+}
+
+function compareIntegerStrings(left: string, right: string): number {
+  const a = left.replace(/^0+(?=\d)/, '');
+  const b = right.replace(/^0+(?=\d)/, '');
+  if (a.length !== b.length) return a.length > b.length ? 1 : -1;
+  return a === b ? 0 : (a > b ? 1 : -1);
 }
 
 function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
   for (const key of ['major', 'minor', 'patch'] as const) {
-    if (left[key] !== right[key]) return left[key] > right[key] ? 1 : -1;
+    const comparison = compareIntegerStrings(left[key], right[key]);
+    if (comparison) return comparison;
   }
   if (!left.prerelease.length || !right.prerelease.length) {
     return left.prerelease.length === right.prerelease.length ? 0 : (left.prerelease.length ? -1 : 1);
@@ -52,7 +60,7 @@ function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
     if (a === b) continue;
     const aNumeric = /^\d+$/.test(a);
     const bNumeric = /^\d+$/.test(b);
-    if (aNumeric && bNumeric) return Number(a) > Number(b) ? 1 : -1;
+    if (aNumeric && bNumeric) return compareIntegerStrings(a, b);
     if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
     return a > b ? 1 : -1;
   }
@@ -62,7 +70,8 @@ function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
 function isOfficialUrl(value: string, expectedPath: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === 'github.com' && url.pathname.startsWith(expectedPath);
+    const authority = value.match(/^[a-z][a-z\d+.-]*:\/\/([^/]+)/iu)?.[1];
+    return url.protocol === 'https:' && url.hostname === 'github.com' && authority === 'github.com' && !url.username && !url.password && !url.port && !url.search && !url.hash && url.pathname === expectedPath;
   } catch {
     return false;
   }
@@ -73,8 +82,9 @@ function cleanNotes(body: string): string {
     .replace(/<[^>]*>/g, ' ')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/(```|~~|[*_#>])/g, '')
+    .replace(/(```|`|~~|[*_#>])/g, '')
     .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/[ \t]{2,}/g, ' ')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n')
     .trim())
@@ -85,7 +95,7 @@ function cleanNotes(body: string): string {
 type UpdateErrorCode = 'UPDATE_FEED_UNAVAILABLE' | 'UPDATE_FEED_INVALID' | 'UPDATE_VERSION_INVALID';
 
 function errorResult(currentVersion: string, code: UpdateErrorCode, message: string): UpdateCheckResult {
-  return { kind: 'error', currentVersion, code, message, releaseUrl: RELEASE_PAGE_URL };
+  return { status: 'error', currentVersion, code, message, releaseUrl: RELEASE_PAGE_URL };
 }
 
 export async function checkForUpdate(input: UpdateCheckerInput): Promise<UpdateCheckResult> {
@@ -119,8 +129,8 @@ export async function checkForUpdate(input: UpdateCheckerInput): Promise<UpdateC
     .filter((entry): entry is { release: z.infer<typeof releaseSchema>; version: ParsedVersion } => entry.version !== null)
     .filter(({ version, release }) => compareVersions(version, current) > 0 && (!version.prerelease.length || current.prerelease.length) && (!release.prerelease || current.prerelease.length))
     .map(({ release, version }) => {
-      if (!isOfficialUrl(release.html_url, '/zhouao010809-code/best-partners/releases/')) return null;
-      const asset = release.assets.find((item) => /arm64[^/]*\.dmg$/iu.test(item.name) && isOfficialUrl(item.browser_download_url, '/zhouao010809-code/best-partners/releases/download/'));
+      if (!isOfficialUrl(release.html_url, `/zhouao010809-code/best-partners/releases/tag/${release.tag_name}`)) return null;
+      const asset = release.assets.find((item) => /arm64[^/]*\.dmg$/iu.test(item.name) && isOfficialUrl(item.browser_download_url, `/zhouao010809-code/best-partners/releases/download/${release.tag_name}/${item.name}`));
       if (!asset) return null;
       return { release, version, asset };
     })
@@ -129,17 +139,16 @@ export async function checkForUpdate(input: UpdateCheckerInput): Promise<UpdateC
 
   const winner = candidates[0];
   if (!winner) {
-    return { kind: 'up-to-date', currentVersion: input.currentVersion, checkedAt: (input.now ?? (() => new Date()))().toISOString() };
+    return { status: 'up-to-date', currentVersion: input.currentVersion, checkedAt: (input.now ?? (() => new Date()))().toISOString() };
   }
-  const result: Extract<UpdateCheckResult, { kind: 'available' }> = {
-    kind: 'available',
+  const result: Extract<UpdateCheckResult, { status: 'available' }> = {
+    status: 'available',
     currentVersion: input.currentVersion,
     version: [winner.version.major, winner.version.minor, winner.version.patch].join('.') + (winner.version.prerelease.length ? `-${winner.version.prerelease.join('.')}` : ''),
     releaseUrl: winner.release.html_url,
     assetUrl: winner.asset.browser_download_url,
+    notes: winner.release.body ? cleanNotes(winner.release.body) : '',
   };
   if (winner.release.published_at) result.publishedAt = winner.release.published_at;
-  const notes = winner.release.body ? cleanNotes(winner.release.body) : '';
-  if (notes) result.notes = notes;
   return result;
 }
