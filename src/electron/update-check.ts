@@ -11,8 +11,8 @@ const releaseSchema = z.object({
   html_url: z.string(),
   body: z.string().nullable().optional(),
   published_at: z.string().nullable().optional(),
-  assets: z.array(z.object({ name: z.string(), browser_download_url: z.string() }).strict()),
-}).strict();
+  assets: z.array(z.object({ name: z.string(), browser_download_url: z.string() })),
+});
 const releasesSchema = z.array(releaseSchema);
 
 type ParsedVersion = { major: string; minor: string; patch: string; prerelease: string[] };
