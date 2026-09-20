@@ -67,6 +67,19 @@ describe('CompanyProjectDetailPage', () => {
     expect(screen.getByText('platform-data/xiaohongshu/project-1/')).toBeVisible();
   });
 
+  it('shows the read-only project assistant and reveals a task prompt', async () => {
+    render(<MemoryRouter initialEntries={['/company/projects/project-1']}><Routes><Route element={<CompanyAppShell api={apiFixture()} initialSession={session} />}><Route path="company/projects/:id" element={<CompanyProjectDetailPage />} /></Route></Routes></MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: '明德教育代运营' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: '项目助理' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: '只读项目上下文' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '分析项目现状' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '找平台异常' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '生成下周计划' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: '生成下周计划' }));
+    expect(screen.getByRole('region', { name: '项目助理任务' })).toBeVisible();
+  });
+
   it('lets an operator choose a platform export and imports it without manual metric entry', async () => {
     const api = apiFixture();
     render(<MemoryRouter initialEntries={['/company/projects/project-1']}><Routes><Route element={<CompanyAppShell api={api} initialSession={session} />}><Route path="company/projects/:id" element={<CompanyProjectDetailPage />} /></Route></Routes></MemoryRouter>);
