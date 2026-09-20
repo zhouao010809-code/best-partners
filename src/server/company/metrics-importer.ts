@@ -547,7 +547,12 @@ function firstHeader(rows: RawTable, aliases: Map<string, CompanyMetricCanonical
     const row = rows[index]!;
     if (isBlankRow(row)) continue;
     const mapping = mapHeader(row, aliases);
-    if (mapping.metricCount > 0) return { mapping, index };
+    // A metric word in a title/preamble is not enough to identify a table.
+    // Require at least one stable identity or date column alongside a metric;
+    // rows can still be quarantined later when the content ID cell is blank.
+    if (mapping.metricCount > 0 && (mapping.columns.metricDate !== undefined || mapping.columns.contentId !== undefined)) {
+      return { mapping, index };
+    }
   }
   throw new MetricsImportError('COMPANY_METRICS_COLUMNS_UNSUPPORTED', '没有识别到平台指标列');
 }
