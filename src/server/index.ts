@@ -1,43 +1,70 @@
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { buildServer } from './app.js';
 import { createCompanyRuntime } from './company/company-runtime.js';
 import { ensureCompanyWorkspace } from './company/company-paths.js';
 import { loadConfig } from './config.js';
-import { resolveCompanyListenOptions, resolveLoopbackListenOptions } from './security/origin-host.js';
+import {
+  resolveCompanyBootstrapToken,
+  resolveCompanyListenOptions,
+  resolveLoopbackListenOptions
+} from './security/origin-host.js';
 import { createCompanyHttpPolicy } from './security/loopback-policy.js';
 import { openStateKernel } from './db/database.js';
 import { startServer } from './start-server.js';
 import { LocalRest51Gateway } from './vault/LocalRest51Gateway.js';
 import { registerClientAssets } from './client-assets.js';
+import { ensurePrivateDirectory } from './db/permissions.js';
+import { acquireCompanyServerLock } from './company/company-operations.js';
+import { installCompanySignalHandlers } from './company/graceful-shutdown.js';
 
 if (process.env.RUNTIME_MODE === 'company') {
   const listenOptions = resolveCompanyListenOptions(process.env);
-  const configuredWorkspaceRoot = process.env.COMPANY_WORKSPACE_ROOT ?? join(process.cwd(), 'company-workspace');
-  const appDataDir = process.env.COMPANY_DATA_DIR ?? join(process.cwd(), 'company-state');
+  const companyBootstrapToken = resolveCompanyBootstrapToken(process.env);
+  const configuredWorkspaceRoot = process.env.COMPANY_WORKSPACE_ROOT;
+  const appDataDir = process.env.COMPANY_DATA_DIR;
+  if (configuredWorkspaceRoot === undefined || !isAbsolute(configuredWorkspaceRoot)) {
+    throw new Error('COMPANY_WORKSPACE_ROOT must be an absolute path');
+  }
+  if (appDataDir === undefined || !isAbsolute(appDataDir)) {
+    throw new Error('COMPANY_DATA_DIR must be an absolute path');
+  }
   const workspace = await ensureCompanyWorkspace(configuredWorkspaceRoot, appDataDir);
-  const kernel = openStateKernel({ appDataDir, vaultRealRoot: workspace.rootPath });
-  if (kernel.mode !== 'normal') throw new Error('COMPANY_DATABASE_UNAVAILABLE');
+  ensurePrivateDirectory(appDataDir);
+  const serverLock = acquireCompanyServerLock(appDataDir);
+  let kernel: ReturnType<typeof openStateKernel>;
+  try {
+    kernel = openStateKernel({ appDataDir, vaultRealRoot: workspace.rootPath });
+  } catch (error) {
+    serverLock.release();
+    throw error;
+  }
+  if (kernel.mode !== 'normal') {
+    serverLock.release();
+    throw new Error('COMPANY_DATABASE_UNAVAILABLE');
+  }
   let closed = false;
-  const closeKernel = () => {
+  const closeCompanyResources = () => {
     if (closed) return;
     closed = true;
-    kernel.close();
+    try { kernel.close(); } finally { serverLock.release(); }
   };
   try {
     const companyRuntime = createCompanyRuntime({ workspaceRoot: workspace.rootPath, database: kernel.db });
     const app = buildServer({
       runtimeMode: 'company',
       companyRuntime,
+      companyBootstrapToken,
       httpPolicy: createCompanyHttpPolicy(listenOptions),
-      onClose: closeKernel
+      onClose: closeCompanyResources
     });
     // The company runtime is a browser-accessible LAN application as well as
     // an API. Keep its static client registration at the composition boundary
     // so the company server still never loads the personal vault client setup.
     await registerClientAssets(app, process.env.COMPANY_CLIENT_ROOT ?? resolve('dist/client'));
     await app.listen({ host: listenOptions.host, port: listenOptions.port });
+    installCompanySignalHandlers(() => app.close());
   } catch (error) {
-    closeKernel();
+    closeCompanyResources();
     throw error;
   }
 } else {

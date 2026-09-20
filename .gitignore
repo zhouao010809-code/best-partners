@@ -6,5 +6,7 @@ test-results
 .env
 .local
 .worktrees/
+/company-state/
+/company-workspace/
 *.sqlite3*
 .DS_Store

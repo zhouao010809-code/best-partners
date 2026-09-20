@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.bestpartners.company-console</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-c</string>
+    <string>export COMPANY_BOOTSTRAP_TOKEN="$(/usr/bin/tr -d '\n' &lt; "$COMPANY_BOOTSTRAP_TOKEN_FILE")"; exec "__NODE_PATH__" "__PROJECT_ROOT__/dist/server/index.js"</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__PROJECT_ROOT__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>RUNTIME_MODE</key>
+    <string>company</string>
+    <key>COMPANY_HOST</key>
+    <string>__COMPANY_HOST__</string>
+    <key>COMPANY_PORT</key>
+    <string>__COMPANY_PORT__</string>
+    <key>COMPANY_WORKSPACE_ROOT</key>
+    <string>__COMPANY_WORKSPACE_ROOT__</string>
+    <key>COMPANY_DATA_DIR</key>
+    <string>__COMPANY_DATA_DIR__</string>
+    <key>COMPANY_CLIENT_ROOT</key>
+    <string>__PROJECT_ROOT__/dist/client</string>
+    <key>COMPANY_BOOTSTRAP_TOKEN_FILE</key>
+    <string>__COMPANY_BOOTSTRAP_TOKEN_FILE__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIRECTORY__/company-console.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIRECTORY__/company-console.stderr.log</string>
+</dict>
+</plist>

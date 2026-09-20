@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "company-mcp-server/**/*.ts",
+    "tests/company-mcp/**/*.ts",
+    "src/shared/api/company-auth.ts",
+    "src/shared/api/company-projects.ts",
+    "src/shared/api/skills.ts",
+    "src/server/security/origin-host.ts"
+  ]
+}

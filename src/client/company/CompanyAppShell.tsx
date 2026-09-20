@@ -136,7 +136,7 @@ export function CompanyAppShell({ api = browserCompanyApi, initialSession }: Com
         </aside>
         <section className="company-workspace" aria-label="公司项目工作区">
           <header className="company-topbar"><div><Activity size={16} aria-hidden="true" /><span>{activeLabel}</span></div><span className="company-topbar__mode">SHARED / MAC MINI</span></header>
-          {agentOpen && <aside className="company-agent-popover" role="status" aria-label="Agent 控制台提示"><strong>Agent 控制台</strong><p>由 Codex / WorkBuddy 读取项目资料并调用 Skill。文件确认仍在项目工作区完成。</p></aside>}
+          {agentOpen && <aside className="company-agent-popover" role="status" aria-label="Agent 控制台提示"><strong>Agent 连接</strong><p>Codex / WorkBuddy 通过独立公司 MCP 连接。网页不内置聊天；扫描和项目确认仍需显式开启写入。</p></aside>}
           <main id="company-main-content" className="company-main" tabIndex={-1}><CompanyAuthBoundary><Outlet /></CompanyAuthBoundary></main>
         </section>
       </div>

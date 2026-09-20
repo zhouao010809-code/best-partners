@@ -150,6 +150,7 @@ export interface ReadApiDependencies {
 export interface BuildServerOptions {
   readonly runtimeMode?: CompanyRuntimeMode;
   readonly companyRuntime?: CompanyRuntime;
+  readonly companyBootstrapToken?: string;
   readonly assistantAdapters?: AssistantAdapter[];
   readonly attachmentService?: AttachmentService;
   readonly trashService?: TrashService;
@@ -347,7 +348,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined });
   registerIndexJobRoutes(app, indexJobs);
   if (companyRuntime !== undefined) {
-    registerCompanyAuthRoutes(app, companyRuntime);
+    registerCompanyAuthRoutes(app, {
+      auth: companyRuntime.auth,
+      ...(options.companyBootstrapToken === undefined
+        ? {}
+        : { bootstrapToken: options.companyBootstrapToken })
+    });
     registerCompanyProjectRoutes(app, { ...companyRuntime, runtime: companyRuntime });
     registerCompanySkillRoutes(app, companyRuntime);
   }

@@ -7,11 +7,15 @@ const startup = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   startServer: vi.fn(),
   openStateKernel: vi.fn(),
+  ensurePrivateDirectory: vi.fn(),
+  acquireCompanyServerLock: vi.fn(),
+  installCompanySignalHandlers: vi.fn(),
   registerClientAssets: vi.fn(),
   localRest51Gateway: vi.fn(),
   companyRuntime: { workspace: { id: 'company' } },
   companyApp: { listen: vi.fn() },
   companyKernel: { mode: 'normal', db: { fixture: 'company-db' }, close: vi.fn() },
+  companyServerLock: { path: '/tmp/company-server.lock.json', release: vi.fn() },
   gateway: { fixture: 'legacy-gateway' },
   config: {
     appHost: '127.0.0.1', appPort: 4317, appDataDir: '/tmp/xiaozhao-app-data',
@@ -31,6 +35,9 @@ vi.mock('../../../src/server/company/company-paths.js', () => ({
 vi.mock('../../../src/server/config.js', () => ({ loadConfig: startup.loadConfig }));
 vi.mock('../../../src/server/start-server.js', () => ({ startServer: startup.startServer }));
 vi.mock('../../../src/server/db/database.js', () => ({ openStateKernel: startup.openStateKernel }));
+vi.mock('../../../src/server/db/permissions.js', () => ({ ensurePrivateDirectory: startup.ensurePrivateDirectory }));
+vi.mock('../../../src/server/company/company-operations.js', () => ({ acquireCompanyServerLock: startup.acquireCompanyServerLock }));
+vi.mock('../../../src/server/company/graceful-shutdown.js', () => ({ installCompanySignalHandlers: startup.installCompanySignalHandlers }));
 vi.mock('../../../src/server/client-assets.js', () => ({ registerClientAssets: startup.registerClientAssets }));
 vi.mock('../../../src/server/vault/LocalRest51Gateway.js', () => ({
   LocalRest51Gateway: class { constructor(...args: unknown[]) { return startup.localRest51Gateway(...args); } }
@@ -52,6 +59,8 @@ beforeEach(() => {
   startup.localRest51Gateway.mockReturnValue(startup.gateway);
   startup.startServer.mockResolvedValue({ origin: 'http://127.0.0.1:4317', port: 4317, close: vi.fn() });
   startup.openStateKernel.mockReturnValue(startup.companyKernel);
+  startup.acquireCompanyServerLock.mockReturnValue(startup.companyServerLock);
+  startup.installCompanySignalHandlers.mockReturnValue({ shutdown: vi.fn(), dispose: vi.fn() });
   startup.registerClientAssets.mockResolvedValue(undefined);
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
@@ -84,18 +93,21 @@ describe('legacy CLI startup adapter', () => {
     vi.stubEnv('RUNTIME_MODE', 'company');
     vi.stubEnv('COMPANY_HOST', '192.168.1.20');
     vi.stubEnv('COMPANY_PORT', '4399');
+    vi.stubEnv('COMPANY_BOOTSTRAP_TOKEN', 'b'.repeat(43));
     vi.stubEnv('COMPANY_WORKSPACE_ROOT', '/srv/company-workspace');
+    vi.stubEnv('COMPANY_DATA_DIR', '/srv/company-state');
 
     await importEntrypoint();
 
     expect(startup.loadConfig).not.toHaveBeenCalled();
     expect(startup.localRest51Gateway).not.toHaveBeenCalled();
     expect(startup.startServer).not.toHaveBeenCalled();
-    expect(startup.ensureCompanyWorkspace).toHaveBeenCalledWith('/srv/company-workspace', expect.stringMatching(/company-state$/u));
+    expect(startup.ensureCompanyWorkspace).toHaveBeenCalledWith('/srv/company-workspace', '/srv/company-state');
     expect(startup.openStateKernel).toHaveBeenCalledWith({
-      appDataDir: expect.stringMatching(/company-state$/u),
+      appDataDir: '/srv/company-state',
       vaultRealRoot: '/canonical/company-workspace'
     });
+    expect(startup.acquireCompanyServerLock).toHaveBeenCalledWith('/srv/company-state');
     expect(startup.createCompanyRuntime).toHaveBeenCalledWith({
       workspaceRoot: '/canonical/company-workspace', database: startup.companyKernel.db
     });
@@ -108,12 +120,38 @@ describe('legacy CLI startup adapter', () => {
     );
     expect(startup.buildServer).toHaveBeenCalledWith(expect.objectContaining({
       runtimeMode: 'company',
-      companyRuntime: startup.companyRuntime
+      companyRuntime: startup.companyRuntime,
+      companyBootstrapToken: 'b'.repeat(43)
     }));
     expect(startup.companyApp.listen).toHaveBeenCalledWith({
       host: '192.168.1.20',
       port: 4399
     });
+    expect(startup.installCompanySignalHandlers).toHaveBeenCalledWith(expect.any(Function));
+  });
+
+  it('rejects company startup without an explicit bootstrap secret', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'company');
+    vi.stubEnv('COMPANY_HOST', '192.168.1.20');
+    vi.stubEnv('COMPANY_PORT', '4399');
+
+    await expect(importEntrypoint()).rejects.toThrow('COMPANY_BOOTSTRAP_TOKEN');
+    expect(startup.ensureCompanyWorkspace).not.toHaveBeenCalled();
+    expect(startup.openStateKernel).not.toHaveBeenCalled();
+    expect(startup.buildServer).not.toHaveBeenCalled();
+  });
+
+  it('rejects company startup without explicit absolute storage roots', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'company');
+    vi.stubEnv('COMPANY_HOST', '127.0.0.1');
+    vi.stubEnv('COMPANY_PORT', '4399');
+    vi.stubEnv('COMPANY_BOOTSTRAP_TOKEN', 'b'.repeat(43));
+    vi.stubEnv('COMPANY_WORKSPACE_ROOT', 'relative-workspace');
+    vi.stubEnv('COMPANY_DATA_DIR', '/srv/company-state');
+
+    await expect(importEntrypoint()).rejects.toThrow('COMPANY_WORKSPACE_ROOT');
+    expect(startup.ensureCompanyWorkspace).not.toHaveBeenCalled();
+    expect(startup.openStateKernel).not.toHaveBeenCalled();
   });
 
   it('allows the known development UI origin only under explicit development mode', async () => {

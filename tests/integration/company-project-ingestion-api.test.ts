@@ -123,6 +123,7 @@ describe('company project service', () => {
 
 describe('company project ingestion routes', () => {
   it('scans, reads, and confirms a folder supplied through the incoming area', async () => {
+    const bootstrapToken = 'b'.repeat(43);
     const root = await mkdtemp(join(tmpdir(), 'company-project-route-'));
     roots.push(root);
     const appDataDir = join(root, 'state');
@@ -138,10 +139,10 @@ describe('company project ingestion routes', () => {
     if (kernel.mode !== 'normal') throw new Error('expected normal kernel');
     kernels.push(kernel);
     const runtime = createCompanyRuntime({ database: kernel.db, workspaceRoot });
-    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime });
+    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime, companyBootstrapToken: bootstrapToken });
     servers.push(server);
     const baseHeaders = { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' };
-    const bootstrap = await server.inject({ method: 'POST', url: '/api/company/v1/auth/bootstrap', headers: baseHeaders, payload: {
+    const bootstrap = await server.inject({ method: 'POST', url: '/api/company/v1/auth/bootstrap', headers: { ...baseHeaders, 'x-company-bootstrap-token': bootstrapToken }, payload: {
       operator: { displayName: 'Operator', password: 'operator-secret' },
       reviewer: { displayName: 'Reviewer', password: 'reviewer-secret' }
     } });

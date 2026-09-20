@@ -36,49 +36,69 @@ Mac mini 上的个人版仍使用自己的 Electron / personal vault；公司版
 
 ```sh
 npm ci
-npm run build
+npm run build:company-server
 ```
 
-在 Mac mini 上用固定的局域网地址启动。`COMPANY_HOST` 必须是明确的非 wildcard 地址，不能写 `0.0.0.0`；`COMPANY_PORT` 必须显式提供：
+推荐在 Mac mini 上只绑定回环地址，由第二台 Mac 通过 SSH 隧道访问。`COMPANY_HOST` 不能写 `0.0.0.0`、公网 IP 或任意公网域名；`COMPANY_PORT` 必须显式提供：
 
 ```sh
-COMPANY_HOST=192.168.1.20 \
+mkdir -p /Users/Shared/BestPartners
+node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))" > /Users/Shared/BestPartners/company-bootstrap-token
+chmod 600 /Users/Shared/BestPartners/company-bootstrap-token
+
+COMPANY_HOST=127.0.0.1 \
 COMPANY_PORT=4399 \
+COMPANY_BOOTSTRAP_TOKEN="$(tr -d '\n' < /Users/Shared/BestPartners/company-bootstrap-token)" \
 COMPANY_WORKSPACE_ROOT="/Users/Shared/BestPartners/company-workspace" \
 COMPANY_DATA_DIR="/Users/Shared/BestPartners/company-state" \
 npm run company-server
 ```
 
-启动命令会设置 `RUNTIME_MODE=company`，并在监听前完成工作区和公司数据库初始化。两台电脑用浏览器打开：
+启动命令会设置 `RUNTIME_MODE=company`，并在监听前完成工作区和公司数据库初始化。`COMPANY_BOOTSTRAP_TOKEN` 必须符合 43 字符 base64url 形状；部署命令应用 `randomBytes(32)` 生成 256-bit secret，缺失或格式错误时公司服务不会启动。密钥文件只让运行服务的 macOS 用户读取，不要放进 Git 或共享工作区。Mac mini 本机打开：
 
 ```text
-http://192.168.1.20:4399/
+http://127.0.0.1:4399/
 ```
 
-如果只运行了 `npm run build:company-server` 而没有 `npm run build`，公司前端静态文件可能不存在；发布前应始终执行完整的 `npm run build`。按 `Ctrl-C` 停止服务，避免在服务运行时直接复制 SQLite 文件。
+第二台 Mac 开启一条 SSH 隧道（需要 Mac mini 已开启“远程登录”）：
+
+```sh
+ssh -N -L 4399:127.0.0.1:4399 <Mac-mini-用户>@mac-mini.local
+```
+
+隧道保持运行时，第二台 Mac 也打开 `http://127.0.0.1:4399/`。这样登录密码和 session cookie 不会以明文穿过办公室局域网。只有在已隔离且完全受信的内网中，才可改用 `192.168.x.x` / `10.x.x.x` / `.local` 直连；直连 HTTP 本身不提供传输加密。
+
+`npm run build:company-server` 已包含完整的 `npm run build`、company MCP 和运维脚本构建；不要绕过它只运行 `npm run build:server`。按 `Ctrl-C` 停止服务，避免在服务运行时直接复制 SQLite 文件。
 
 ## 3. 首次建立两个账号
 
-公司用户只允许初始化一次，固定建立一个 `operator` 和一个 `reviewer`。建议在 Mac mini 本机执行 bootstrap，并为请求体使用临时文件，避免密码出现在 shell 历史中：
+公司用户只允许初始化一次，固定建立一个 `operator` 和一个 `reviewer`。建议在 Mac mini 本机执行 bootstrap，使用 `umask 077` 的临时文件，并不把令牌和密码放进 curl 进程参数：
 
 ```sh
-cat > /tmp/company-bootstrap.json <<'JSON'
+umask 077
+bootstrap_file=$(mktemp /tmp/company-bootstrap.XXXXXX)
+curl_config=$(mktemp /tmp/company-bootstrap-curl.XXXXXX)
+trap 'rm -f "$bootstrap_file" "$curl_config"' EXIT
+
+cat >"$bootstrap_file" <<'JSON'
 {
   "operator": { "displayName": "运营", "password": "替换为强密码" },
   "reviewer": { "displayName": "老板", "password": "替换为另一组强密码" }
 }
 JSON
 
-curl --fail-with-body -sS \
-  -X POST "http://192.168.1.20:4399/api/company/v1/auth/bootstrap" \
-  -H 'Content-Type: application/json' \
-  -H 'Origin: http://192.168.1.20:4399' \
-  --data-binary @/tmp/company-bootstrap.json
-
-rm /tmp/company-bootstrap.json
+cat >"$curl_config" <<EOF
+url = http://127.0.0.1:4399/api/company/v1/auth/bootstrap
+request = POST
+header = Content-Type: application/json
+header = Origin: http://127.0.0.1:4399
+header = X-Company-Bootstrap-Token: $(tr -d '\n' < /Users/Shared/BestPartners/company-bootstrap-token)
+data-binary = @$bootstrap_file
+EOF
+curl --fail-with-body -sS --config "$curl_config"
 ```
 
-初始化成功后不要再次调用 bootstrap；再次调用会返回 `COMPANY_ALREADY_BOOTSTRAPPED`。随后在网页中分别登录两个账号。`operator` 可以提交扫描、确认项目；`reviewer` 可以读取提案、项目和看板。P0 尚未提供独立的 reviewer 审批端点，因此不要把 reviewer 账号当作已经具备“确认项目”权限的账号。
+没有正确启动密钥的局域网请求会在创建用户前返回 `COMPANY_BOOTSTRAP_FORBIDDEN`。初始化成功后不要再次调用 bootstrap；再次调用会返回 `COMPANY_ALREADY_BOOTSTRAPPED`。随后在网页中分别登录两个账号。`operator` 可以提交扫描、确认项目；`reviewer` 可以读取提案、项目和看板。P0 尚未提供独立的 reviewer 审批端点，因此不要把 reviewer 账号当作已经具备“确认项目”权限的账号。
 
 ## 4. 项目导入闭环
 
@@ -89,7 +109,7 @@ rm /tmp/company-bootstrap.json
 5. 由有权限的用户明确确认；Agent 调用 `company.confirm_project` 时必须携带 `runId`、`sourceSha256`、名称、状态和 Skill ID。响应中的 `operationId` 和来源 hash 要写入操作记录。
 6. 确认完成后，项目文件位于 `projects/<projectId>/`，包含 `项目配置.yaml`、`项目说明.md` 和原始文件副本；原始 `incoming/` 来源不会被静默改写。
 
-公司项目 Agent 工具只有以下五个：
+公司 MCP 只暴露以下七个有界工具：
 
 ```text
 company.scan_project_folder
@@ -97,22 +117,47 @@ company.get_project_proposal
 company.confirm_project
 company.list_projects
 company.get_project
+company.list_skills
+company.get_skill
 ```
 
-它们返回结构化 JSON，不接受绝对路径、`..`、符号链接逃逸或模型生成的 shell/file-write 指令。个人版工具不会自动获得这五个公司工具。
+它们返回结构化 JSON，不接受绝对路径、`..`、符号链接逃逸或模型生成的 shell/file-write 指令。个人版工具不会自动获得这七个公司工具。
 
 ### Skill 目录
 
 `skills/` 是公司工作区的文件真源。第一层可以按 `通用`、`教育`、`餐饮` 等分类，分类目录下每个 Skill 文件夹必须包含 `SKILL.md`；没有分类的 Skill 也可以直接放在 `skills/` 下。网页的“Skill 库”只读展示名称、描述、版本、正文和同目录 Markdown 参考文件，不提供网页执行、移动或编辑按钮。
 
-Agent 只读工具为：
+Skill 正文中的命令只是不可信的参考内容，MCP 不执行它们；新增或修改 Skill 仍通过工作区文件和后续受控流程完成。网页上的“Agent 控制台”只是连接说明，不是内置聊天窗口。
 
-```text
-company.list_skills
-company.get_skill
+### 连接 Codex / WorkBuddy
+
+桥接使用公司账号登录 HTTP API，然后在本机通过 STDIO 向 Agent 提供工具。先验证协议和构建：
+
+```sh
+npm run test:company-mcp
+npm run build:company-mcp
 ```
 
-这两个工具必须由公司运行时显式绑定已经认证的公司会话和 `skills` 服务；当前 P0 不会自动把 Codex / WorkBuddy 的外部传输或模型提供商接进网页。Skill 正文中的命令只是内容，不具备执行权限；新增或修改 Skill 仍通过工作区文件和后续受控流程完成。
+所需环境变量：
+
+| 变量 | 用途 |
+| --- | --- |
+| `COMPANY_API_ORIGIN` | 公司服务完整 origin；HTTP 只允许回环，使用 `http://127.0.0.1:4399` |
+| `COMPANY_DISPLAY_NAME` | 专用于 Agent 的现有公司用户显示名 |
+| `COMPANY_PASSWORD` | 该用户密码；只保留在 Agent 所在的本机配置 |
+| `COMPANY_MCP_WRITE_ENABLED` | 可选；只有精确为 `true` 时才放行扫描 |
+| `COMPANY_MCP_CONFIRM_ENABLED` | 可选；最终确认还要额外精确为 `true` |
+| `COMPANY_MCP_CONFIRM_INTENT` | 确认时必填的精确 JSON 意图，与已核对提案一致 |
+
+默认两个开关都不设。需要扫描项目时只开写入开关；需要确认时，在核对提案后再对当次 Agent 会话设置：
+
+```sh
+export COMPANY_MCP_WRITE_ENABLED=true
+export COMPANY_MCP_CONFIRM_ENABLED=true
+export COMPANY_MCP_CONFIRM_INTENT='{"runId":"run-1","sourceSha256":"<64位-hash>","name":"明德培训代运营","status":"active","selectedSkillIds":[]}'
+```
+
+桥接会逐字段比对工具输入和宿主意图，不匹配就拒绝；意图在发起 HTTP 确认前就会消耗，不能在同一进程中重复利用。确认完成或网络中断后，先读取同一 `runId` 判断结果，不自动重试。任务完成后关闭开关、删除意图并重启 Agent。Codex CLI 的注册示例见 README；WorkBuddy 生产注册使用构建后的 `node /absolute/path/dist/company-mcp-server/index.js`，开发调试才使用 `npx tsx company-mcp-server/index.ts`。
 
 ## 5. 中断和恢复
 
@@ -125,9 +170,26 @@ company.get_skill
 
 确认过程是幂等的：重复确认会返回已有项目和操作编号，不应再创建第二份项目。若工作区或数据库损坏，先停止服务并保留 `recovery/` 原样，进入人工恢复流程；不要用新建空数据库覆盖旧状态。
 
-## 6. 备份边界
+## 6. 冷备份与恢复演练
 
-当前版本有 `backups/` 和数据库恢复目录，但还没有对外的一键备份命令或自动备份调度。正式投入使用前，先制定人工备份制度：停止服务后，将完整的 `COMPANY_DATA_DIR` 和 `COMPANY_WORKSPACE_ROOT` 复制到独立磁盘或受控备份位置，再启动服务验证项目列表和 hash。
+公司备份要同时保留文件真源和 SQLite 投影，因此只支持停服后冷备份。正常的 `SIGINT` / `SIGTERM` 会只关闭一次 Fastify 和 SQLite，并移除运行锁。停止公司服务后执行：
+
+```sh
+mkdir -p /Volumes/CompanyBackup/best-partners
+npm run company:backup -- \
+  --workspace /Users/Shared/BestPartners/company-workspace \
+  --state /Users/Shared/BestPartners/company-state \
+  --destination /Volumes/CompanyBackup/best-partners
+```
+
+命令每次创建一个不覆盖的 `company-backup-<时间>-<UUID>` 快照，逐项记录相对路径、大小和 SHA-256。遇到符号链接、特殊文件、备份目标位于源目录内、复制期间源文件变化，或检测到服务运行锁时都会拒绝。备份后立即做只读验证：
+
+```sh
+npm run company:restore-check -- \
+  --snapshot /Volumes/CompanyBackup/best-partners/company-backup-<实际编号>
+```
+
+`verified: true` 只表示快照完整且 hash 匹配，不会改写当前工作区。实际恢复演练时，把快照的 `workspace/` 和 `state/` 复制到两个全新的绝对路径，对新路径再运行校验和公司服务；不要直接覆盖生产目录。
 
 备份必须同时覆盖：
 
@@ -135,7 +197,19 @@ company.get_skill
 - `backups/`、`recovery/`；
 - `incoming/`、`projects/`、`skills/`、`system/`。
 
-不要只备份 SQLite，也不要把 `incoming` 当作临时缓存清空。P0 不提供自动平台数据同步，因此备份不会产生视频号、抖音或小红书的后台历史数据。
+不要只备份 SQLite，也不要把 `incoming` 当作临时缓存清空。如果断电留下 `company-server.lock.json`，先确认对应 Node 进程和 4399 端口都已停止，再把该锁文件移入 `recovery/` 保留后重启；不要在进程存活时删锁。P0 不提供自动平台数据同步，因此备份不会产生视频号、抖音或小红书的后台历史数据。
+
+### launchd 常驻
+
+`scripts/company-launchd.plist.template` 是用户级 LaunchAgent 模板。复制到 `~/Library/LaunchAgents/com.bestpartners.company-console.plist` 后，替换所有 `__...__` 占位符，确保日志目录已存在，然后执行：
+
+```sh
+plutil -lint ~/Library/LaunchAgents/com.bestpartners.company-console.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.bestpartners.company-console.plist
+launchctl kickstart -k "gui/$(id -u)/com.bestpartners.company-console"
+```
+
+停服备份前执行 `launchctl bootout "gui/$(id -u)/com.bestpartners.company-console"`。模板从权限为 `0600` 的 token 文件读取初始化密钥，不把密钥本文写入 plist。
 
 ## 7. 双机验收清单
 

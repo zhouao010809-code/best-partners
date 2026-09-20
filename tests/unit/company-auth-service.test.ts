@@ -79,6 +79,19 @@ describe('company auth service', () => {
     expect(db.prepare('SELECT COUNT(*) AS count FROM company_users').get()).toEqual({ count: 2 });
   });
 
+  it('rejects weak or reused bootstrap credentials before creating users', async () => {
+    const { db, auth } = fixture();
+    await expect(auth.bootstrap({
+      operator: { displayName: 'Operator', password: 'short' },
+      reviewer: { displayName: 'Reviewer', password: 'reviewer-secret' }
+    })).rejects.toBeDefined();
+    await expect(auth.bootstrap({
+      operator: { displayName: 'Operator', password: 'same-password' },
+      reviewer: { displayName: 'Reviewer', password: 'same-password' }
+    })).rejects.toMatchObject({ code: 'COMPANY_PASSWORD_REUSE', statusCode: 400 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM company_users').get()).toEqual({ count: 0 });
+  });
+
   it('issues opaque hashed sessions and binds CSRF tokens to the session', async () => {
     const { db, auth } = fixture();
     await auth.bootstrap({
@@ -131,6 +144,25 @@ describe('company auth service', () => {
     const operator = db.prepare('SELECT id FROM company_users WHERE display_name = ?').get('Operator') as { id: string };
     db.prepare('UPDATE company_users SET disabled = 1 WHERE id = ?').run(operator.id);
     expect(await auth.authenticate({ headers: { cookie: fresh.setCookie.split(';', 1)[0] } })).toBeUndefined();
+  });
+
+  it('rejects excess process-wide login derivations instead of queueing crypto work', async () => {
+    const { auth } = fixture();
+    await auth.bootstrap({
+      operator: { displayName: 'Operator', password: 'operator-secret' },
+      reviewer: { displayName: 'Reviewer', password: 'reviewer-secret' }
+    });
+
+    const results = await Promise.allSettled(Array.from({ length: 8 }, (_, index) => auth.login({
+      displayName: `Unknown-${index}`,
+      password: 'wrong-password'
+    })));
+
+    const rejected = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    expect(rejected.filter((result) => result.reason?.code === 'COMPANY_CREDENTIALS_INVALID')).toHaveLength(4);
+    expect(rejected.filter((result) => result.reason?.code === 'COMPANY_LOGIN_BUSY')).toHaveLength(4);
+    expect(rejected.filter((result) => result.reason?.code === 'COMPANY_LOGIN_BUSY'))
+      .toSatisfy((items: PromiseRejectedResult[]) => items.every((item) => item.reason?.statusCode === 429));
   });
 
   it('enforces operator/reviewer permissions at the service boundary', async () => {

@@ -17,6 +17,7 @@ import {
 const servers: Array<ReturnType<typeof buildServer>> = [];
 const databases: Database.Database[] = [];
 const roots: string[] = [];
+const COMPANY_BOOTSTRAP_TOKEN = 'b'.repeat(43);
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => server.close()));
@@ -34,7 +35,7 @@ async function companySession(server: ReturnType<typeof buildServer>): Promise<{
   const bootstrap = await server.inject({
     method: 'POST',
     url: '/api/company/v1/auth/bootstrap',
-    headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' },
+    headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317', 'x-company-bootstrap-token': COMPANY_BOOTSTRAP_TOKEN },
     payload: {
       operator: { displayName: 'Operator', password: 'operator-secret' },
       reviewer: { displayName: 'Reviewer', password: 'reviewer-secret' }
@@ -78,7 +79,7 @@ describe('runtime mode boundary', () => {
 
   it('registers the company namespace against the isolated company project service', async () => {
     const companyRuntime = createCompanyRuntime({ workspaceRoot: '/srv/company-workspace' });
-    const server = buildServer({ runtimeMode: 'company', companyRuntime });
+    const server = buildServer({ runtimeMode: 'company', companyRuntime, companyBootstrapToken: COMPANY_BOOTSTRAP_TOKEN });
     servers.push(server);
 
     const bootstrap = await server.inject({ url: '/api/v1/bootstrap', headers: { host: '127.0.0.1:4317' } });
@@ -107,7 +108,7 @@ describe('runtime mode boundary', () => {
 
   it('does not expose personal API routes from a company runtime', async () => {
     const companyRuntime = createCompanyRuntime({ workspaceRoot: '/srv/company-workspace' });
-    const server = buildServer({ runtimeMode: 'company', companyRuntime });
+    const server = buildServer({ runtimeMode: 'company', companyRuntime, companyBootstrapToken: COMPANY_BOOTSTRAP_TOKEN });
     servers.push(server);
 
     const personalRoutes = await Promise.all([
@@ -159,7 +160,7 @@ describe('runtime mode boundary', () => {
       get: async () => project
     };
     const runtime = createCompanyRuntime({ database, workspaceRoot: root, projects });
-    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime });
+    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime, companyBootstrapToken: COMPANY_BOOTSTRAP_TOKEN });
     servers.push(server);
     const session = await companySession(server);
     const headers = { host: '127.0.0.1:4317', cookie: session.cookie, 'x-csrf-token': session.csrfToken, origin: 'http://127.0.0.1:4317' };
@@ -199,7 +200,7 @@ describe('runtime mode boundary', () => {
       workspaceRoot: root,
       projects: { list: async () => [] }
     });
-    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime });
+    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime, companyBootstrapToken: COMPANY_BOOTSTRAP_TOKEN });
     servers.push(server);
     const session = await companySession(server);
     const headers = { host: '127.0.0.1:4317', cookie: session.cookie, 'x-csrf-token': session.csrfToken, origin: 'http://127.0.0.1:4317' };

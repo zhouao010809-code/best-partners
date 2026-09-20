@@ -11,16 +11,17 @@ export const companyUserSchema = z.object({
 }).strict();
 
 const companyPasswordSchema = z.string().min(1).max(1024);
+const companyNewPasswordSchema = z.string().min(12).max(1024);
 const companyDisplayNameSchema = z.string().trim().min(1).max(128);
 
 export const companyBootstrapRequestSchema = z.object({
   operator: z.object({
     displayName: companyDisplayNameSchema,
-    password: companyPasswordSchema
+    password: companyNewPasswordSchema
   }).strict(),
   reviewer: z.object({
     displayName: companyDisplayNameSchema,
-    password: companyPasswordSchema
+    password: companyNewPasswordSchema
   }).strict()
 }).strict();
 

@@ -8,6 +8,7 @@ import { skillResponseSchema, skillsResponseSchema } from '../../src/shared/api/
 
 const servers: Array<ReturnType<typeof buildServer>> = [];
 const databases: Database.Database[] = [];
+const COMPANY_BOOTSTRAP_TOKEN = 'b'.repeat(43);
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => server.close()));
@@ -25,7 +26,7 @@ function cookie(response: Awaited<ReturnType<ReturnType<typeof buildServer>['inj
 }
 
 async function session(server: ReturnType<typeof buildServer>): Promise<{ cookie: string; csrfToken: string }> {
-  const bootstrap = await server.inject({ method: 'POST', url: '/api/company/v1/auth/bootstrap', headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' }, payload: { operator: { displayName: 'Operator', password: 'operator-secret' }, reviewer: { displayName: 'Reviewer', password: 'reviewer-secret' } } });
+  const bootstrap = await server.inject({ method: 'POST', url: '/api/company/v1/auth/bootstrap', headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317', 'x-company-bootstrap-token': COMPANY_BOOTSTRAP_TOKEN }, payload: { operator: { displayName: 'Operator', password: 'operator-secret' }, reviewer: { displayName: 'Reviewer', password: 'reviewer-secret' } } });
   expect(bootstrap.statusCode).toBe(200);
   const login = await server.inject({ method: 'POST', url: '/api/company/v1/auth/login', headers: { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' }, payload: { displayName: 'Operator', password: 'operator-secret' } });
   expect(login.statusCode).toBe(200);
@@ -48,7 +49,7 @@ describe('company Skill read API', () => {
     databases.push(database);
     applyMigrations(database);
     const runtime = createCompanyRuntime({ database, workspaceRoot: '/srv/company-workspace', skills: fixture() });
-    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime });
+    const server = buildServer({ runtimeMode: 'company', companyRuntime: runtime, companyBootstrapToken: COMPANY_BOOTSTRAP_TOKEN });
     servers.push(server);
 
     expect((await server.inject({ url: '/api/company/v1/skills', headers: { host: '127.0.0.1:4317' } })).statusCode).toBe(401);

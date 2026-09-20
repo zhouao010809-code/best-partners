@@ -16,6 +16,8 @@ export interface CompanyListenOptions {
   readonly port: number;
 }
 
+const COMPANY_BOOTSTRAP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '::0', '*']);
 
 function stripIpv6Brackets(host: string): { value: string; bracketed: boolean } | undefined {
@@ -79,6 +81,31 @@ function isUnspecifiedIp(host: string): boolean {
     && groups[5] === 0xffff && groups[6] === 0 && groups[7] === 0;
 }
 
+function isPrivateIpv4(octets: readonly [number, number, number, number]): boolean {
+  const [first, second] = octets;
+  return first === 10
+    || first === 127
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168)
+    || (first === 100 && second >= 64 && second <= 127);
+}
+
+function isPrivateIpv6(groups: readonly number[]): boolean {
+  if (groups.length !== 8) return false;
+  if (groups.slice(0, 7).every(group => group === 0) && groups[7] === 1) return true;
+  if ((groups[0]! & 0xfe00) === 0xfc00 || (groups[0]! & 0xffc0) === 0xfe80) return true;
+  if (groups.slice(0, 5).every(group => group === 0) && groups[5] === 0xffff) {
+    return isPrivateIpv4([
+      groups[6]! >> 8,
+      groups[6]! & 0xff,
+      groups[7]! >> 8,
+      groups[7]! & 0xff
+    ]);
+  }
+  return false;
+}
+
 function readPort(value: string | undefined, name: string): number {
   if (value === undefined || !/^[1-9][0-9]{0,4}$/u.test(value)) {
     throw new Error(`${name} must be a TCP port`);
@@ -100,18 +127,32 @@ export function resolveCompanyListenOptions(env: NodeJS.ProcessEnv): CompanyList
   return { host: stripped.value, port: readPort(env.COMPANY_PORT, 'COMPANY_PORT') };
 }
 
+export function resolveCompanyBootstrapToken(env: NodeJS.ProcessEnv): string {
+  const token = env.COMPANY_BOOTSTRAP_TOKEN;
+  if (token === undefined || !COMPANY_BOOTSTRAP_TOKEN_PATTERN.test(token)) {
+    throw new Error('COMPANY_BOOTSTRAP_TOKEN must be a 43-character base64url-shaped secret');
+  }
+  return token;
+}
+
 export function isValidCompanyHost(host: string): boolean {
   const stripped = stripIpv6Brackets(host);
   if (stripped === undefined || stripped.value.length === 0 || /[\s/\\%]/u.test(stripped.value)) return false;
   if (stripped.bracketed && !stripped.value.includes(':')) return false;
   if (WILDCARD_HOSTS.has(stripped.value) || isUnspecifiedIp(stripped.value)) return false;
-  if (stripped.value.includes(':')) return expandIpv6(stripped.value) !== undefined;
-  if (parseIpv4(stripped.value) !== undefined) return true;
+  if (stripped.value.includes(':')) {
+    const groups = expandIpv6(stripped.value);
+    return groups !== undefined && isPrivateIpv6(groups);
+  }
+  const ipv4 = parseIpv4(stripped.value);
+  if (ipv4 !== undefined) return isPrivateIpv4(ipv4);
   // Node's resolver accepts numeric shorthand such as `0`, `0.0`, and `0x0`
   // as the wildcard address. Do not let malformed numeric hosts bypass the
   // explicit non-wildcard binding policy.
   if (/^[0-9.]+$/u.test(stripped.value) || /^0x[0-9a-f]+$/iu.test(stripped.value)) return false;
-  return /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/u.test(stripped.value);
+  return stripped.value === 'localhost'
+    || (/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/u.test(stripped.value)
+      && stripped.value.toLowerCase().endsWith('.local'));
 }
 
 export function companyHttpOrigin(options: CompanyListenOptions): string {

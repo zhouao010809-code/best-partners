@@ -129,17 +129,46 @@ flowchart LR
 
 公司版是独立的共享项目运行时，服务于同一办公室内的少量成员。它把项目原文件放在独立的 `incoming/`、`projects/`、`skills/`、`system/` 工作区，使用单独的公司数据库和两个公司账号，不读取个人 vault、Local REST 或个人密钥。当前 P0 的主入口只有项目数据看板、项目档案库和 Skill 库；平台后台抓取、视频号/抖音/小红书实时指标及私信读取尚未接入。
 
-在 Mac mini 上先完成完整构建，再用固定的局域网地址启动：
+在 Mac mini 上先完成完整构建，再用固定的回环地址启动：
 
 ```sh
-npm run build
-COMPANY_HOST=192.168.1.20 COMPANY_PORT=4399 \
+npm run build:company-server
+mkdir -p /Users/Shared/BestPartners
+node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))" > /Users/Shared/BestPartners/company-bootstrap-token
+chmod 600 /Users/Shared/BestPartners/company-bootstrap-token
+COMPANY_HOST=127.0.0.1 COMPANY_PORT=4399 \
+COMPANY_BOOTSTRAP_TOKEN="$(tr -d '\n' < /Users/Shared/BestPartners/company-bootstrap-token)" \
 COMPANY_WORKSPACE_ROOT="/Users/Shared/BestPartners/company-workspace" \
 COMPANY_DATA_DIR="/Users/Shared/BestPartners/company-state" \
 npm run company-server
 ```
 
-其他电脑打开 `http://192.168.1.20:4399/`。`COMPANY_HOST` 不能使用 `0.0.0.0` 等 wildcard；工作区和状态目录必须是彼此分离的绝对路径。Agent 只通过结构化公司项目工具分析和提交提案，并可在显式绑定公司会话后只读读取 `skills/` 下的 Skill；项目文件的最终确认仍在公司工作区完成。完整的账号初始化、项目导入、Skill 目录边界、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
+两台 Mac 的推荐方式是让服务只绑定 `127.0.0.1`。第二台 Mac 先运行 `ssh -N -L 4399:127.0.0.1:4399 <Mac-mini-用户>@mac-mini.local`，再打开 `http://127.0.0.1:4399/`；密码、会话和 Agent 请求会走 SSH 加密通道。`COMPANY_HOST` 不能使用 wildcard 或公网地址。外部 Codex / WorkBuddy 通过独立的公司 MCP 桥接调用 7 个结构化工具；默认只读，扫描和最终确认分别有独立开关。网页里没有内置聊天控制台。完整的账号初始化、Agent 接入、项目导入、Skill 目录边界、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
+
+### 给 Codex / WorkBuddy 使用公司 MCP
+
+公司 MCP 通过已登录的公司 HTTP API 读取项目和 Skill，不直接扫描个人大脑。开发运行和生产构建命令分别是：
+
+```sh
+npm run company:mcp
+npm run build:company-mcp
+```
+
+Codex CLI 可以注册为标准 STDIO MCP。下面用环境变量承接密码，避免密码本文进入 shell 历史；Codex 依然会将此凭据保存在当前用户的本机 MCP 配置中，因此该 macOS 账号不应共享：
+
+```sh
+read -s COMPANY_MCP_PASSWORD
+export COMPANY_MCP_PASSWORD
+codex mcp add best-partners-company \
+  --env COMPANY_API_ORIGIN=http://127.0.0.1:4399 \
+  --env COMPANY_DISPLAY_NAME=运营 \
+  --env COMPANY_PASSWORD="$COMPANY_MCP_PASSWORD" \
+  -- node /absolute/path/to/xiaozhao-brain-console/dist/company-mcp-server/index.js
+unset COMPANY_MCP_PASSWORD
+codex mcp list
+```
+
+此配置默认只能列表和读取。当次需要创建扫描提案时设置 `COMPANY_MCP_WRITE_ENABLED=true`；要做最终确认时还必须另外设置 `COMPANY_MCP_CONFIRM_ENABLED=true`，并设置精确的 `COMPANY_MCP_CONFIRM_INTENT` JSON，包含 `runId`、`sourceSha256`、`name`、`status`、`selectedSkillIds` 和可选 `clientName`。桥接只允许完全匹配该意图的一次确认，调用前就消耗授权；完成或结果不明时先查询同一提案，不自动重试。WorkBuddy 使用同样的 STDIO 命令与环境变量即可，不需要把平台 cookie 或项目文件路径交给它。
 
 ### 给 Codex 使用独立的只读 MCP
 

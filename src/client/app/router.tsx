@@ -38,6 +38,15 @@ function NotFoundPlaceholder() {
   );
 }
 
+function RuntimeModePendingPlaceholder() {
+  return (
+    <section className="instrument-panel phase-panel" aria-live="polite">
+      <p>WORKSPACE MODE</p>
+      <h2>正在识别工作区…</h2>
+    </section>
+  );
+}
+
 export interface AppRouterProps {
   readonly api?: ReadConsoleApi;
   /** App passes the server bootstrap mode; an injected API remains personal for tests. */
@@ -62,7 +71,9 @@ export function AppRouter({ api, runtimeMode = 'personal' }: AppRouterProps = {}
         <Route path="extractions/:id" element={<ExtractionPage />} />
         <Route path="write-plans/:id" element={<WritePlanPlaceholder />} />
         <Route path="not-found" element={<NotFoundPlaceholder />} />
-        <Route path="*" element={<Navigate to="/not-found" replace />} />
+        <Route path="*" element={runtimeMode === 'pending'
+          ? <RuntimeModePendingPlaceholder />
+          : <Navigate to="/not-found" replace />} />
       </Route>
     </Routes>
   );

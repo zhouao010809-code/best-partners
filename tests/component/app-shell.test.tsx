@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import App from '../../src/client/App.js';
 import type {
   ApiClientResult,
@@ -108,6 +108,10 @@ function RuntimeProbe() {
   );
 }
 
+function LocationProbe() {
+  return <output aria-label="当前路由">{useLocation().pathname}</output>;
+}
+
 function renderShell(api: ReadConsoleApi) {
   return render(
     <MemoryRouter initialEntries={['/']}>
@@ -196,6 +200,18 @@ describe('asking about selected source prose', () => {
 describe('black-glass application shell', () => {
   beforeEach(() => setPath('/'));
   afterEach(() => cleanup());
+
+  it('preserves a company deep link while the server runtime mode is still loading', () => {
+    render(
+      <MemoryRouter initialEntries={['/company/projects']}>
+        <LocationProbe />
+        <AppRouter runtimeMode="pending" />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByLabelText('当前路由')).toHaveTextContent('/company/projects');
+    expect(screen.getByText('正在识别工作区…')).toBeVisible();
+  });
 
   it('exposes skip, sidebar, navigation, and main-content landmarks', () => {
     render(<App />);

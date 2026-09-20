@@ -20,8 +20,10 @@ const COMPANY_COOKIE_PATH = '/api/company';
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const PASSWORD_SALT_BYTES = 16;
 const PASSWORD_KEY_BYTES = 32;
+const MAX_CONCURRENT_LOGIN_DERIVATIONS = 4;
 const DEFAULT_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const CSRF_SECRET = randomBytes(32);
+let activeLoginDerivations = 0;
 
 export type CompanyRole = z.infer<typeof companyRoleSchema>;
 export type CompanyUser = z.infer<typeof companyUserSchema>;
@@ -126,6 +128,22 @@ async function derivePassword(password: string, salt: Buffer): Promise<Buffer> {
   });
 }
 
+async function deriveLoginPassword(password: string, salt: Buffer): Promise<Buffer> {
+  if (activeLoginDerivations >= MAX_CONCURRENT_LOGIN_DERIVATIONS) {
+    throw new PublicApiError(
+      'COMPANY_LOGIN_BUSY',
+      'Company login is temporarily busy',
+      429
+    );
+  }
+  activeLoginDerivations += 1;
+  try {
+    return await derivePassword(password, salt);
+  } finally {
+    activeLoginDerivations -= 1;
+  }
+}
+
 function publicCookie(sessionId: string): string {
   return `${COMPANY_COOKIE_NAME}=${sessionId}; Path=${COMPANY_COOKIE_PATH}; HttpOnly; SameSite=Strict`;
 }
@@ -149,6 +167,7 @@ export function createCompanyAuthService(options: CompanyAuthOptions): CompanyAu
     throw new Error('COMPANY_SESSION_TTL_INVALID');
   }
   const csrfSecret = options.csrfSecret ?? CSRF_SECRET;
+  const unknownUserSalt = randomBytes(PASSWORD_SALT_BYTES);
 
   options.database.prepare(`
     INSERT INTO company_workspaces (id, display_name, root_path, created_at, updated_at)
@@ -172,6 +191,15 @@ export function createCompanyAuthService(options: CompanyAuthOptions): CompanyAu
     const parsed = companyBootstrapRequestSchema.parse(input);
     if (parsed.operator.displayName === parsed.reviewer.displayName) {
       throw new PublicApiError('COMPANY_DISPLAY_NAME_CONFLICT', 'Company user display names must differ', 400);
+    }
+    if (parsed.operator.password === parsed.reviewer.password) {
+      throw new PublicApiError('COMPANY_PASSWORD_REUSE', 'Company user passwords must differ', 400);
+    }
+    const existingBeforeDerivation = options.database
+      .prepare('SELECT COUNT(*) AS count FROM company_users')
+      .get() as { count: number };
+    if (existingBeforeDerivation.count !== 0) {
+      throw new PublicApiError('COMPANY_ALREADY_BOOTSTRAPPED', 'Company users already exist', 409);
     }
     const createdAt = now().toISOString();
     const records: Array<{ displayName: string; role: CompanyRole; password: string; id: string }> = [
@@ -225,9 +253,12 @@ export function createCompanyAuthService(options: CompanyAuthOptions): CompanyAu
     const invalid = () => {
       throw new PublicApiError('COMPANY_CREDENTIALS_INVALID', 'Company credentials invalid', 401);
     };
+    const actual = await deriveLoginPassword(
+      parsed.password,
+      row === undefined ? unknownUserSalt : Buffer.from(row.password_salt, 'base64url')
+    );
     if (row === undefined || row.disabled === 1) return invalid();
     const expected = Buffer.from(row.password_hash, 'base64url');
-    const actual = await derivePassword(parsed.password, Buffer.from(row.password_salt, 'base64url'));
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return invalid();
 
     const sessionId = randomBytes(32).toString('base64url');
