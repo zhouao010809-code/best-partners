@@ -64,6 +64,11 @@ describe('checkForUpdate', () => {
     expect(result).toMatchObject({ status: 'up-to-date', currentVersion: '0.1.1' });
   });
 
+  it('skips releases with illegal tags', async () => {
+    const result = await checkForUpdate(input('0.1.1', [release({ tag_name: 'not-a-version' })]));
+    expect(result).toMatchObject({ status: 'up-to-date', currentVersion: '0.1.1' });
+  });
+
   it('allows a prerelease app to upgrade to a higher prerelease', async () => {
     const result = await checkForUpdate(input('0.1.2-beta.1', [release({ tag_name: 'v0.1.2-beta.2', prerelease: true })]));
     expect(result).toMatchObject({ status: 'available', version: '0.1.2-beta.2' });
