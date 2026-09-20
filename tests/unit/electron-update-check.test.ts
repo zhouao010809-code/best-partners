@@ -59,6 +59,27 @@ describe('checkForUpdate', () => {
     }
   });
 
+  it('accepts common extra fields from the GitHub Release API', async () => {
+    const result = await checkForUpdate(input('0.1.1', [release({
+      id: 123,
+      url: 'https://api.github.com/repos/zhouao010809-code/best-partners/releases/123',
+      node_id: 'RE_kwDO123',
+      assets_url: 'https://api.github.com/repos/zhouao010809-code/best-partners/releases/123/assets',
+      author: { login: 'release-bot', id: 1 },
+      assets: [{
+        name: 'Best-Partners-0.1.2-arm64.dmg',
+        browser_download_url: 'https://github.com/zhouao010809-code/best-partners/releases/download/v0.1.2/Best-Partners-0.1.2-arm64.dmg',
+        id: 456,
+        url: 'https://api.github.com/repos/zhouao010809-code/best-partners/releases/assets/456',
+        state: 'uploaded',
+        size: 1234,
+        created_at: '2026-09-20T00:00:00Z',
+        updated_at: '2026-09-20T00:00:00Z',
+      }],
+    })]));
+    expect(result).toMatchObject({ status: 'available', version: '0.1.2' });
+  });
+
   it('skips prerelease releases for stable apps', async () => {
     const result = await checkForUpdate(input('0.1.1', [release({ tag_name: 'v0.1.2-beta.1', prerelease: true })]));
     expect(result).toMatchObject({ status: 'up-to-date', currentVersion: '0.1.1' });
@@ -97,8 +118,6 @@ describe('checkForUpdate', () => {
   it('returns feed invalid for malformed JSON and schema', async () => {
     expectError(await checkForUpdate({ currentVersion: '0.1.1', fetcher: vi.fn(async () => new Response('{', { status: 200 })) }), 'UPDATE_FEED_INVALID');
     expectError(await checkForUpdate(input('0.1.1', { nope: true })), 'UPDATE_FEED_INVALID');
-    expectError(await checkForUpdate(input('0.1.1', [release({ unexpected: true })])), 'UPDATE_FEED_INVALID');
-    expectError(await checkForUpdate(input('0.1.1', [release({ assets: [{ name: 'x-arm64.dmg', browser_download_url: 'https://github.com/zhouao010809-code/best-partners/releases/download/v0.1.2/x-arm64.dmg', unexpected: true }] })])), 'UPDATE_FEED_INVALID');
   });
 
   it('returns version invalid for malformed current versions', async () => {
