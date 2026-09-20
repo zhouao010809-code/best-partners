@@ -52,6 +52,7 @@ describe('CompanyProjectAssistant', () => {
     expect(task).toHaveTextContent('不会直接修改项目文件');
     expect(task).toHaveTextContent('明德教育代运营');
     expect(task).toHaveTextContent('项目 ID：project-1');
+    expect(task).toHaveTextContent('请先使用已连接的公司 MCP 只读工具读取项目 ID project-1');
     expect(task).toHaveTextContent('已选 Skill：无');
     expect(task).toHaveTextContent('数据截至 2026-09-19');
     expect(task).not.toHaveTextContent('/Users/');

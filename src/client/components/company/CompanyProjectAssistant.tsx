@@ -54,6 +54,7 @@ function promptFor(task: string, project: CompanyProject, metrics: CompanyProjec
   return [
     `请${task}。`,
     '你是一个只读项目助理，只能基于下方已提供的项目上下文提出分析、异常线索或计划建议。',
+    `请先使用已连接的公司 MCP 只读工具读取项目 ID ${project.id}、项目指标和已选 Skill；如果工具不可用，请明确说明，不要猜测。`,
     `项目名称：${project.name}`,
     `项目 ID：${project.id}`,
     `客户名称：${client}`,
