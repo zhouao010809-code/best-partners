@@ -35,6 +35,8 @@
 .company-topbar__mode { color: var(--text-faint); font-family: var(--font-mono); font-size: 9px; letter-spacing: .16em; }
 .company-agent-popover { position: absolute; z-index: 15; top: 65px; left: 20px; width: min(340px, calc(100% - 40px)); padding: 15px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: rgba(16, 19, 19, .97); box-shadow: var(--shadow-panel); }
 .company-agent-popover strong { color: var(--text-primary); font-size: 13px; }
+.company-agent-popover__badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.company-agent-popover__badges span { padding: 3px 6px; border: 1px solid var(--border-muted); border-radius: 99px; color: var(--text-muted); font-family: var(--font-mono); font-size: 9px; letter-spacing: .02em; }
 .company-agent-popover p { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
 .company-main { width: min(1240px, 100%); margin: 0 auto; padding: 46px clamp(20px, 4vw, 58px) 76px; }
 .company-page { min-width: 0; }

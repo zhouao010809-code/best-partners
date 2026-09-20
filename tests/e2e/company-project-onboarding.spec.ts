@@ -35,7 +35,10 @@ test('company onboarding keeps the source on the Mac mini and confirms an Agent 
   await expect(page.getByRole('link', { name: '项目数据看板' })).toBeVisible();
   await expect(page.getByRole('link', { name: '项目档案库' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Skill 库' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '打开 Agent 控制台' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '打开 Agent 连接说明' })).toBeVisible();
+  await page.getByRole('button', { name: '打开 Agent 连接说明' }).click();
+  await expect(page.getByRole('status', { name: 'Agent 连接说明' })).toContainText('默认只读');
+  await expect(page.getByRole('status', { name: 'Agent 连接说明' })).toContainText('网页不内置聊天');
   await page.getByRole('link', { name: '项目档案库' }).click();
   const source = page.getByRole('textbox', { name: 'incoming 文件夹路径' });
   await source.fill('incoming/培训机构');

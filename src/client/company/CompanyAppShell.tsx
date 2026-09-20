@@ -130,13 +130,13 @@ export function CompanyAppShell({ api = browserCompanyApi, initialSession }: Com
             <NavLink to="/company/skills" className={({ isActive }) => `company-nav-item${isActive ? ' is-active' : ''}`}><Sparkles size={17} aria-hidden="true" /><span>Skill 库</span></NavLink>
           </nav>
           <div className="company-sidebar__footer">
-            <button type="button" className={`company-agent-button${agentOpen ? ' is-open' : ''}`} aria-label="打开 Agent 控制台" onClick={() => setAgentOpen(value => !value)}><Bot size={17} aria-hidden="true" /><span>Agent 控制台</span><span className="company-agent-button__status" aria-hidden="true" /></button>
+            <button type="button" className={`company-agent-button${agentOpen ? ' is-open' : ''}`} aria-label="打开 Agent 连接说明" onClick={() => setAgentOpen(value => !value)}><Bot size={17} aria-hidden="true" /><span>Agent 连接</span><span className="company-agent-button__status" aria-hidden="true" /></button>
             <div className="company-user-badge" role="status" aria-label="公司会话状态"><span>{session?.user.displayName ?? '未登录'}</span><small>{session?.user.role ?? '需要登录'}</small></div>
           </div>
         </aside>
         <section className="company-workspace" aria-label="公司项目工作区">
           <header className="company-topbar"><div><Activity size={16} aria-hidden="true" /><span>{activeLabel}</span></div><span className="company-topbar__mode">SHARED / MAC MINI</span></header>
-          {agentOpen && <aside className="company-agent-popover" role="status" aria-label="Agent 控制台提示"><strong>Agent 连接</strong><p>Codex / WorkBuddy 通过独立公司 MCP 连接。网页不内置聊天；扫描和项目确认仍需显式开启写入。</p></aside>}
+          {agentOpen && <aside className="company-agent-popover" role="status" aria-label="Agent 连接说明"><strong>Agent 连接</strong><div className="company-agent-popover__badges"><span>外部 Codex / WorkBuddy</span><span>默认只读</span></div><p>项目助理会生成带当前项目范围的受控任务提示，复制后交给外部 Agent。网页不内置聊天；扫描、导入和项目确认仍需显式开启对应写入。</p></aside>}
           <main id="company-main-content" className="company-main" tabIndex={-1}><CompanyAuthBoundary><Outlet /></CompanyAuthBoundary></main>
         </section>
       </div>

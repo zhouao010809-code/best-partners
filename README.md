@@ -143,7 +143,7 @@ COMPANY_DATA_DIR="/Users/Shared/BestPartners/company-state" \
 npm run company-server
 ```
 
-两台 Mac 的推荐方式是让服务只绑定 `127.0.0.1`。第二台 Mac 先运行 `ssh -N -L 4399:127.0.0.1:4399 <Mac-mini-用户>@mac-mini.local`，再打开 `http://127.0.0.1:4399/`；密码、会话和 Agent 请求会走 SSH 加密通道。`COMPANY_HOST` 不能使用 wildcard 或公网地址。外部 Codex / WorkBuddy 通过独立的公司 MCP 桥接调用 11 个结构化工具；默认只读，项目扫描、平台导入和最终确认分别受写入开关保护。网页里没有内置聊天控制台。完整的账号初始化、导出文件放置、自动扫描、Agent 接入、Skill 目录边界、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
+两台 Mac 的推荐方式是让服务只绑定 `127.0.0.1`。第二台 Mac 先运行 `ssh -N -L 4399:127.0.0.1:4399 <Mac-mini-用户>@mac-mini.local`，再打开 `http://127.0.0.1:4399/`；密码、会话和 Agent 请求会走 SSH 加密通道。`COMPANY_HOST` 不能使用 wildcard 或公网地址。外部 Codex / WorkBuddy 通过独立的公司 MCP 桥接调用 11 个结构化工具；默认只读，项目扫描、平台导入和最终确认分别受写入开关保护。网页里没有内置聊天控制台；项目详情里的“项目助理”只生成带项目范围的受控提示词，复制后交给外部 Agent。完整的账号初始化、导出文件放置、自动扫描、Agent 接入、Skill 目录边界、断点恢复、备份边界和双机验收见 [公司工作区 P0 运行手册](docs/company/company-p0-operations.md)。
 
 ### 给 Codex / WorkBuddy 使用公司 MCP
 
