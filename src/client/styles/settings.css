@@ -110,6 +110,11 @@
 .settings-key-note svg { flex: 0 0 12px; width: 12px; height: 12px; margin-top: 4px; }
 .settings-workspace .settings-feedback { margin: 12px 0 0; padding: 10px 12px; border-left: 2px solid #85958d; border-radius: 0 4px 4px 0; color: #c2cfc8; background: #91a79a0a; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .settings-workspace .settings-feedback--error { border-left-color: #ba966b; color: #d7bb99; background: #ba966b0a; }
+.settings-updates__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.settings-updates__result { display: grid; gap: 8px; min-width: 0; }
+.settings-updates__version { margin: 0; color: #e6e6ec; font-size: 15px; font-weight: 550; }
+.settings-updates__meta { margin: 0; color: var(--settings-muted); font-size: 12px; }
+.settings-updates__notes { margin: 4px 0 8px; color: #d0d0d9; font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
 .settings-key-confirm { display: grid; gap: 10px; margin-top: 16px; padding: 12px; border: 1px solid #ad8b642e; border-radius: 6px; background: #ad8b6409; }
 .settings-key-confirm > p { margin: 0; color: #dac2a7; font-size: 12px; line-height: 1.7; }
 .settings-health { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 0 24px; min-width: 0; padding-top: 26px; border-top: 1px solid var(--settings-line); }
@@ -191,6 +196,8 @@
   .settings-workspace .settings-section__heading p { font-size: 12px; }
   .settings-vault .settings-section__body { grid-template-columns: minmax(0,1fr); }
   .settings-workspace .settings-model-meta { grid-template-columns: minmax(0,1fr); gap: 12px; }
+  .settings-updates__actions { align-items: stretch; flex-direction: column; }
+  .settings-updates__actions .settings-button { width: 100%; }
   .settings-key-actions { justify-content: flex-start; }
   .settings-verification { align-items: flex-start; flex-direction: column; gap: 10px; }
   .settings-health { display: block; }
