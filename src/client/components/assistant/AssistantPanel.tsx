@@ -92,12 +92,18 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const [pollError, setPollError] = useState<{ id: string; message: string }>();
   const [pollRevision, setPollRevision] = useState(0);
   const interactionEpoch = useRef(0);
-  const [skillRecommendation, setSkillRecommendation] = useState<SkillRecommendation>();
+  const [skillRecommendation, setSkillRecommendationState] = useState<SkillRecommendation>();
+  const skillRecommendationRef = useRef<SkillRecommendation | undefined>(undefined);
   const skillMatchAbort = useRef<AbortController | undefined>(undefined);
+  function setSkillRecommendation(value: SkillRecommendation | undefined): void {
+    skillRecommendationRef.current = value;
+    setSkillRecommendationState(value);
+  }
   const draft = draftStore.current.text;
   const setDraft = (value: string | ((current: string) => string)) => {
     const next = typeof value === 'function' ? value(draftStore.currentRef.current.text) : value;
-    if (skillRecommendation && skillRecommendation.status !== 'invalidated' && next !== skillRecommendation.payload.message) {
+    const currentRecommendation = skillRecommendationRef.current;
+    if (currentRecommendation && currentRecommendation.status !== 'invalidated' && next !== currentRecommendation.payload.message) {
       skillMatchAbort.current?.abort();
       interactionEpoch.current += 1;
       setSkillRecommendation({ status: 'invalidated', message: '推荐已失效，请重新发送问题。', epoch: interactionEpoch.current });
@@ -318,6 +324,11 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     };
   }
 
+  function withoutConfirmedSkill(payload: AssistantSend): AssistantSend {
+    const { skillId, skillRevision, ...ordinaryPayload } = payload;
+    return skillId || skillRevision ? ordinaryPayload : payload;
+  }
+
   async function dispatchSend(payload: AssistantSend): Promise<void> {
     if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady) return;
     clearSkillRecommendation();
@@ -328,7 +339,14 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       if (!await draftStore.flush()) return;
       const result = await service.send(payload);
       if (result.ok) { receive(result.value); draftStore.update({ conversationId: result.value.id, text: draftStore.currentRef.current.text.trim() === payload.message ? '' : draftStore.currentRef.current.text }); await draftStore.flush(); }
-      else { setError(errorMessage(result, '未能确认消息已发送，请重试。')); setFailedSend(payload); }
+      else if ('state' in result && ['ASSISTANT_SKILL_STALE', 'ASSISTANT_SKILL_INVALID', 'ASSISTANT_SKILL_UNAVAILABLE'].includes(result.code ?? '')) {
+        setSkillRecommendation({
+          status: result.code === 'ASSISTANT_SKILL_UNAVAILABLE' ? 'unavailable' : 'error',
+          payload: withoutConfirmedSkill(payload),
+          message: errorMessage(result, '所选 Skill 已不可用，请重新匹配后再试。'),
+          epoch: interactionEpoch.current
+        });
+      } else { setError(errorMessage(result, '未能确认消息已发送，请重试。')); setFailedSend(payload); }
     } catch { setError('连接中断，尚未确认发送结果。可重试确认这条消息。'); setFailedSend(payload); }
     finally { pendingRef.current = false; setPending(false); setSending(false); }
   }
@@ -403,7 +421,8 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   }
 
   function selectSkillCandidate(index: number): void {
-    setSkillRecommendation(current => current?.status === 'ready' ? { ...current, selectedIndex: index } : current);
+    const current = skillRecommendationRef.current;
+    if (current?.status === 'ready') setSkillRecommendation({ ...current, selectedIndex: index });
   }
 
   async function stop() {

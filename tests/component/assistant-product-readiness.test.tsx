@@ -117,9 +117,10 @@ it.each(['archive receipt', 'task completion'] as const)('refreshes selected fil
     return ok({ ...running, status: trigger === 'task completion' ? 'idle' as const : 'running' as const, messages: [{ ...running.messages[0]!, text: '文件归档已经完成', actions: trigger === 'archive receipt' ? [{ id: 'archive-action', type: 'archive' as const, attachmentId: attachment.id, operationId, materialPath: '01图书馆/阅读资料.md', materialTitle: '阅读资料', status: 'archived' as const, label: '查看归档资料' }] : [] }] });
   });
   const getAttachment = vi.fn(async () => ok({ attachment }));
-  const api = { assistantDrafts: f.service, attachments: { get: getAttachment }, skills: { match: vi.fn(async () => ok({ candidates: [] })) }, assistant: { providers: vi.fn(async () => ok({ providers: [{ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'model', name: 'Model', reasoningEfforts: [] }] }] })), history: vi.fn(async () => ok({ conversations: [] })), get, send: vi.fn(async () => ok(running)) } } as unknown as ReadConsoleApi;
+  const send = vi.fn(async () => ok(running));
+  const api = { assistantDrafts: f.service, attachments: { get: getAttachment }, skills: { match: vi.fn(async () => ok({ candidates: [] })) }, assistant: { providers: vi.fn(async () => ok({ providers: [{ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'model', name: 'Model', reasoningEfforts: [] }] }] })), history: vi.fn(async () => ok({ conversations: [] })), get, send } } as unknown as ReadConsoleApi;
   render(<MemoryRouter><AssistantPanel api={api} open onClose={() => {}} width={430} onWidthChange={() => {}} onRunningChange={() => {}} /></MemoryRouter>);
-  await screen.findByText('临时附件'); await user.click(screen.getByRole('button', { name: '发送消息' })); await screen.findByRole('button', { name: '停止回答' });
+  await screen.findByText('临时附件'); await user.click(screen.getByRole('button', { name: '发送消息' })); await waitFor(() => expect(send).toHaveBeenCalledTimes(1));
   const afterStarting = getAttachment.mock.calls.length;
   await screen.findByText('正在处理文件的内容', {}, { timeout: 2000 }); expect(getAttachment).toHaveBeenCalledTimes(afterStarting);
   await waitFor(() => expect(within(screen.getByRole('list', { name: '本对话附件' })).getByText('已归档')).toBeVisible(), { timeout: 2000 });

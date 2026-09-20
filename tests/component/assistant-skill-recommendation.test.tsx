@@ -1,9 +1,10 @@
 import { useCallback, useState } from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AssistantPanel } from '../../src/client/components/assistant/AssistantPanel.js';
+import { askAssistant } from '../../src/client/components/assistant/assistantIntent.js';
 import type { ReadConsoleApi } from '../../src/client/api/client.js';
 import type { AssistantConversation, AssistantProvider } from '../../src/shared/api/assistant.js';
 import type { SkillMatchCandidate } from '../../src/shared/api/skills.js';
@@ -169,4 +170,43 @@ it('sends normally when there are no candidates', async () => {
   await user.type(screen.getByLabelText('发送给问问的消息'), '没有匹配项的问题{Enter}');
   await waitFor(() => expect(service.send).toHaveBeenCalledTimes(1));
   expect(screen.queryByText('使用此 Skill')).not.toBeInTheDocument();
+});
+
+it('rematches instead of retrying an expired Skill as the same assistant request', async () => {
+  const refreshed = candidate('公众号写作（新版）', 'c'.repeat(64));
+  service.send
+    .mockResolvedValueOnce({ ok: false, code: 'ASSISTANT_SKILL_STALE', state: { status: 'operation-error', message: '所选 Skill 已更新，请重新匹配后再试。' } })
+    .mockResolvedValueOnce(ok(conversation));
+  const user = userEvent.setup();
+  render(<Harness />);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  await user.type(screen.getByLabelText('发送给问问的消息'), '写一篇公众号文章{Enter}');
+  await user.click(await screen.findByRole('button', { name: '使用此 Skill' }));
+
+  expect(await screen.findByText('所选 Skill 已更新，请重新匹配后再试。')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '重试这条消息' })).not.toBeInTheDocument();
+  skills.match.mockResolvedValueOnce(ok({ candidates: [refreshed] }));
+  await user.click(screen.getByRole('button', { name: '重试匹配' }));
+  expect(await screen.findByText('公众号写作（新版）')).toBeVisible();
+  expect(skills.match).toHaveBeenCalledTimes(2);
+
+  await user.click(screen.getByRole('button', { name: '使用此 Skill' }));
+  await waitFor(() => expect(service.send).toHaveBeenCalledTimes(2));
+  expect(service.send.mock.calls[1]![0]).toMatchObject({ skillId: refreshed.id, skillRevision: refreshed.revision });
+});
+
+it('clears a recommendation when an explicitly queued assistant intent is loaded', async () => {
+  const user = userEvent.setup();
+  render(<Harness />);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  await user.type(screen.getByLabelText('发送给问问的消息'), '写一篇公众号文章{Enter}');
+  await screen.findByText('公众号写作');
+
+  await act(async () => { askAssistant({ prompt: '改成短视频脚本' }); });
+  await user.click(screen.getByRole('button', { name: '载入新提问' }));
+
+  expect(screen.getByLabelText('发送给问问的消息')).toHaveValue('改成短视频脚本');
+  expect(screen.queryByLabelText('Skill 推荐')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Skill 推荐已失效')).not.toBeInTheDocument();
+  expect(service.send).not.toHaveBeenCalled();
 });
