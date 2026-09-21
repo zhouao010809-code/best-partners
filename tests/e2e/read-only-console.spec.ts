@@ -322,7 +322,7 @@ test('renders safe connection diagnostics without leaking server secrets', async
   await expect(page.getByText(/此项仅诊断旧版通用接口；个人 App 的确认归档和候选入库使用独立入口/u)).toBeVisible();
   await expect(page.getByRole('button', { name: '更换大脑文件夹' })).toBeDisabled();
   await expect(page.getByText('请在桌面 App 中更换大脑文件夹')).toBeVisible();
-  await expect(page.getByText('DeepSeek 设置将在后续阶段启用')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'DeepSeek 设置' })).toBeVisible();
 
   const dom = await page.locator('html').evaluate((element) => element.outerHTML);
   expect(dom).not.toContain(SERVER_SECRET);

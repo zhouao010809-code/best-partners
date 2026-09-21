@@ -163,7 +163,6 @@
 .settings-workspace .settings-feedback { margin: 12px 0 0; padding: 10px 12px; border-left: 2px solid #85958d; border-radius: 0 4px 4px 0; color: #c2cfc8; background: #91a79a0a; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .settings-workspace .settings-feedback--error { border-left-color: #ba966b; color: #d7bb99; background: #ba966b0a; }
 
-.settings-updates__current { margin: 0 0 12px; color: #b9b9c4; font-size: 13px; }
 .settings-updates__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .settings-updates__result { display: grid; gap: 8px; min-width: 0; }
 .settings-updates__version { margin: 0; color: #e6e6ec; font-size: 15px; font-weight: 550; }
