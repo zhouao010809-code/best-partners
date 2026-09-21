@@ -124,6 +124,7 @@ git commit -m "test: specify compact settings layout"
 **Files:**
 - Modify: src/client/pages/SettingsPage.tsx:1-365
 - Modify: src/client/app/AppShell.tsx:238-250
+- Modify: src/client/components/DeepSeekSettings.tsx:129 (only add the `settings-card` class marker; business logic unchanged)
 
 - [ ] **Step 1: 收敛运行状态辅助函数和设置页概览数据**
 

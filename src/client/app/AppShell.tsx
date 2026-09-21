@@ -244,7 +244,7 @@ function pageIdentity(pathname: string): PageIdentity {
       return {
         eyebrow: 'PREFERENCES / LOCAL WORKSPACE',
         title: '设置',
-        description: '连接你的大脑，设置顺手的工作方式。'
+        description: '管理大脑位置、AI 连接和应用版本。'
       };
     default:
       return {
