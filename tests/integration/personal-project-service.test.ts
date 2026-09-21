@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyMigrations } from '../../src/server/db/migrate.js';
 import { createProjectService } from '../../src/server/projects/project-service.js';
+import { scanProjectFolder, type ProjectScanResult } from '../../src/server/projects/project-scanner.js';
 
 const databases: Database.Database[] = [];
 const directories: string[] = [];
@@ -227,6 +228,48 @@ describe('personal project registry and index', () => {
     await expect(service.scan(f.projectRoot)).rejects.toSatisfy((error: unknown) => {
       expect(String(error)).not.toContain(f.projectRoot);
       expect(error).toMatchObject({ code: 'PROJECT_SCAN_FAILED' });
+      return true;
+    });
+  });
+
+  it('sanitizes proposal rescan races for bind and reconnect', async () => {
+    const f = await fixture();
+    let bindCalls = 0;
+    const bindScanner = async (rootPath: string, options?: Parameters<typeof scanProjectFolder>[1]): Promise<ProjectScanResult> => {
+      bindCalls += 1;
+      if (bindCalls > 1) {
+        const error = new Error(`source changed while scanning ${rootPath}`) as Error & { code: string };
+        error.code = 'PROJECT_SOURCE_CHANGED';
+        throw error;
+      }
+      return scanProjectFolder(rootPath, options);
+    };
+    const bindService = createProjectService({ database: f.database, vaultRoot: f.vaultRoot, stateRoot: f.stateRoot, scan: bindScanner });
+    const bindPreview = await bindService.scan(f.projectRoot);
+    await expect(bindService.bind(bindPreview.scanId, { sourceSha256: bindPreview.sourceSha256 })).rejects.toSatisfy((error: unknown) => {
+      expect(String(error)).not.toContain(f.projectRoot);
+      expect(error).toMatchObject({ code: 'PROJECT_SOURCE_CHANGED' });
+      return true;
+    });
+
+    const basePreview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(basePreview.scanId, { sourceSha256: basePreview.sourceSha256 });
+    const moved = join(f.root, 'rescan-race-target'); await mkdir(moved); await writeFile(join(moved, 'new.md'), 'new');
+    let reconnectCalls = 0;
+    const reconnectScanner = async (rootPath: string, options?: Parameters<typeof scanProjectFolder>[1]): Promise<ProjectScanResult> => {
+      reconnectCalls += 1;
+      if (reconnectCalls > 1) {
+        const error = new Error(`source changed while reconnecting ${rootPath}`) as Error & { code: string };
+        error.code = 'PROJECT_SOURCE_CHANGED';
+        throw error;
+      }
+      return scanProjectFolder(rootPath, options);
+    };
+    const reconnectService = createProjectService({ database: f.database, vaultRoot: f.vaultRoot, stateRoot: f.stateRoot, scan: reconnectScanner });
+    const reconnectPreview = await reconnectService.scan(moved);
+    await expect(reconnectService.reconnect(summary.id, reconnectPreview.scanId, { sourceSha256: reconnectPreview.sourceSha256 })).rejects.toSatisfy((error: unknown) => {
+      expect(String(error)).not.toContain(moved);
+      expect(error).toMatchObject({ code: 'PROJECT_SOURCE_CHANGED' });
       return true;
     });
   });

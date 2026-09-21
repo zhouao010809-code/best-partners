@@ -274,10 +274,11 @@ export function createProjectService(input: {
       return await scanWithOptions(rootPath);
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String((error as CodedError).code) : '';
+      if (code === 'PROJECT_SOURCE_CHANGED') throw coded('PROJECT_SOURCE_CHANGED', 'Project source changed during scan');
       if (['PROJECT_ROOT_INVALID', 'PROJECT_ROOT_SYMLINK', 'PROJECT_ROOT_PROTECTED', 'PROJECT_ROOT_RECONNECT_REQUIRED', 'ENOENT', 'ENOTDIR', 'ELOOP', 'EACCES'].includes(code)) {
         throw coded('PROJECT_ROOT_RECONNECT_REQUIRED', 'Project root is unavailable');
       }
-      throw error;
+      throw sanitizeScanError(error);
     }
   }
 
