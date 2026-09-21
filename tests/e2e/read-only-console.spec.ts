@@ -165,6 +165,36 @@ test('keeps every secondary read page within the 390px viewport', async ({ page 
   }
 });
 
+test('renders the settings overview responsively and opens document issue details', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openPage(page, '/settings');
+
+  await expect(page.getByRole('heading', { level: 1, name: '设置', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: '大脑文件夹', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: 'AI 模型', exact: true })).toBeVisible();
+
+  const issuesAlert = page.getByRole('status', { name: '资料检查提醒' });
+  await expect(issuesAlert).toBeVisible();
+  await expect(issuesAlert).toContainText('3 项资料待确认');
+  await expect(issuesAlert.getByRole('button', { name: '查看待确认资料', exact: true })).toBeVisible();
+  await issuesAlert.getByRole('button', { name: '查看待确认资料', exact: true }).click();
+  const issues = page.getByRole('region', { name: '待确认资料' });
+  await expect(issues).toBeVisible();
+  await expect(issues.getByRole('heading', { level: 2, name: '待确认资料', exact: true })).toBeVisible();
+  await expect(issues.locator('li')).toHaveCount(3);
+  await expect(issues.locator('li').first().locator('strong')).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoRootOverflow(page);
+  const cards = page.locator('.settings-primary-grid > .settings-card');
+  await expect(cards).toHaveCount(3);
+  const boxes = await cards.evaluateAll((items) => items.map((item) => {
+    const box = item.getBoundingClientRect();
+    return { y: box.y, bottom: box.bottom };
+  }));
+  expect(boxes.every((box, index) => index === 0 || box.y >= boxes[index - 1]!.bottom)).toBe(true);
+});
+
 test('opens the dashboard deck by keyboard and restores the exact trigger on Escape', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await openPage(page, '/');

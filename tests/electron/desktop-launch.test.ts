@@ -71,6 +71,10 @@ test(`${mode}: independent read-only desktop, isolated renderer and automatic re
     await window.screenshot({ path: testInfo.outputPath('desktop-compact.png') });
     await window.getByRole('link', { name: '设置', exact: true }).click();
     await expect(window).toHaveURL(`${origin}/settings`);
+    await expect(window.getByRole('heading', { level: 1, name: '设置', exact: true })).toBeVisible();
+    await expect(window.getByRole('heading', { level: 2, name: '大脑文件夹', exact: true })).toBeVisible();
+    await expect(window.getByRole('heading', { level: 2, name: 'AI 模型', exact: true })).toBeVisible();
+    await expect(window.locator('.settings-overview__version')).toHaveText(/^版本 \d+\.\d+\.\d+$/u);
     await expect(window.getByTestId('schema-issue-count')).toContainText('1');
     await window.getByRole('button', { name: '查看待确认资料', exact: true }).click();
     await window.getByRole('button', { name: '查看原文：原始剪藏' }).click();
