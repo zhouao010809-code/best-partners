@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -35,11 +35,17 @@ describe('personal project registry and index', () => {
   it('scans, binds, searches and reads a project without exposing private fields', async () => {
     const f = await fixture();
     const preview = await f.service.scan(f.projectRoot);
+    expect(Object.keys(preview).sort()).toEqual([
+      'displayName', 'entries', 'expiresAt', 'fileCount', 'guidanceFiles', 'ignoredCount',
+      'issueCount', 'issues', 'readableFileCount', 'scanId', 'sourceSha256', 'unsupportedCount'
+    ]);
     expect(preview.displayName).toBe('client-project');
     expect(preview.fileCount).toBe(3);
     expect(preview.guidanceFiles).toEqual(['README.md', 'brief.txt']);
     expect(preview).not.toHaveProperty('root_path');
+    expect(preview).not.toHaveProperty('sourceRoot');
     expect(preview).not.toHaveProperty('proposal_json');
+    expect(preview).not.toHaveProperty('content_text');
     const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
     expect(summary).toEqual(expect.objectContaining({ displayName: 'client-project', sourceRevision: 1, availability: 'ready', fileCount: 3 }));
     expect(Object.keys(summary).sort()).toEqual(['availability', 'createdAt', 'displayName', 'fileCount', 'id', 'issueCount', 'lastScannedAt', 'outputRoot', 'readableFileCount', 'sourceRevision', 'updatedAt']);
@@ -98,12 +104,70 @@ describe('personal project registry and index', () => {
   it('rejects protected roots and expired or mismatched scan confirmations', async () => {
     const f = await fixture();
     await expect(f.service.scan(f.vaultRoot)).rejects.toMatchObject({ code: 'PROJECT_ROOT_PROTECTED' });
+    const nestedProtectedRoot = join(f.vaultRoot, 'nested-project');
+    await mkdir(nestedProtectedRoot);
+    await expect(f.service.scan(nestedProtectedRoot)).rejects.toMatchObject({ code: 'PROJECT_ROOT_PROTECTED' });
     const preview = await f.service.scan(f.projectRoot);
     await expect(f.service.bind(preview.scanId, { sourceSha256: '0'.repeat(64) })).rejects.toMatchObject({ code: 'PROJECT_SCAN_HASH_MISMATCH' });
     await expect(f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 })).resolves.toMatchObject({ sourceRevision: 1 });
     const expiring = await f.service.scan(f.projectRoot);
     f.advance(15 * 60 * 1000 + 1);
     await expect(f.service.bind(expiring.scanId, { sourceSha256: expiring.sourceSha256 })).rejects.toMatchObject({ code: 'PROJECT_SCAN_EXPIRED' });
+  });
+
+  it('maps missing and replaced scan roots to stable reconnect errors', async () => {
+    const missing = await fixture();
+    const missingPreview = await missing.service.scan(missing.projectRoot);
+    await rm(missing.projectRoot, { recursive: true, force: true });
+    await expect(missing.service.bind(missingPreview.scanId, { sourceSha256: missingPreview.sourceSha256 })).rejects.toMatchObject({ code: 'PROJECT_ROOT_RECONNECT_REQUIRED' });
+
+    const replaced = await fixture();
+    const replacement = join(replaced.root, 'replacement');
+    await mkdir(replacement);
+    await writeFile(join(replacement, 'new.md'), 'replacement');
+    const replacedPreview = await replaced.service.scan(replaced.projectRoot);
+    await rm(replaced.projectRoot, { recursive: true, force: true });
+    await symlink(replacement, replaced.projectRoot);
+    await expect(replaced.service.bind(replacedPreview.scanId, { sourceSha256: replacedPreview.sourceSha256 })).rejects.toMatchObject({ code: 'PROJECT_ROOT_RECONNECT_REQUIRED' });
+  });
+
+  it('reconnects in place, stales pending plans, and preserves project identity and operations', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const conversationId = '11111111-1111-4111-8111-111111111111';
+    const planId = '22222222-2222-4222-8222-222222222222';
+    f.database.prepare('INSERT INTO assistant_conversations (id, updated_at, payload) VALUES (?, ?, ?)').run(conversationId, '2026-09-22T00:00:00.000Z', '{}');
+    f.database.prepare(`INSERT INTO personal_project_write_plans
+      (id, project_id, conversation_id, message_id, category, title, summary, content, content_sha256, source_revision, target_path, status, created_at, expires_at, updated_at)
+      VALUES (?, ?, ?, ?, '内容草稿', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`)
+      .run(planId, summary.id, conversationId, '33333333-3333-4333-8333-333333333333', '待确认', '待确认', '草稿内容', '0'.repeat(64), summary.sourceRevision, '内容草稿/待确认.md', '2026-09-22T00:00:00.000Z', '2026-09-23T00:00:00.000Z', '2026-09-22T00:00:00.000Z');
+    const oldOperationCount = (f.database.prepare('SELECT COUNT(*) AS count FROM personal_project_operations WHERE project_id = ?').get(summary.id) as { count: number }).count;
+    const moved = join(f.root, 'reconnect-target'); await mkdir(moved); await writeFile(join(moved, 'new.md'), '重连后的文件');
+    const reconnectPreview = await f.service.scan(moved);
+    const reconnected = await f.service.reconnect(summary.id, reconnectPreview.scanId, { sourceSha256: reconnectPreview.sourceSha256 });
+    expect(reconnected.id).toBe(summary.id);
+    expect((f.database.prepare('SELECT status FROM personal_project_write_plans WHERE id = ?').get(planId) as { status: string }).status).toBe('stale');
+    expect((f.database.prepare('SELECT COUNT(*) AS count FROM personal_project_operations WHERE project_id = ?').get(summary.id) as { count: number }).count).toBeGreaterThan(oldOperationCount);
+    expect((await f.service.context(summary.id)).id).toBe(summary.id);
+  });
+
+  it('serializes concurrent binds and refreshes without mixed indexed revisions', async () => {
+    const f = await fixture();
+    const secondRoot = join(f.root, 'second-project');
+    await mkdir(secondRoot); await writeFile(join(secondRoot, 'second.md'), 'second');
+    const firstPreview = await f.service.scan(f.projectRoot);
+    const secondPreview = await f.service.scan(secondRoot);
+    const bound = await Promise.all([
+      f.service.bind(firstPreview.scanId, { sourceSha256: firstPreview.sourceSha256 }),
+      f.service.bind(secondPreview.scanId, { sourceSha256: secondPreview.sourceSha256 })
+    ]);
+    expect(new Set(bound.map((item) => item.id)).size).toBe(2);
+    expect(bound.every((item) => item.sourceRevision === 1)).toBe(true);
+    const refreshed = await Promise.all([f.service.refresh(bound[0]!.id), f.service.refresh(bound[0]!.id)]);
+    expect(refreshed.map((item) => item.sourceRevision)).toEqual([2, 3]);
+    const rows = f.database.prepare('SELECT DISTINCT indexed_revision AS revision FROM personal_project_files WHERE project_id = ?').all(bound[0]!.id) as Array<{ revision: number }>;
+    expect(rows).toEqual([{ revision: 3 }]);
   });
 
   it('keeps unreadable files searchable by metadata while indexing readable siblings', async () => {
