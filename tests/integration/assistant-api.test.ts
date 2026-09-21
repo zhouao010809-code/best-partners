@@ -51,17 +51,18 @@ it('keeps project write actions and file payloads relative-path only', () => {
   const projectId = randomUUID();
   const action = projectWriteActionSchema.parse({
     id: randomUUID(), type: 'project-write', label: '保存项目草稿', status: 'pending',
-    projectId, projectRevision: 1, category: '内容草稿', path: 'AI工作区/内容草稿/稿件.md'
+    projectId, projectName: '项目 A', category: '内容草稿', targetPath: 'AI工作区/内容草稿/稿件.md',
+    contentSha256: 'a'.repeat(64), sourceRevision: 1, summary: '摘要', createdAt: '2026-09-22T00:00:00.000Z', expiresAt: '2026-09-23T00:00:00.000Z'
   });
   expect(assistantActionSchema.parse(action)).toMatchObject({ type: 'project-write', projectId });
-  expect(projectWriteActionSchema.safeParse({ ...action, path: '/tmp/escape.md' }).success).toBe(false);
-  expect(projectWriteActionSchema.safeParse({ ...action, path: 'AI工作区\\稿件.md' }).success).toBe(false);
-  expect(projectFileSchema.safeParse({ projectId, relativePath: '资料.md', origin: 'source', parseStatus: 'readable' }).success).toBe(true);
-  expect(projectFileSchema.safeParse({ projectId, relativePath: '/tmp/资料.md', origin: 'source', parseStatus: 'readable' }).success).toBe(false);
+  expect(projectWriteActionSchema.safeParse({ ...action, targetPath: '/tmp/escape.md' }).success).toBe(false);
+  expect(projectWriteActionSchema.safeParse({ ...action, targetPath: 'AI工作区\\稿件.md' }).success).toBe(false);
+  expect(projectFileSchema.safeParse({ relativePath: '资料.md', kind: 'file', origin: 'source', parseStatus: 'readable' }).success).toBe(true);
+  expect(projectFileSchema.safeParse({ relativePath: '/tmp/资料.md', kind: 'file', origin: 'source', parseStatus: 'readable' }).success).toBe(false);
   for (const unsafePath of ['C:/tmp/资料.md', '../资料.md', 'a/../资料.md', 'a\\资料.md', `a\u0000.md`, `a\u0001.md`]) {
-    expect(projectFileSchema.safeParse({ projectId, relativePath: unsafePath, origin: 'source', parseStatus: 'readable' }).success).toBe(false);
+    expect(projectFileSchema.safeParse({ relativePath: unsafePath, kind: 'file', origin: 'source', parseStatus: 'readable' }).success).toBe(false);
   }
-  expect(projectFileDetailSchema.safeParse({ projectId, relativePath: '资料.md', origin: 'source', parseStatus: 'readable', content: '正文' }).success).toBe(true);
+  expect(projectFileDetailSchema.safeParse({ relativePath: '资料.md', kind: 'file', origin: 'source', parseStatus: 'readable', content: '正文', totalCharacters: 2, truncated: false }).success).toBe(true);
 });
 
 it('applies project isolation rules to assistant drafts', () => {
@@ -129,20 +130,14 @@ it('protects AI calls with the existing origin/session/CSRF contract and validat
   expect((await f.app.inject({ method: 'GET', url: '/api/v1/assistant/conversations?cursor=invalid', headers: { host } })).statusCode).toBe(400);
 });
 
-it('persists project identity on project-scoped assistant conversations and messages', async () => {
+it('rejects unregistered project scope instead of routing it through global tools', async () => {
   const f = await fixture();
   const projectId = randomUUID();
-  const now = '2026-09-22T00:00:00.000Z';
-  // The contract layer carries identity; this fixture does not require a full
-  // project service to be installed in order to exercise assistant persistence.
   const response = await f.app.inject({ method: 'POST', url: '/api/v1/assistant/messages', headers: f.headers, payload: {
     clientRequestId: randomUUID(), message: '项目任务', providerId: 'test', model: 'pro', scope: 'project', projectId, projectRevision: 4
   } });
-  expect(response.statusCode).toBe(200);
-  expect(response.json().data).toMatchObject({ scope: 'project', projectId, projectRevision: 4, messages: [
-    { role: 'user', scope: 'project', projectId, projectRevision: 4 },
-    { role: 'assistant', projectId, projectRevision: 4 }
-  ] });
+  expect(response.statusCode).toBe(404);
+  expect(response.json().error.code).toBe('ASSISTANT_PROJECT_NOT_FOUND');
 });
 
 it('keeps skill fields strict and rejects stale confirmed skills before provider calls', async () => {

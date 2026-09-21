@@ -215,10 +215,18 @@ describe('SQLite state kernel', () => {
     expect(first.db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 21").get())
       .toEqual({ count: 1 });
     const projectColumns = first.db.pragma('table_info(personal_projects)') as Array<{ name: string }>;
-    expect(projectColumns.map(column => column.name)).toEqual(expect.arrayContaining([
-      'id', 'root_path', 'display_name', 'source_revision', 'availability', 'output_root',
-      'file_count', 'readable_file_count', 'issue_count', 'created_at', 'updated_at', 'last_scanned_at'
-    ]));
+    expect(projectColumns.map(column => column.name)).toEqual([
+      'id', 'root_path', 'display_name', 'source_revision', 'source_sha256', 'availability',
+      'output_root', 'write_policy', 'created_at', 'updated_at', 'last_scanned_at'
+    ]);
+    expect((first.db.pragma('table_info(personal_project_scan_runs)') as Array<{ name: string }>).map(column => column.name))
+      .toEqual(['id', 'project_id', 'root_path', 'source_sha256', 'state', 'proposal_json', 'created_at', 'updated_at']);
+    expect((first.db.pragma('table_info(personal_project_files)') as Array<{ name: string }>).map(column => column.name))
+      .toEqual(['project_id', 'relative_path', 'kind', 'bytes', 'modified_at', 'sha256', 'parse_status', 'parse_problem', 'content_text', 'origin', 'indexed_revision']);
+    expect((first.db.pragma('table_info(personal_project_write_plans)') as Array<{ name: string }>).map(column => column.name))
+      .toEqual(['id', 'project_id', 'conversation_id', 'message_id', 'category', 'title', 'summary', 'content', 'content_sha256', 'source_revision', 'target_path', 'status', 'created_at', 'expires_at', 'updated_at', 'confirm_request_id', 'result_path', 'problem']);
+    expect((first.db.pragma('table_info(personal_project_operations)') as Array<{ name: string }>).map(column => column.name))
+      .toEqual(['id', 'project_id', 'plan_id', 'event_type', 'target_path', 'old_sha256', 'new_sha256', 'payload_json', 'created_at']);
     expect(first.db.pragma('foreign_keys', { simple: true })).toBe(1);
     first.close();
 
@@ -305,33 +313,33 @@ describe('SQLite state kernel', () => {
       const projectId = '11111111-1111-4111-8111-111111111111';
       const conversationId = '22222222-2222-4222-8222-222222222222';
       db.prepare(`INSERT INTO personal_projects
-        (id, root_path, display_name, source_revision, availability, output_root, file_count, readable_file_count, issue_count, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(projectId, '/private/project', '项目 A', 1, 'ready', 'AI工作区', 1, 1, 0, now, now);
+        (id, root_path, display_name, source_revision, source_sha256, availability, output_root, write_policy, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(projectId, '/private/project', '项目 A', 1, 'a'.repeat(64), 'ready', 'AI工作区', 'new-output-confirmed', now, now);
       db.prepare('INSERT INTO assistant_conversations (id, updated_at, payload) VALUES (?, ?, ?)')
         .run(conversationId, now, JSON.stringify({}));
       db.prepare(`INSERT INTO personal_project_files
-        (id, project_id, relative_path, origin, parse_status, bytes, sha256, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run('file-1', projectId, '资料.md', 'source', 'readable', 10, 'a'.repeat(64), now, now);
+        (project_id, relative_path, kind, origin, parse_status, bytes, sha256, indexed_revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(projectId, '资料.md', 'file', 'source', 'readable', 10, 'a'.repeat(64), 1);
       db.prepare(`INSERT INTO personal_project_write_plans
-        (id, project_id, conversation_id, status, category, target_path, project_revision, payload_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run('plan-1', projectId, conversationId, 'pending', '内容草稿', 'AI工作区/内容草稿/稿件.md', 1, '{}', now, now);
+        (id, project_id, conversation_id, message_id, category, title, summary, content, content_sha256, source_revision, target_path, status, created_at, expires_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('plan-1', projectId, conversationId, 'message-1', '内容草稿', '稿件', '摘要', '正文', 'b'.repeat(64), 1, 'AI工作区/内容草稿/稿件.md', 'pending', now, now, now);
       expect(db.prepare('SELECT root_path FROM personal_projects WHERE id = ?').get(projectId))
         .toEqual({ root_path: '/private/project' });
       expect(() => db.prepare(`INSERT INTO personal_project_files
-        (id, project_id, relative_path, origin, parse_status, bytes, sha256, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run('file-2', projectId, '/escape.md', 'source', 'readable', 10, 'b'.repeat(64), now, now)).toThrow(/CHECK/);
+        (project_id, relative_path, kind, origin, parse_status, bytes, sha256, indexed_revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(projectId, '/escape.md', 'file', 'source', 'readable', 10, 'b'.repeat(64), 1)).toThrow(/CHECK/);
       expect(() => db.prepare(`INSERT INTO personal_project_files
-        (id, project_id, relative_path, origin, parse_status, bytes, sha256, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run('file-3', projectId, 'bad.md', 'source', 'readable', 10, 'A'.repeat(64), now, now)).toThrow(/CHECK/);
+        (project_id, relative_path, kind, origin, parse_status, bytes, sha256, indexed_revision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(projectId, 'bad.md', 'file', 'source', 'readable', 10, 'A'.repeat(64), 1)).toThrow(/CHECK/);
       expect(() => db.prepare(`INSERT INTO personal_project_write_plans
-        (id, project_id, conversation_id, status, category, target_path, project_revision, payload_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run('plan-2', projectId, conversationId, 'pending', '内容草稿', '../escape.md', 1, '{}', now, now)).toThrow(/CHECK/);
+        (id, project_id, conversation_id, message_id, category, title, summary, content, content_sha256, source_revision, target_path, status, created_at, expires_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('plan-2', projectId, conversationId, 'message-2', '内容草稿', '稿件', '摘要', '正文', 'b'.repeat(64), 1, '../escape.md', 'pending', now, now, now)).toThrow(/CHECK/);
     } finally {
       db.close();
     }

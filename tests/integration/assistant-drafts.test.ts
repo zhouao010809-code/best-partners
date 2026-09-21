@@ -8,13 +8,13 @@ import { registerAssistantDraftRoutes } from '../../src/server/api/routes/assist
 
 const databases: Database.Database[] = [];
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
-function fixture() { const database = new Database(':memory:'); databases.push(database); applyMigrations(database); return { database, service: createAssistantDraftService({ database }) }; }
+function fixture() { const database = new Database(':memory:'); databases.push(database); applyMigrations(database); return { database, service: createAssistantDraftService({ database, projectExists: projectId => database.prepare('SELECT 1 FROM personal_projects WHERE id = ?').get(projectId) !== undefined }) }; }
 const content = () => ({ expectedRevision: 0, active: true as const, text: '尚未发出的想法', attachments: [{ id: randomUUID(), startPage: 2, endPage: 4 }], groupId: randomUUID(), scope: 'brain' as const });
 it('restores text, selected page ranges and the active draft independently of a browser origin', () => {
   const { service, database } = fixture(); const id = randomUUID(); const input = content();
   const first = service.save(id, input).draft;
   const next = service.save(randomUUID(), { ...content(), text: '', attachments: [] }).draft;
-  const reopened = createAssistantDraftService({ database }).list();
+  const reopened = createAssistantDraftService({ database, projectExists: projectId => database.prepare('SELECT 1 FROM personal_projects WHERE id = ?').get(projectId) !== undefined }).list();
   expect(reopened.activeId).toBe(next.id); expect(reopened.drafts).toHaveLength(2);
   expect(reopened.drafts.find(draft => draft.id === id)).toEqual(first);
   expect(first).toMatchObject({ text: input.text, attachments: input.attachments, revision: 1 });

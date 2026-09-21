@@ -11,7 +11,7 @@ const fields = ({ id: _id, revision: _revision, ...value }: LocalDraft): Assista
 };
 const fingerprint = (draft: LocalDraft) => JSON.stringify({ id: draft.id, ...fields(draft) });
 
-export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts']) {
+export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], projectId?: string) {
   const [current, setCurrent] = useState<LocalDraft>(fresh);
   const currentRef = useRef(current); currentRef.current = current;
   const [drafts, setDrafts] = useState<AssistantDraft[]>([]);
@@ -28,18 +28,18 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts']) {
 
   const replace = useCallback((draft: LocalDraft) => { currentRef.current = draft; setCurrent(draft); }, []);
   const update = useCallback((patch: Partial<AssistantDraftFields>) => { replace({ ...currentRef.current, ...patch }); }, [replace]);
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedProjectId = projectId) => {
     if (!service) { setReady(true); return; }
     const sequence = ++loadSequence.current; setError('');
     try {
-      const result = await service.list(); if (!mounted.current || sequence !== loadSequence.current) return;
+      const result = await service.list(requestedProjectId); if (!mounted.current || sequence !== loadSequence.current) return;
       if (!result.ok) { setError('state' in result ? result.state.message ?? '未能恢复本机草稿。' : '未能恢复本机草稿。'); return; }
       setDrafts(result.value.drafts); draftsRef.current = result.value.drafts;
       const active = result.value.drafts.find(item => item.id === result.value.activeId);
       if (active) { replace(active); acknowledged.current = fingerprint(active); }
       setReady(true);
     } catch { if (mounted.current && sequence === loadSequence.current) setError('未能恢复本机草稿，请重新连接后重试。'); }
-  }, [service, replace]);
+  }, [projectId, service, replace]);
   useEffect(() => { mounted.current = true; void load(); return () => { mounted.current = false; loadSequence.current += 1; }; }, [load]);
 
   const flush = useCallback((): Promise<boolean> => {

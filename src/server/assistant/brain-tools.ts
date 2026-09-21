@@ -24,7 +24,7 @@ export function createBrainTools(input: {
   extractionService?: ExtractionService;
   scope: 'brain' | 'current' | 'project';
   projectId?: string;
-  projectRevision?: number | string;
+  projectRevision?: number;
   contextPath?: string;
   additionalPaths?: ReadonlySet<string>;
   canPreparePath?: (path: string) => boolean;

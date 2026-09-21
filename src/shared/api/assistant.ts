@@ -51,8 +51,8 @@ export const assistantPlanActionSchema = z.strictObject({
 export const assistantActionSchema = z.discriminatedUnion('type', [assistantReviewActionSchema, assistantArchiveActionSchema, assistantPlanActionSchema, projectWriteActionSchema]);
 export const assistantStepSchema = z.object({ id: z.string(), toolName: z.string(), label: z.string(), status: z.enum(['running', 'completed', 'failed', 'stopped']), startedAt: z.string(), finishedAt: z.string().optional() });
 const assistantScopeSchema = z.enum(['brain', 'current', 'project']);
-const projectRevisionSchema = z.union([z.number().int().nonnegative(), z.string().min(1).max(256)]);
-function validateProjectScope(value: { scope?: ('brain' | 'current' | 'project') | undefined; projectId?: string | undefined; projectRevision?: (number | string) | undefined; contextPath?: string | undefined }, context: z.RefinementCtx): void {
+const projectRevisionSchema = z.number().int().nonnegative();
+function validateProjectScope(value: { scope?: ('brain' | 'current' | 'project') | undefined; projectId?: string | undefined; projectRevision?: number | undefined; contextPath?: string | undefined }, context: z.RefinementCtx): void {
   if (value.scope === 'project') {
     if (value.projectId === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'project scope requires projectId' });
     if (value.projectRevision === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['projectRevision'], message: 'project scope requires projectRevision' });

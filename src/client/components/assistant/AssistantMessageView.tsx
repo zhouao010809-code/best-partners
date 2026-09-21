@@ -36,7 +36,7 @@ function ArchiveCard({ action }: { action: AssistantArchiveAction }) {
 }
 function ProjectWriteCard({ action }: { action: Extract<AssistantMessage['actions'][number], { type: 'project-write' }> }) {
   const status = action.status === 'completed' ? '已保存' : action.status === 'failed' ? '保存失败' : action.status === 'cancelled' ? '已取消' : '待确认';
-  return <section className="assistant-task-card" aria-label="项目写入结果"><div className="assistant-task-card__heading"><strong>{action.category}</strong><span>{status}</span></div><p>{action.summary ?? action.label}</p><small>{action.path ?? action.targetPath}</small>{action.problem && <p>{action.problem}</p>}</section>;
+  return <section className="assistant-task-card" aria-label="项目写入结果"><div className="assistant-task-card__heading"><strong>{action.category}</strong><span>{status}</span></div><p>{action.summary || action.label}</p><small>{action.targetPath}</small>{action.problem && <p>{action.problem}</p>}</section>;
 }
 
 export type AssistantMessageViewProps = {

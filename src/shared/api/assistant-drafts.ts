@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { successEnvelopeSchema } from './schemas.js';
 import { attachmentSelectionSchema } from './attachments.js';
 
-const projectRevisionSchema = z.union([z.number().int().nonnegative(), z.string().min(1).max(256)]);
-function validateProjectScope(value: { scope: 'brain' | 'current' | 'project'; projectId?: string | undefined; projectRevision?: (number | string) | undefined; contextPath?: string | undefined }, context: z.RefinementCtx): void {
+const projectRevisionSchema = z.number().int().nonnegative();
+function validateProjectScope(value: { scope: 'brain' | 'current' | 'project'; projectId?: string | undefined; projectRevision?: number | undefined; contextPath?: string | undefined }, context: z.RefinementCtx): void {
   if (value.scope === 'project') {
     if (value.projectId === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'project scope requires projectId' });
     if (value.projectRevision === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['projectRevision'], message: 'project scope requires projectRevision' });

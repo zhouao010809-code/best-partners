@@ -22,7 +22,7 @@ const SYSTEM = `你是最佳拍档中的“问问”，用简体中文协助用�
 当前模型与工具有限制时明确说明，不能切换成其他模型来冒充完成。回答清楚简洁，复杂任务先简短说明再使用工具。`;
 
 type ToolFactoryInput = {
-  scope: 'brain' | 'current' | 'project'; contextPath?: string; projectId?: string; projectRevision?: number | string; model: string; attachments: AttachmentSelection[]; userMessage: string;
+  scope: 'brain' | 'current' | 'project'; contextPath?: string; projectId?: string; projectRevision?: number; model: string; attachments: AttachmentSelection[]; userMessage: string;
   signal: AbortSignal; emit(event: AssistantEvent): void; conversationId: string; messageId: string;
   proposeArchive?: (request: Omit<ProposeArchiveInput, 'conversationId' | 'messageId' | 'attachmentId'> & { id: string }) => Promise<AssistantPlanAction>;
   markActionPending?: () => void;
@@ -39,7 +39,7 @@ export interface AssistantService {
   close(): Promise<void>;
 }
 
-export function createAssistantService(input: { database: Database.Database; adapters: AssistantAdapter[]; createTools(input: ToolFactoryInput): AssistantTool[]; resolveAttachment?: (id: string) => Attachment; actionPlans?: AssistantActionPlanService; skillCatalog?: SkillCatalogService; timeoutMs?: number }): AssistantService {
+export function createAssistantService(input: { database: Database.Database; adapters: AssistantAdapter[]; createTools(input: ToolFactoryInput): AssistantTool[]; resolveAttachment?: (id: string) => Attachment; actionPlans?: AssistantActionPlanService; skillCatalog?: SkillCatalogService; projectExists?: (projectId: string) => boolean; timeoutMs?: number }): AssistantService {
   const db = input.database;
   const adapters = new Map(input.adapters.map(adapter => [adapter.id, adapter]));
   const running = new Map<string, { controller: AbortController; done: Promise<void>; flush(): void }>();
@@ -132,6 +132,12 @@ export function createAssistantService(input: { database: Database.Database; ada
   async function start(request: AssistantSend): Promise<AssistantConversation> {
     const existing = prior(request); if (existing) return existing;
     if (closed) throw new PublicApiError('ASSISTANT_UNAVAILABLE', '应用正在关闭。', 503);
+    if (request.scope === 'project') {
+      if (!input.projectExists?.(request.projectId!)) throw new PublicApiError('ASSISTANT_PROJECT_NOT_FOUND', '项目不存在或已移除，请刷新项目列表后重试。', 404);
+      // Project-only tools are introduced by the project workspace task. Never
+      // let a project identity fall through to the global brain tool set.
+      throw new PublicApiError('ASSISTANT_PROJECT_UNSUPPORTED', '项目模式尚未连接项目工具，请稍后重试。', 409);
+    }
     const selectedSkill = await resolveSkill(request);
     const adapter = getAdapter(request.providerId);
     const provider = await adapter.describe();
@@ -170,7 +176,6 @@ export function createAssistantService(input: { database: Database.Database; ada
       ...(selectedSkill ? { skillUse: selectedSkill.metadata } : {}),
       ...(selectedAttachments.length ? { attachments: selectedAttachments } : {}) });
     const answer: AssistantConversation['messages'][number] = { id: randomUUID(), role: 'assistant', text: '', sources: [], actions: [], model: request.model, activity: '正在连接模型', startedAt: now,
-      ...(request.scope === 'project' && request.projectId ? { scope: 'project' as const, projectId: request.projectId, ...(request.projectRevision !== undefined ? { projectRevision: request.projectRevision } : {}) } : {}),
       ...(selectedSkill ? { skillUse: selectedSkill.metadata } : {}),
       usage: { steps: [], total: {}, status: 'unavailable' } };
     conversation.messages.push(answer);

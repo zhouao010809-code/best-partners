@@ -231,6 +231,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   actionPlans?.recover();
   const assistant = options.assistantAdapters && options.readApi && readService
     ? createAssistantService({ database: options.readApi.database, adapters: options.assistantAdapters,
+      projectExists: projectId => options.readApi!.database.prepare('SELECT 1 AS present FROM personal_projects WHERE id = ?').get(projectId) !== undefined,
       ...(options.skillCatalog ? { skillCatalog: options.skillCatalog } : {}),
       ...(actionPlans ? { actionPlans } : {}),
       ...(options.attachmentService ? { resolveAttachment: (id: string) => options.attachmentService!.get(id) } : {}),

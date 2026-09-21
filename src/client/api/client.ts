@@ -131,7 +131,7 @@ export interface ReadConsoleApi {
     cancel(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
   };
   assistantDrafts?: {
-    list(signal?: AbortSignal): Promise<ApiClientResult<AssistantDraftList>>;
+    list(projectId?: string, signal?: AbortSignal): Promise<ApiClientResult<AssistantDraftList>>;
     save(id: string, input: AssistantDraftSave): Promise<ApiClientResult<{ draft: AssistantDraft }>>;
     delete(id: string, revision: number): Promise<ApiClientResult<{ deleted: true }>>;
   };
@@ -434,14 +434,16 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
       cancel: id => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/cancel`, attachmentResponseSchema, {})
     },
     assistantDrafts: {
-      list: signal => requestData(fetcher, '/api/v1/assistant/drafts', assistantDraftListResponseSchema, getInit(signal)),
+      list: (projectId, signal) => requestData(fetcher, withQuery('/api/v1/assistant/drafts', parameters => {
+        appendQuery(parameters, 'projectId', projectId);
+      }), assistantDraftListResponseSchema, getInit(signal)),
       save: (id, input) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}`, assistantDraftResponseSchema, 'PUT', JSON.stringify(input)),
       delete: (id, revision) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}?revision=${revision}`, assistantDraftDeleteResponseSchema, 'DELETE')
     },
     assistant: {
       providers: (signal) => requestData(fetcher, '/api/v1/assistant/providers', assistantProvidersResponseSchema, getInit(signal)),
       history: (signal, query = {}) => requestData(fetcher, withQuery('/api/v1/assistant/conversations', parameters => {
-        appendQuery(parameters, 'search', query.search); appendQuery(parameters, 'cursor', query.cursor); appendQuery(parameters, 'limit', query.limit);
+        appendQuery(parameters, 'search', query.search); appendQuery(parameters, 'projectId', query.projectId); appendQuery(parameters, 'cursor', query.cursor); appendQuery(parameters, 'limit', query.limit);
       }), assistantHistoryResponseSchema, getInit(signal)),
       get: (id, signal) => requestData(fetcher, `/api/v1/assistant/conversations/${encodeURIComponent(id)}`, assistantConversationResponseSchema, getInit(signal)),
       send: (input) => postWithCsrf('/api/v1/assistant/messages', assistantConversationResponseSchema, input),
