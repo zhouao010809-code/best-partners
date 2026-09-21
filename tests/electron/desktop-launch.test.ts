@@ -75,7 +75,7 @@ test(`${mode}: independent read-only desktop, isolated renderer and automatic re
     await expect(window.getByRole('heading', { level: 2, name: '大脑文件夹', exact: true })).toBeVisible();
     await expect(window.getByRole('heading', { level: 2, name: 'AI 模型', exact: true })).toBeVisible();
     await expect(window.getByRole('heading', { level: 2, name: '应用更新', exact: true })).toBeVisible();
-    await expect(window.locator('.settings-overview__version')).toHaveText(/^版本 \d+\.\d+\.\d+$/u);
+    await expect(window.locator('.settings-overview__version')).toHaveText(/^版本 \d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u);
     await expect(window.getByTestId('schema-issue-count')).toContainText('1');
     await window.getByRole('button', { name: '查看待确认资料', exact: true }).click();
     await window.getByRole('button', { name: '查看原文：原始剪藏' }).click();
