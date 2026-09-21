@@ -1,23 +1,27 @@
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
+import { renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPasswordPdf, createTextPdf } from '../helpers/pdf-fixture.js';
 import { scanProjectFolder } from '../../src/server/projects/project-scanner.js';
 
-const race = vi.hoisted(() => ({ noteLstatCount: 0, mutate: false }));
+const race = vi.hoisted(() => ({ noteLstatCount: 0, mutation: 'none' as 'none' | 'replace' | 'delete' | 'rename' }));
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
     ...actual,
     lstat: async (path: string) => {
-      if (race.mutate && path.endsWith('/note.txt')) {
+      if (race.mutation !== 'none' && path.endsWith('/note.txt')) {
         race.noteLstatCount += 1;
         // The first scan performs two lstat calls for this file; mutate before
         // the third call, which belongs to the second consistency pass.
-        if (race.noteLstatCount === 3) writeFileSync(path, 'after');
+        if (race.noteLstatCount === 3) {
+          if (race.mutation === 'replace') writeFileSync(path, 'after');
+          if (race.mutation === 'delete') unlinkSync(path);
+          if (race.mutation === 'rename') renameSync(path, `${path}.renamed`);
+        }
       }
       return actual.lstat(path);
     }
@@ -26,6 +30,11 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 const temp = (name: string) => mkdtemp(join(tmpdir(), `xiaozhao-scan-${name}-`));
 const sha256 = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
+
+afterEach(() => {
+  race.noteLstatCount = 0;
+  race.mutation = 'none';
+});
 
 describe('project scanner', () => {
   it('scans deterministically, parses text/pdf and skips ignored directories', async () => {
@@ -79,10 +88,15 @@ describe('project scanner', () => {
     const root = await temp('change');
     await writeFile(join(root, 'note.txt'), 'before');
     await expect(scanProjectFolder(root, { protectedRoots: [root] })).rejects.toMatchObject({ code: 'PROJECT_ROOT_PROTECTED' });
-    race.noteLstatCount = 0;
-    race.mutate = true;
+    race.mutation = 'replace';
     await expect(scanProjectFolder(root)).rejects.toMatchObject({ code: 'PROJECT_SOURCE_CHANGED' });
-    race.mutate = false;
+  });
+
+  it.each(['delete', 'rename'] as const)('normalizes a source %s during verification', async mutation => {
+    const root = await temp(`source-${mutation}`);
+    await writeFile(join(root, 'note.txt'), 'before');
+    race.mutation = mutation;
+    await expect(scanProjectFolder(root)).rejects.toMatchObject({ code: 'PROJECT_SOURCE_CHANGED' });
   });
 
   it('honors an already-aborted signal', async () => {

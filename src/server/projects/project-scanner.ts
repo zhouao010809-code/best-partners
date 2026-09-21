@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { basename, join, relative, sep } from 'node:path';
 import { parseAttachment } from '../attachments/parser.js';
 import { canonicalProjectRoot } from './project-paths.js';
@@ -43,6 +43,28 @@ function errorWithCode(code: string, message: string): Error & { code: string } 
 
 function checkAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason ?? errorWithCode('ABORT_ERR', 'The operation was aborted');
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && ['ENOENT', 'ENOTDIR', 'ELOOP'].includes(String((error as NodeJS.ErrnoException).code));
+}
+
+function normalizeSourceChange(error: unknown, path: string): never {
+  if (isMissingPathError(error)) throw errorWithCode('PROJECT_SOURCE_CHANGED', `Project source changed: ${path}`);
+  throw error;
+}
+
+async function assertStableRoot(root: string): Promise<void> {
+  try {
+    const info = await lstat(root);
+    if (info.isSymbolicLink()) throw errorWithCode('PROJECT_ROOT_SYMLINK', 'Project root became a symbolic link');
+    if (!info.isDirectory()) throw errorWithCode('PROJECT_SOURCE_CHANGED', 'Project root changed type');
+    if (await realpath(root) !== root) throw errorWithCode('PROJECT_SOURCE_CHANGED', 'Project root was replaced');
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && ['PROJECT_ROOT_SYMLINK', 'PROJECT_SOURCE_CHANGED'].includes(String((error as NodeJS.ErrnoException).code))) throw error;
+    normalizeSourceChange(error, root);
+  }
 }
 
 function comparePath(a: { relativePath: string }, b: { relativePath: string }): number {
@@ -115,12 +137,23 @@ async function hashFile(path: string, signal?: AbortSignal): Promise<string> {
 
 async function walk(root: string, current: string, options: Required<Pick<ScanOptions, 'maxIndexedBytes'>> & { signal?: AbortSignal; parse?: boolean }, state: ScanState): Promise<void> {
   checkAborted(options.signal);
-  const children = (await readdir(current, { withFileTypes: true })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  if (current === root) await assertStableRoot(root);
+  let children;
+  try {
+    children = (await readdir(current, { withFileTypes: true })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  } catch (error) {
+    normalizeSourceChange(error, current);
+  }
   for (const child of children) {
     checkAborted(options.signal);
     const absolutePath = join(current, child.name);
     const path = toRelative(root, absolutePath);
-    const info = await lstat(absolutePath);
+    let info;
+    try {
+      info = await lstat(absolutePath);
+    } catch (error) {
+      normalizeSourceChange(error, path);
+    }
     if (info.isSymbolicLink()) {
       state.issues.push(`SYMLINK_SKIPPED:${path}`);
       continue;
@@ -141,14 +174,29 @@ async function walk(root: string, current: string, options: Required<Pick<ScanOp
       continue;
     }
     const bytes = sizeOf(info);
-    const sha256 = await hashFile(absolutePath, options.signal);
-    const afterRead = await lstat(absolutePath);
+    let sha256: string;
+    try {
+      sha256 = await hashFile(absolutePath, options.signal);
+    } catch (error) {
+      normalizeSourceChange(error, path);
+    }
+    let afterRead;
+    try {
+      afterRead = await lstat(absolutePath);
+    } catch (error) {
+      normalizeSourceChange(error, path);
+    }
     if (afterRead.isSymbolicLink() || !afterRead.isFile() || sizeOf(afterRead) !== bytes || afterRead.mtimeMs !== info.mtimeMs) throw errorWithCode('PROJECT_SOURCE_CHANGED', `Project source changed: ${path}`);
-    const parsed = options.parse === false
-      ? unsupportedOrTooLarge(path, bytes, options.maxIndexedBytes)
-      : bytes > options.maxIndexedBytes
+    let parsed;
+    try {
+      parsed = options.parse === false
         ? unsupportedOrTooLarge(path, bytes, options.maxIndexedBytes)
-        : await parsedContent(await readFile(absolutePath), path, options.maxIndexedBytes, options.signal);
+        : bytes > options.maxIndexedBytes
+          ? unsupportedOrTooLarge(path, bytes, options.maxIndexedBytes)
+          : await parsedContent(await readFile(absolutePath), path, options.maxIndexedBytes, options.signal);
+    } catch (error) {
+      normalizeSourceChange(error, path);
+    }
     const modifiedAt = info.mtime.toISOString();
     state.entries.push({ relativePath: path, kind: 'file', bytes, modifiedAt, sha256, ...parsed, origin: 'source' });
     state.snapshots.push({ relativePath: path, kind: 'file', bytes, modifiedAt, sha256, parseStatus: parsed.parseStatus });
@@ -172,8 +220,10 @@ function sameSnapshot(a: readonly FileSnapshot[], b: readonly FileSnapshot[]): b
 }
 
 async function verifySnapshot(root: string, first: ScanState, options: Required<Pick<ScanOptions, 'maxIndexedBytes'>> & { signal?: AbortSignal }): Promise<void> {
+  await assertStableRoot(root);
   const second: ScanState = { entries: [], snapshots: [], issues: [], ignoredCount: 0 };
   await walk(root, root, { ...options, parse: false }, second);
+  await assertStableRoot(root);
   if (!sameSnapshot(first.snapshots, second.snapshots)) throw errorWithCode('PROJECT_SOURCE_CHANGED', 'Project source changed during scan');
 }
 
@@ -182,6 +232,7 @@ export async function scanProjectFolder(selectedPath: string, input: ScanOptions
   if (!Number.isSafeInteger(maxIndexedBytes) || maxIndexedBytes < 0) throw new Error('Invalid maxIndexedBytes');
   checkAborted(input.signal);
   const root = await canonicalProjectRoot(selectedPath, { protectedRoots: input.protectedRoots ?? [] });
+  await assertStableRoot(root);
   const state: ScanState = { entries: [], snapshots: [], issues: [], ignoredCount: 0 };
   const options = { maxIndexedBytes, ...(input.signal === undefined ? {} : { signal: input.signal }) };
   await walk(root, root, options, state);
