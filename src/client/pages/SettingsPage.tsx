@@ -3,9 +3,7 @@ import {
   Bot,
   ArrowUpRight,
   ChevronDown,
-  Database,
   FolderOpen,
-  Gauge,
   KeyRound,
   LockKeyhole,
   RefreshCw,
@@ -66,13 +64,14 @@ function vaultDiagnostic(snapshot: HealthSnapshot): Diagnostic {
   };
 }
 
-function indexDiagnostic(snapshot: HealthSnapshot): Diagnostic {
+function indexSummary(snapshot: HealthSnapshot | undefined): string {
+  if (snapshot === undefined) return '索引读取中';
   switch (snapshot.index.status) {
-    case 'ready': return { title: '本地索引', state: '已就绪', tone: 'green', icon: Gauge, details: [`版本 ${snapshot.index.version}`, `刷新于 ${displayTime(snapshot.index.refreshedAt)}`] };
-    case 'stale': return { title: '本地索引', state: '待刷新', tone: 'amber', icon: Gauge, details: [`版本 ${snapshot.index.version}`, `最近成功 ${displayTime(snapshot.index.lastSuccessAt)}`] };
-    case 'building': return { title: '本地索引', state: '构建中', tone: 'blue', icon: Gauge, details: [`版本 ${snapshot.index.version}`, `开始于 ${displayTime(snapshot.index.startedAt)}`] };
-    case 'failed': return { title: '本地索引', state: '失败', tone: 'red', icon: Gauge, details: [`版本 ${snapshot.index.version}`, snapshot.index.lastSuccessAt === undefined ? '没有可用成功时间' : `最近成功 ${displayTime(snapshot.index.lastSuccessAt)}`] };
-    case 'unavailable': return { title: '本地索引', state: '不可用', tone: 'red', icon: Gauge, details: ['读取索引当前不可用'] };
+    case 'ready': return `索引 v${snapshot.index.version}`;
+    case 'stale': return `索引 v${snapshot.index.version} · 待刷新`;
+    case 'building': return `索引 v${snapshot.index.version} · 构建中`;
+    case 'failed': return `索引 v${snapshot.index.version} · 失败`;
+    case 'unavailable': return '索引不可用';
   }
 }
 
@@ -120,17 +119,6 @@ function writeGateDiagnostic(snapshot: HealthSnapshot): Diagnostic {
     icon: LockKeyhole,
     details
   };
-}
-
-function schemaDiagnostic(snapshot: HealthSnapshot): Diagnostic {
-  if (snapshot.schemaIssues.status === 'available') {
-    return {
-      title: '结构检查', state: snapshot.schemaIssues.count === 0 ? '通过' : '需要处理',
-      tone: snapshot.schemaIssues.count === 0 ? 'green' : 'amber', icon: ShieldAlert,
-      details: [`${snapshot.schemaIssues.count} 个结构问题`], testId: 'schema-issue-count'
-    };
-  }
-  return { title: '结构检查', state: '不可用', tone: 'silver', icon: Database, details: ['—'], testId: 'schema-issue-count' };
 }
 
 export function SettingsPage() {
@@ -256,8 +244,27 @@ export function SettingsPage() {
   return (
     <div className="settings-workspace">
       <div className="settings-layout">
-        <section className="settings-preferences" aria-label="应用设置">
-          <section className="settings-section settings-vault" aria-labelledby="settings-vault-heading">
+        <header className="settings-overview" aria-label="设置概览">
+          <div>
+            <span className="settings-overview__eyebrow">本地应用设置</span>
+            <p>管理大脑位置、AI 连接和应用版本</p>
+          </div>
+          <div className="settings-overview__meta">
+            <span className={`settings-chip settings-chip--${healthFailed ? 'amber' : vault?.tone ?? 'silver'}`}>
+              <i aria-hidden="true" />{healthFailed ? '连接待确认' : vault?.state ?? '读取中'}
+            </span>
+            <span className="settings-overview__version">{appVersion ? `版本 ${appVersion}` : '版本读取中'}</span>
+          </div>
+        </header>
+
+        {issueCount !== undefined && issueCount > 0 && <div className="settings-issues-alert" role="status" aria-label="资料检查提醒">
+          <ShieldAlert aria-hidden="true" />
+          <span><strong>{issueCount} 项资料待确认</strong><small>部分资料信息缺失或分类不明确，不会被自动修改。</small></span>
+          <button className="settings-text-link" type="button" onClick={showIssues}>查看待确认资料<ArrowUpRight aria-hidden="true" /></button>
+        </div>}
+
+        <div className="settings-primary-grid settings-preferences" aria-label="应用设置">
+          <section className="settings-section settings-card settings-vault" aria-labelledby="settings-vault-heading">
             <header className="settings-section__heading">
               <div><h2 id="settings-vault-heading">大脑文件夹</h2><p>连接你的资料与知识</p></div>
               <span className={`settings-chip settings-chip--${healthFailed ? 'amber' : vault?.tone ?? 'silver'}`}>
@@ -291,11 +298,12 @@ export function SettingsPage() {
             </div>
           </section>
           <DeepSeekSettings />
-          <section className="settings-section settings-updates" aria-label="应用更新">
+          <section className="settings-section settings-card settings-updates" aria-label="应用更新">
             <header className="settings-section__heading">
               <div><h2>应用更新</h2><p>手动检查桌面版是否有新版本</p></div>
             </header>
             <div className="settings-section__body">
+              <p className="settings-updates__current">当前版本 {appVersion ?? '读取中'}</p>
               {desktop?.checkForUpdates ? <>
                 <div className="settings-updates__actions">
                   <button type="button" className="settings-button" disabled={updateState === 'checking'} onClick={() => void checkUpdates()}>
@@ -320,24 +328,20 @@ export function SettingsPage() {
               </> : <p className="settings-feedback" role="status">桌面版可用，浏览器预览不会检查应用更新。</p>}
             </div>
           </section>
-        </section>
+        </div>
 
-        <aside className="settings-health" aria-label="系统连接诊断">
-          <header className="settings-health__heading">
+        <aside className="settings-health-summary settings-health" aria-label="运行状态摘要">
+          <header className="settings-health-summary__heading settings-health__heading">
             <div><h2>运行状态</h2></div>
             <Link className="settings-text-link settings-health__history" to="/operations">操作与恢复<ArrowUpRight aria-hidden="true" /></Link>
             <button className={`settings-icon-button${refreshing ? ' is-refreshing' : ''}`} type="button" aria-label={healthFailed ? '重新连接' : '刷新运行状态'} title={healthFailed ? '重新连接' : '刷新运行状态'} disabled={refreshing || runtime.health.status === 'loading'} onClick={() => void runtime.refreshHealth()}><RefreshCw aria-hidden="true" /></button>
           </header>
-          <div className="settings-health__notice" role="status">
-            <span className={`settings-status-dot settings-status-dot--${healthFailed ? 'red' : refreshing ? 'blue' : snapshot?.vaultSource.status === 'ready' ? 'green' : 'silver'}`} />
-            {healthFailed ? snapshot === undefined ? '本地服务暂不可用' : '连接中断，以下为上次快照' : refreshing ? snapshot === undefined ? '正在读取运行状态…' : '正在更新，保留上次快照' : snapshot === undefined ? '正在读取运行状态…' : '本地状态快照'}
-          </div>
           {runtime.health.status === 'failed' && <PageState state={runtime.health.state} />}
-          {snapshot !== undefined && <>
-            <DiagnosticRow diagnostic={indexDiagnostic(snapshot)} />
-            <DiagnosticRow diagnostic={schemaDiagnostic(snapshot)} />
-            <button className="settings-health__issues settings-text-link" type="button" onClick={showIssues}>查看待确认资料<ArrowUpRight aria-hidden="true" /></button>
-          </>}
+          <div className="settings-health-summary__items" role="status">
+            <span>{healthFailed ? '本地连接待确认' : snapshot === undefined ? '本地连接读取中' : '本地连接正常'}</span>
+            <span>{indexSummary(snapshot)}</span>
+            <span data-testid="schema-issue-count">{snapshot === undefined ? '结构检查待进行' : snapshot.schemaIssues.status === 'available' ? `${snapshot.schemaIssues.count} 个结构问题` : '—'}</span>
+          </div>
         </aside>
       </div>
 
@@ -358,7 +362,6 @@ export function SettingsPage() {
           </div>
         </section>
       </div>
-      <footer className="settings-about"><span>最佳拍档</span><span>{appVersion ? `版本 ${appVersion}` : '本地桌面应用'}</span></footer>
     </div>
   );
 }

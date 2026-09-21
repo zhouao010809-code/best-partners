@@ -126,7 +126,7 @@ export function DeepSeekSettings() {
   const canVerify = Boolean(service?.verifyConnection && settings?.available && settings.configured && !credentialProblem && key === '' && busy === null);
 
   return (
-    <section className="deepseek-settings settings-section" aria-label="DeepSeek 设置">
+    <section className="deepseek-settings settings-section settings-card" aria-label="DeepSeek 设置">
       <header className="settings-section__heading">
         <div><h2>AI 模型</h2><p>用于资料提炼与知识候选生成</p></div>
         <span className={`settings-chip settings-chip--${statusColor}`}>{status}</span>
