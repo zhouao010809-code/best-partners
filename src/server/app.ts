@@ -326,7 +326,12 @@ export function buildServer(options: BuildServerOptions = {}) {
   registerHealthRoutes(app, healthService);
   registerAssistantRoutes(app, assistant);
   registerAttachmentRoutes(app, options.attachmentService);
-  registerAssistantDraftRoutes(app, { ...(options.readApi ? { assistantDrafts: createAssistantDraftService({ database: options.readApi.database }) } : {}) });
+  registerAssistantDraftRoutes(app, { ...(options.readApi ? {
+    assistantDrafts: createAssistantDraftService({
+      database: options.readApi.database,
+      projectExists: projectId => options.readApi!.database.prepare('SELECT 1 AS present FROM personal_projects WHERE id = ?').get(projectId) !== undefined
+    })
+  } : {}) });
   registerMaterialRoutes(app, readService);
   registerDocumentRoutes(app, readService);
   registerIntakeRoutes(app, options.intakeService);

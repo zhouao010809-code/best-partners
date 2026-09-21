@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { successEnvelopeSchema } from './schemas.js';
 import { attachmentSchema, attachmentSelectionSchema } from './attachments.js';
 import { extractionSourceRangeSchema } from './extraction.js';
+import { projectWriteActionSchema } from './projects.js';
 
 const tokenCount = z.number().int().nonnegative();
 export const assistantModelCapacitySchema = z.object({ contextWindowTokens: z.number().int().positive(), maxOutputTokens: z.number().int().positive().optional(), sourceUrl: z.string().url(), verifiedAt: z.string() });
@@ -47,26 +48,40 @@ export const assistantPlanActionSchema = z.strictObject({
   summary: z.string().max(2000), createdAt: z.string(), expiresAt: z.string(),
   resultActionId: z.string().min(1).max(255).optional(), problem: z.string().max(2000).optional()
 });
-export const assistantActionSchema = z.discriminatedUnion('type', [assistantReviewActionSchema, assistantArchiveActionSchema, assistantPlanActionSchema]);
+export const assistantActionSchema = z.discriminatedUnion('type', [assistantReviewActionSchema, assistantArchiveActionSchema, assistantPlanActionSchema, projectWriteActionSchema]);
 export const assistantStepSchema = z.object({ id: z.string(), toolName: z.string(), label: z.string(), status: z.enum(['running', 'completed', 'failed', 'stopped']), startedAt: z.string(), finishedAt: z.string().optional() });
-export const assistantMessageSchema = z.object({
+const assistantScopeSchema = z.enum(['brain', 'current', 'project']);
+const projectRevisionSchema = z.union([z.number().int().nonnegative(), z.string().min(1).max(256)]);
+function validateProjectScope(value: { scope?: ('brain' | 'current' | 'project') | undefined; projectId?: string | undefined; projectRevision?: (number | string) | undefined; contextPath?: string | undefined }, context: z.RefinementCtx): void {
+  if (value.scope === 'project') {
+    if (value.projectId === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'project scope requires projectId' });
+    if (value.projectRevision === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['projectRevision'], message: 'project scope requires projectRevision' });
+    if (value.contextPath !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ['contextPath'], message: 'project scope cannot include contextPath' });
+  } else if (value.projectId !== undefined || value.projectRevision !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'project fields require project scope' });
+  }
+}
+const assistantMessageFieldsSchema = z.object({
   id: z.string(), role: z.enum(['user', 'assistant']), text: z.string(), sources: z.array(assistantSourceSchema), actions: z.array(assistantActionSchema), activity: z.string().optional(), model: z.string().optional(),
-  scope: z.enum(['brain', 'current']).optional(), contextPath: z.string().optional(), contextTitle: z.string().optional(),
+  scope: assistantScopeSchema.optional(), contextPath: z.string().optional(), contextTitle: z.string().optional(), projectId: z.uuid().optional(), projectRevision: projectRevisionSchema.optional(),
   startedAt: z.string().optional(), finishedAt: z.string().optional(), steps: z.array(assistantStepSchema).optional(),
   usage: assistantUsageSchema.optional(), context: assistantContextSchema.optional(),
   skillUse: assistantSkillUseSchema.optional(),
   attachmentArchives: z.array(z.uuid()).max(8).optional(),
   attachments: z.array(attachmentSchema.extend({ startPage: z.number().int().positive().optional(), endPage: z.number().int().positive().optional() })).max(8).optional()
 });
-export const assistantConversationSchema = z.object({ id: z.string(), title: z.string(), createdAt: z.string(), updatedAt: z.string(), status: z.enum(['idle', 'running', 'failed', 'stopped']), providerId: z.string(), model: z.string(), effort: z.string().optional(), scope: z.enum(['brain', 'current']), contextPath: z.string().optional(), messages: z.array(assistantMessageSchema), problem: z.string().optional() });
+export const assistantMessageSchema = assistantMessageFieldsSchema.superRefine(validateProjectScope);
+const assistantConversationFieldsSchema = z.object({ id: z.string(), title: z.string(), createdAt: z.string(), updatedAt: z.string(), status: z.enum(['idle', 'running', 'failed', 'stopped']), providerId: z.string(), model: z.string(), effort: z.string().optional(), scope: assistantScopeSchema, contextPath: z.string().optional(), projectId: z.uuid().optional(), projectRevision: projectRevisionSchema.optional(), messages: z.array(assistantMessageSchema), problem: z.string().optional() });
+export const assistantConversationSchema = assistantConversationFieldsSchema.superRefine(validateProjectScope);
 export const assistantSendSchema = z.strictObject({
   conversationId: z.uuid().optional(), clientRequestId: z.uuid(), message: z.string().trim().min(1).max(16000),
   providerId: z.string().min(1).max(80), model: z.string().min(1).max(160), effort: z.string().max(40).optional(),
-  scope: z.enum(['brain', 'current']), contextPath: z.string().min(1).max(1024).optional(),
+  scope: assistantScopeSchema, contextPath: z.string().min(1).max(1024).optional(), projectId: z.uuid().optional(), projectRevision: projectRevisionSchema.optional(),
   attachments: z.array(attachmentSelectionSchema).max(8).refine(items => new Set(items.map(item => item.id)).size === items.length, '附件不可重复选择').optional(),
   skillId: assistantSkillIdSchema.optional(),
   skillRevision: assistantSkillRevisionSchema.optional()
 }).superRefine((value, context) => {
+  validateProjectScope(value, context);
   if ((value.skillId === undefined) !== (value.skillRevision === undefined)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['skillId'], message: 'skillId 和 skillRevision 必须同时提供' });
   }
@@ -74,11 +89,11 @@ export const assistantSendSchema = z.strictObject({
 export const assistantIdSchema = z.strictObject({ id: z.uuid() });
 export const assistantProvidersResponseSchema = successEnvelopeSchema(z.object({ providers: z.array(assistantProviderSchema) }));
 export const assistantConversationResponseSchema = successEnvelopeSchema(assistantConversationSchema);
-export const assistantHistoryQuerySchema = z.strictObject({ search: z.string().trim().max(200).optional(), cursor: z.string().min(1).max(4096).optional(), limit: z.coerce.number().int().min(1).max(100).default(100) });
-export const assistantHistoryItemSchema = assistantConversationSchema.omit({ messages: true });
+export const assistantHistoryQuerySchema = z.strictObject({ search: z.string().trim().max(200).optional(), projectId: z.uuid().optional(), cursor: z.string().min(1).max(4096).optional(), limit: z.coerce.number().int().min(1).max(100).default(100) });
+export const assistantHistoryItemSchema = assistantConversationFieldsSchema.omit({ messages: true }).superRefine(validateProjectScope);
 export const assistantHistoryPageSchema = z.object({ conversations: z.array(assistantHistoryItemSchema), hasMore: z.boolean().optional(), nextCursor: z.string().min(1).max(4096).optional() });
 export const assistantHistoryResponseSchema = successEnvelopeSchema(assistantHistoryPageSchema);
-export type AssistantHistoryQuery = { search?: string | undefined; cursor?: string | undefined; limit?: number | undefined };
+export type AssistantHistoryQuery = { search?: string | undefined; projectId?: string | undefined; cursor?: string | undefined; limit?: number | undefined };
 export type AssistantHistoryPage = z.infer<typeof assistantHistoryPageSchema>;
 export const assistantLoginResponseSchema = successEnvelopeSchema(z.object({ authUrl: z.string().url().optional(), message: z.string() }));
 export type AssistantModel = z.infer<typeof assistantModelSchema>;
@@ -97,6 +112,7 @@ export type AssistantAction = z.infer<typeof assistantActionSchema>;
 export type AssistantReviewAction = z.infer<typeof assistantReviewActionSchema>;
 export type AssistantArchiveAction = z.infer<typeof assistantArchiveActionSchema>;
 export type AssistantPlanAction = z.infer<typeof assistantPlanActionSchema>;
+export type AssistantProjectWriteAction = z.infer<typeof projectWriteActionSchema>;
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 export type AssistantConversation = z.infer<typeof assistantConversationSchema>;
 export type AssistantSend = z.infer<typeof assistantSendSchema>;

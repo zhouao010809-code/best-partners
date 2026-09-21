@@ -1,26 +1,32 @@
 import type Database from 'better-sqlite3';
 import { PublicApiError } from '../../shared/api/errors.js';
-import { assistantDraftFieldsSchema, assistantDraftSaveSchema, assistantDraftSchema, type AssistantDraft, type AssistantDraftList, type AssistantDraftSave } from '../../shared/api/assistant-drafts.js';
+import { assistantDraftFieldsSchema, assistantDraftQuerySchema, assistantDraftSaveSchema, assistantDraftSchema, type AssistantDraft, type AssistantDraftList, type AssistantDraftQuery, type AssistantDraftSave } from '../../shared/api/assistant-drafts.js';
 
 export interface AssistantDraftService {
-  list(): AssistantDraftList;
+  list(query?: AssistantDraftQuery): AssistantDraftList;
   save(id: string, input: AssistantDraftSave): { draft: AssistantDraft };
   delete(id: string, revision: number): { deleted: true };
 }
 type Row = { id: string; revision: number; payload: string | null; updated_at: string; last_active: number };
 
-export function createAssistantDraftService({ database }: { database: Database.Database }): AssistantDraftService {
+export function createAssistantDraftService({ database, projectExists }: { database: Database.Database; projectExists?: (projectId: string) => boolean }): AssistantDraftService {
   const conflict = () => new PublicApiError('ASSISTANT_DRAFT_CONFLICT', '草稿已在其他窗口更新。当前文字仍保留，请另存为新的草稿。', 409);
   const get = (id: string) => database.prepare('SELECT * FROM assistant_drafts WHERE id = ?').get(id) as Row | undefined;
   const decode = (row: Row): AssistantDraft => assistantDraftSchema.parse({ ...JSON.parse(row.payload!), id: row.id, revision: row.revision, updatedAt: row.updated_at, lastActive: new Date(row.last_active).toISOString() });
   return {
-    list() {
-      const drafts = (database.prepare('SELECT * FROM assistant_drafts WHERE payload IS NOT NULL ORDER BY last_active DESC, id DESC').all() as Row[]).map(decode);
+    list(rawQuery = {}) {
+      const query = assistantDraftQuerySchema.parse(rawQuery);
+      const drafts = (database.prepare('SELECT * FROM assistant_drafts WHERE payload IS NOT NULL ORDER BY last_active DESC, id DESC').all() as Row[])
+        .map(decode)
+        .filter(draft => query.projectId === undefined ? draft.projectId === undefined : draft.projectId === query.projectId);
       return { drafts, ...(drafts[0] ? { activeId: drafts[0].id } : {}) };
     },
     save(id, raw) {
       const input = assistantDraftSaveSchema.parse(raw);
       const { expectedRevision: _revision, active: _active, ...fields } = input;
+      if (fields.projectId !== undefined && projectExists && !projectExists(fields.projectId)) {
+        throw new PublicApiError('ASSISTANT_PROJECT_NOT_FOUND', '项目不存在或已移除，请刷新项目列表后重试。', 404);
+      }
       const payload = JSON.stringify(assistantDraftFieldsSchema.parse(fields));
       return database.transaction(() => {
         const previous = get(id);

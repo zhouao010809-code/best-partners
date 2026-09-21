@@ -159,7 +159,7 @@ describe('SQLite state kernel', () => {
     const input = makeRoots();
     const first = requireNormal(input);
 
-    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20].map((version) => ({ version }));
+    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21].map((version) => ({ version }));
     expect(first.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
       .toEqual(expectedVersions);
     const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
@@ -202,6 +202,24 @@ describe('SQLite state kernel', () => {
         { name: 'company_users' },
         { name: 'company_workspaces' }
       ]);
+    expect(first.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'personal_project_%' ORDER BY name").all())
+      .toEqual([
+        { name: 'personal_project_files' },
+        { name: 'personal_project_operations' },
+        { name: 'personal_project_scan_runs' },
+        { name: 'personal_project_write_plans' },
+        { name: 'personal_projects' }
+      ]);
+    expect(first.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'personal_projects'").get())
+      .toEqual({ name: 'personal_projects' });
+    expect(first.db.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 21").get())
+      .toEqual({ count: 1 });
+    const projectColumns = first.db.pragma('table_info(personal_projects)') as Array<{ name: string }>;
+    expect(projectColumns.map(column => column.name)).toEqual(expect.arrayContaining([
+      'id', 'root_path', 'display_name', 'source_revision', 'availability', 'output_root',
+      'file_count', 'readable_file_count', 'issue_count', 'created_at', 'updated_at', 'last_scanned_at'
+    ]));
+    expect(first.db.pragma('foreign_keys', { simple: true })).toBe(1);
     first.close();
 
     const second = requireNormal(input);
@@ -242,7 +260,7 @@ describe('SQLite state kernel', () => {
       applyMigrations(db);
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20].map((version) => ({ version })));
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21].map((version) => ({ version })));
       expect(db.prepare('SELECT project_id, state, operation_id FROM company_project_ingestion_runs WHERE id = ?').get('run-1'))
         .toEqual({ project_id: 'project-1', state: 'confirmed', operation_id: 'op-1' });
       // 017 had no event operation_id; 018 derives a traceable migration value from the legacy event id.
@@ -273,7 +291,47 @@ describe('SQLite state kernel', () => {
       applyMigrations(db);
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20].map((version) => ({ version })));
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21].map((version) => ({ version })));
+    } finally {
+      db.close();
+    }
+  });
+
+  it('keeps personal project roots private and constrains project records', () => {
+    const db = new Database(':memory:');
+    try {
+      applyMigrations(db);
+      const now = '2026-09-22T00:00:00.000Z';
+      const projectId = '11111111-1111-4111-8111-111111111111';
+      const conversationId = '22222222-2222-4222-8222-222222222222';
+      db.prepare(`INSERT INTO personal_projects
+        (id, root_path, display_name, source_revision, availability, output_root, file_count, readable_file_count, issue_count, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(projectId, '/private/project', '项目 A', 1, 'ready', 'AI工作区', 1, 1, 0, now, now);
+      db.prepare('INSERT INTO assistant_conversations (id, updated_at, payload) VALUES (?, ?, ?)')
+        .run(conversationId, now, JSON.stringify({}));
+      db.prepare(`INSERT INTO personal_project_files
+        (id, project_id, relative_path, origin, parse_status, bytes, sha256, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('file-1', projectId, '资料.md', 'source', 'readable', 10, 'a'.repeat(64), now, now);
+      db.prepare(`INSERT INTO personal_project_write_plans
+        (id, project_id, conversation_id, status, category, target_path, project_revision, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('plan-1', projectId, conversationId, 'pending', '内容草稿', 'AI工作区/内容草稿/稿件.md', 1, '{}', now, now);
+      expect(db.prepare('SELECT root_path FROM personal_projects WHERE id = ?').get(projectId))
+        .toEqual({ root_path: '/private/project' });
+      expect(() => db.prepare(`INSERT INTO personal_project_files
+        (id, project_id, relative_path, origin, parse_status, bytes, sha256, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('file-2', projectId, '/escape.md', 'source', 'readable', 10, 'b'.repeat(64), now, now)).toThrow(/CHECK/);
+      expect(() => db.prepare(`INSERT INTO personal_project_files
+        (id, project_id, relative_path, origin, parse_status, bytes, sha256, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('file-3', projectId, 'bad.md', 'source', 'readable', 10, 'A'.repeat(64), now, now)).toThrow(/CHECK/);
+      expect(() => db.prepare(`INSERT INTO personal_project_write_plans
+        (id, project_id, conversation_id, status, category, target_path, project_revision, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('plan-2', projectId, conversationId, 'pending', '内容草稿', '../escape.md', 1, '{}', now, now)).toThrow(/CHECK/);
     } finally {
       db.close();
     }

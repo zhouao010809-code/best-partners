@@ -22,7 +22,9 @@ const submitInput = z.strictObject({ token: z.uuid(), result: extractionGenerati
 export function createBrainTools(input: {
   readService: ReadService;
   extractionService?: ExtractionService;
-  scope: 'brain' | 'current';
+  scope: 'brain' | 'current' | 'project';
+  projectId?: string;
+  projectRevision?: number | string;
   contextPath?: string;
   additionalPaths?: ReadonlySet<string>;
   canPreparePath?: (path: string) => boolean;

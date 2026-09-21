@@ -22,7 +22,7 @@ const SYSTEM = `你是最佳拍档中的“问问”，用简体中文协助用�
 当前模型与工具有限制时明确说明，不能切换成其他模型来冒充完成。回答清楚简洁，复杂任务先简短说明再使用工具。`;
 
 type ToolFactoryInput = {
-  scope: 'brain' | 'current'; contextPath?: string; model: string; attachments: AttachmentSelection[]; userMessage: string;
+  scope: 'brain' | 'current' | 'project'; contextPath?: string; projectId?: string; projectRevision?: number | string; model: string; attachments: AttachmentSelection[]; userMessage: string;
   signal: AbortSignal; emit(event: AssistantEvent): void; conversationId: string; messageId: string;
   proposeArchive?: (request: Omit<ProposeArchiveInput, 'conversationId' | 'messageId' | 'attachmentId'> & { id: string }) => Promise<AssistantPlanAction>;
   markActionPending?: () => void;
@@ -157,17 +157,20 @@ export function createAssistantService(input: { database: Database.Database; ada
     if (closed) throw new PublicApiError('ASSISTANT_UNAVAILABLE', '应用正在关闭。', 503);
     if (running.size) throw new PublicApiError('ASSISTANT_BUSY', '问问正在处理一个任务，请等它完成或先停止。', 409);
     const now = new Date().toISOString();
-    const conversation: AssistantConversation = request.conversationId ? get(request.conversationId) : { id: randomUUID(), title: request.message.slice(0, 48), createdAt: now, updatedAt: now, status: 'idle', providerId: request.providerId, model: request.model, scope: request.scope, messages: [] };
+    const conversation: AssistantConversation = request.conversationId ? get(request.conversationId) : { id: randomUUID(), title: request.message.slice(0, 48), createdAt: now, updatedAt: now, status: 'idle', providerId: request.providerId, model: request.model, scope: request.scope, ...(request.projectId ? { projectId: request.projectId } : {}), ...(request.projectRevision !== undefined ? { projectRevision: request.projectRevision } : {}), messages: [] };
     if (conversation.messages.length >= ASSISTANT_CONVERSATION_MESSAGES) throw new PublicApiError('ASSISTANT_HISTORY_LIMIT', '这段对话已达到应用的 100 条消息上限，请开启新对话。', 409);
     Object.assign(conversation, { providerId: request.providerId, model: request.model, scope: request.scope, status: 'running' });
-    delete conversation.problem; delete conversation.contextPath; delete conversation.effort;
+    delete conversation.problem; delete conversation.contextPath; delete conversation.projectId; delete conversation.projectRevision; delete conversation.effort;
     if (request.contextPath) conversation.contextPath = request.contextPath;
+    if (request.projectId) conversation.projectId = request.projectId;
+    if (request.projectRevision !== undefined) conversation.projectRevision = request.projectRevision;
     if (request.effort) conversation.effort = request.effort;
-    const context = { scope: request.scope, ...(request.contextPath ? { contextPath: request.contextPath, contextTitle: contextTitle(db, request.contextPath) } : {}) };
+    const context = { scope: request.scope, ...(request.contextPath ? { contextPath: request.contextPath, contextTitle: contextTitle(db, request.contextPath) } : {}), ...(request.projectId ? { projectId: request.projectId } : {}), ...(request.projectRevision !== undefined ? { projectRevision: request.projectRevision } : {}) };
     conversation.messages.push({ id: randomUUID(), role: 'user', text: request.message, sources: [], actions: [], ...context,
       ...(selectedSkill ? { skillUse: selectedSkill.metadata } : {}),
       ...(selectedAttachments.length ? { attachments: selectedAttachments } : {}) });
     const answer: AssistantConversation['messages'][number] = { id: randomUUID(), role: 'assistant', text: '', sources: [], actions: [], model: request.model, activity: '正在连接模型', startedAt: now,
+      ...(request.scope === 'project' && request.projectId ? { scope: 'project' as const, projectId: request.projectId, ...(request.projectRevision !== undefined ? { projectRevision: request.projectRevision } : {}) } : {}),
       ...(selectedSkill ? { skillUse: selectedSkill.metadata } : {}),
       usage: { steps: [], total: {}, status: 'unavailable' } };
     conversation.messages.push(answer);
@@ -225,6 +228,7 @@ export function createAssistantService(input: { database: Database.Database; ada
       try {
         const tools = input.createTools({ scope: request.scope, model: request.model, attachments, userMessage: request.message,
           ...(request.contextPath ? { contextPath: request.contextPath } : {}), signal: controller.signal, emit,
+          ...(request.projectId ? { projectId: request.projectId } : {}), ...(request.projectRevision !== undefined ? { projectRevision: request.projectRevision } : {}),
           conversationId: conversation.id, messageId: answer.id,
           ...(input.actionPlans ? {
             proposeArchive: requestInput => input.actionPlans!.proposeArchive({ conversationId: conversation.id, messageId: answer.id,

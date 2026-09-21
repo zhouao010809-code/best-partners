@@ -34,6 +34,10 @@ function SourceLink({ source, children }: { source: AssistantSource; children: R
 function ArchiveCard({ action }: { action: AssistantArchiveAction }) {
   return <section className="assistant-task-card" aria-label="文件归档结果"><div className="assistant-task-card__heading"><strong>{action.materialTitle}</strong><span>{action.duplicate ? '已在档案库' : '已归档'}</span></div><p>{action.indexed === false ? '原件已保存，索引待更新。' : '资料已保存到档案库。'}</p><div className="assistant-task-card__footer"><a href={attachmentContentHref(action.attachmentId)} download={action.materialTitle}>下载原件</a><Link className="assistant-review" to={assistantSourceHref(action.materialPath)}><Check /><span>查看归档资料</span><ArrowRight /></Link></div></section>;
 }
+function ProjectWriteCard({ action }: { action: Extract<AssistantMessage['actions'][number], { type: 'project-write' }> }) {
+  const status = action.status === 'completed' ? '已保存' : action.status === 'failed' ? '保存失败' : action.status === 'cancelled' ? '已取消' : '待确认';
+  return <section className="assistant-task-card" aria-label="项目写入结果"><div className="assistant-task-card__heading"><strong>{action.category}</strong><span>{status}</span></div><p>{action.summary ?? action.label}</p><small>{action.path ?? action.targetPath}</small>{action.problem && <p>{action.problem}</p>}</section>;
+}
 
 export type AssistantMessageViewProps = {
   message: AssistantMessage;
@@ -64,7 +68,7 @@ export function AssistantMessageView({ message, onFollowUp, onConfirmAction, onC
           onResolved={() => onConfirmAction ? onConfirmAction(action) : Promise.resolve()}
           onCancelled={() => onCancelAction ? onCancelAction(action) : Promise.resolve()}
           {...(onRegenerateAction ? { onRegenerate: () => onRegenerateAction(action) } : {})} />
-      : action.type === 'archive' ? <ArchiveCard key={action.id} action={action} /> : <ReviewCard key={action.id} action={action} />)}
+      : action.type === 'archive' ? <ArchiveCard key={action.id} action={action} /> : action.type === 'project-write' ? <ProjectWriteCard key={action.id} action={action} /> : <ReviewCard key={action.id} action={action} />)}
     {message.role === 'assistant' && message.text && <div className="assistant-answer-tools"><button type="button" className="assistant-icon-button" aria-label={copied ? '已复制回答' : '复制回答'} title={copied ? '已复制' : '复制回答'} onClick={() => void copy()}>{copied ? <Check /> : <Copy />}</button><button type="button" className="assistant-text-button" onMouseDown={event => event.preventDefault()} onClick={() => onFollowUp(selection ? `请进一步解释这段内容：\n\n“${selection}”` : '请举一个具体例子，说明这个观点怎么用。')}><MessageCircle />{selection ? '追问选中段落' : '继续追问'}</button>{copyError && <span role="status">复制失败，可选中文字复制。</span>}</div>}
   </article>;
 }

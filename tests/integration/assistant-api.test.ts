@@ -3,10 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { buildServer } from '../../src/server/app.js';
 import { applyMigrations } from '../../src/server/db/migrate.js';
+import { createAssistantDraftService } from '../../src/server/assistant/draft-service.js';
+import { listAssistantHistory } from '../../src/server/assistant/history.js';
 import { createIndexRepository } from '../../src/server/index/index-repository.js';
 import { FakeVaultGateway } from '../../src/server/vault/FakeVaultGateway.js';
 import type { AssistantRunInput } from '../../src/server/assistant/types.js';
 import type { SkillCatalogService } from '../../src/server/services/skill-catalog.js';
+import { assistantActionSchema, assistantConversationSchema, assistantHistoryQuerySchema, assistantSendSchema } from '../../src/shared/api/assistant.js';
+import { assistantDraftFieldsSchema, assistantDraftSaveSchema } from '../../src/shared/api/assistant-drafts.js';
+import { projectFileDetailSchema, projectFileSchema, projectWriteActionSchema } from '../../src/shared/api/projects.js';
 
 const host = '127.0.0.1:4317'; const origin = `http://${host}`;
 const cleanup: Array<() => Promise<void>> = [];
@@ -28,6 +33,83 @@ async function fixture(closeKernel = false, skillCatalog?: SkillCatalogService) 
   const headers = { host, origin, cookie: bootstrap.cookies[0]!.name + '=' + bootstrap.cookies[0]!.value, 'x-csrf-token': bootstrap.json().data.csrfToken };
   return { app, headers, run, finalStates };
 }
+
+it('accepts project-scoped assistant payloads while keeping legacy scopes and paths isolated', () => {
+  const projectId = randomUUID();
+  const base = { clientRequestId: randomUUID(), message: '评估下周选题', providerId: 'test', model: 'pro' };
+  expect(assistantSendSchema.safeParse({ ...base, scope: 'project', projectId, projectRevision: 3 }).success).toBe(true);
+  expect(assistantSendSchema.safeParse({ ...base, scope: 'project', projectId }).success).toBe(false);
+  expect(assistantSendSchema.safeParse({ ...base, scope: 'project', projectId, projectRevision: 3, contextPath: '01图书馆/a.md' }).success).toBe(false);
+  expect(assistantSendSchema.safeParse({ ...base, scope: 'brain', projectId, projectRevision: 3 }).success).toBe(false);
+  expect(assistantSendSchema.safeParse({ ...base, scope: 'brain' }).success).toBe(true);
+  expect(assistantSendSchema.safeParse({ ...base, scope: 'current', contextPath: '01图书馆/a.md' }).success).toBe(true);
+  expect(assistantHistoryQuerySchema.safeParse({ projectId }).success).toBe(true);
+  expect(assistantHistoryQuerySchema.safeParse({ path: '/private/project' }).success).toBe(false);
+});
+
+it('keeps project write actions and file payloads relative-path only', () => {
+  const projectId = randomUUID();
+  const action = projectWriteActionSchema.parse({
+    id: randomUUID(), type: 'project-write', label: '保存项目草稿', status: 'pending',
+    projectId, projectRevision: 1, category: '内容草稿', path: 'AI工作区/内容草稿/稿件.md'
+  });
+  expect(assistantActionSchema.parse(action)).toMatchObject({ type: 'project-write', projectId });
+  expect(projectWriteActionSchema.safeParse({ ...action, path: '/tmp/escape.md' }).success).toBe(false);
+  expect(projectWriteActionSchema.safeParse({ ...action, path: 'AI工作区\\稿件.md' }).success).toBe(false);
+  expect(projectFileSchema.safeParse({ projectId, relativePath: '资料.md', origin: 'source', parseStatus: 'readable' }).success).toBe(true);
+  expect(projectFileSchema.safeParse({ projectId, relativePath: '/tmp/资料.md', origin: 'source', parseStatus: 'readable' }).success).toBe(false);
+  for (const unsafePath of ['C:/tmp/资料.md', '../资料.md', 'a/../资料.md', 'a\\资料.md', `a\u0000.md`, `a\u0001.md`]) {
+    expect(projectFileSchema.safeParse({ projectId, relativePath: unsafePath, origin: 'source', parseStatus: 'readable' }).success).toBe(false);
+  }
+  expect(projectFileDetailSchema.safeParse({ projectId, relativePath: '资料.md', origin: 'source', parseStatus: 'readable', content: '正文' }).success).toBe(true);
+});
+
+it('applies project isolation rules to assistant drafts', () => {
+  const projectId = randomUUID();
+  expect(assistantDraftFieldsSchema.safeParse({ text: '', attachments: [], groupId: randomUUID(), scope: 'project', projectId, projectRevision: 2 }).success).toBe(true);
+  expect(assistantDraftSaveSchema.safeParse({ expectedRevision: 0, active: true, text: '', attachments: [], groupId: randomUUID(), scope: 'project', projectId }).success).toBe(false);
+  expect(assistantDraftFieldsSchema.safeParse({ text: '', attachments: [], groupId: randomUUID(), scope: 'project', projectId, projectRevision: 2, contextPath: '01图书馆/a.md' }).success).toBe(false);
+  expect(assistantDraftFieldsSchema.safeParse({ text: '', attachments: [], groupId: randomUUID(), scope: 'brain', projectId, projectRevision: 2 }).success).toBe(false);
+  expect(assistantDraftFieldsSchema.safeParse({ text: '', attachments: [], groupId: randomUUID(), scope: 'brain' }).success).toBe(true);
+  expect(assistantConversationSchema.safeParse({ id: randomUUID(), title: '项目', createdAt: '2026-09-22T00:00:00.000Z', updatedAt: '2026-09-22T00:00:00.000Z', status: 'idle', providerId: 'test', model: 'pro', scope: 'project', projectId, projectRevision: 2, messages: [] }).success).toBe(true);
+});
+
+it('lists global drafts separately from a requested project and validates project existence', () => {
+  const database = new Database(':memory:');
+  try {
+    applyMigrations(database);
+    const projectId = randomUUID();
+    const service = createAssistantDraftService({ database, projectExists: id => id === projectId });
+    const base = { expectedRevision: 0, active: true as const, text: '', attachments: [], groupId: randomUUID(), scope: 'brain' as const };
+    service.save(randomUUID(), base);
+    service.save(randomUUID(), { ...base, scope: 'project', projectId, projectRevision: 1 });
+    expect(service.list().drafts).toHaveLength(1);
+    expect(service.list({ projectId }).drafts).toHaveLength(1);
+    expect(service.list({ projectId }).drafts[0]?.projectId).toBe(projectId);
+    expect(() => service.save(randomUUID(), { ...base, scope: 'project', projectId: randomUUID(), projectRevision: 1 })).toThrow(/项目/);
+  } finally {
+    database.close();
+  }
+});
+
+it('filters assistant history by projectId without accepting a path selector', () => {
+  const database = new Database(':memory:');
+  try {
+    applyMigrations(database);
+    const projectId = randomUUID();
+    const now = '2026-09-22T00:00:00.000Z';
+    const insert = database.prepare('INSERT INTO assistant_conversations (id, updated_at, payload) VALUES (?, ?, ?)');
+    const conversation = (id: string, scope: 'brain' | 'project', project?: string) => ({ id, title: scope, createdAt: now, updatedAt: now, status: 'idle' as const, providerId: 'test', model: 'pro', scope, ...(project ? { projectId: project, projectRevision: 1 } : {}), messages: [] });
+    insert.run(randomUUID(), now, JSON.stringify(conversation(randomUUID(), 'brain')));
+    insert.run(randomUUID(), now, JSON.stringify(conversation(randomUUID(), 'project', projectId)));
+    expect(listAssistantHistory(database).conversations).toHaveLength(2);
+    expect(listAssistantHistory(database, { projectId }).conversations).toHaveLength(1);
+    expect(() => listAssistantHistory(database, { path: '/private/project' } as never)).toThrow();
+  } finally {
+    database.close();
+  }
+});
+
 it('protects AI calls with the existing origin/session/CSRF contract and validates messages', async () => {
   const f = await fixture(); const payload = { clientRequestId: randomUUID(), message: '只回复连接成功', providerId: 'test', model: 'pro', scope: 'brain' };
   expect((await f.app.inject({ method: 'POST', url: '/api/v1/assistant/messages', headers: { host, origin }, payload })).statusCode).toBe(401);
@@ -45,6 +127,22 @@ it('protects AI calls with the existing origin/session/CSRF contract and validat
   expect(found.json().data).toMatchObject({ hasMore: false, conversations: [{ id }] });
   expect((await f.app.inject({ method: 'GET', url: '/api/v1/assistant/conversations?limit=101', headers: { host } })).statusCode).toBe(400);
   expect((await f.app.inject({ method: 'GET', url: '/api/v1/assistant/conversations?cursor=invalid', headers: { host } })).statusCode).toBe(400);
+});
+
+it('persists project identity on project-scoped assistant conversations and messages', async () => {
+  const f = await fixture();
+  const projectId = randomUUID();
+  const now = '2026-09-22T00:00:00.000Z';
+  // The contract layer carries identity; this fixture does not require a full
+  // project service to be installed in order to exercise assistant persistence.
+  const response = await f.app.inject({ method: 'POST', url: '/api/v1/assistant/messages', headers: f.headers, payload: {
+    clientRequestId: randomUUID(), message: '项目任务', providerId: 'test', model: 'pro', scope: 'project', projectId, projectRevision: 4
+  } });
+  expect(response.statusCode).toBe(200);
+  expect(response.json().data).toMatchObject({ scope: 'project', projectId, projectRevision: 4, messages: [
+    { role: 'user', scope: 'project', projectId, projectRevision: 4 },
+    { role: 'assistant', projectId, projectRevision: 4 }
+  ] });
 });
 
 it('keeps skill fields strict and rejects stale confirmed skills before provider calls', async () => {

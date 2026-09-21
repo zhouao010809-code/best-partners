@@ -57,7 +57,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const [effort, setEffort] = useState('');
   const draftStore = useAssistantDrafts(api.assistantDrafts);
   const scope = draftStore.current.scope;
-  const setScope = (value: 'brain' | 'current') => draftStore.update({ scope: value });
+  const setScope = (value: 'brain' | 'current' | 'project') => draftStore.update({ scope: value });
   const pinnedPath = draftStore.current.contextPath;
   const setPinnedPath = (value: string | undefined) => { draftStore.update({ contextPath: value }); setFollowPageContext(!value); };
   const [followPageContext, setFollowPageContext] = useState(!api.assistantDrafts);
@@ -320,7 +320,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     if (!draft.trim() || !provider || provider.status !== 'ready' || !model) return undefined;
     return {
       ...(conversation ? { conversationId: conversation.id } : {}), clientRequestId: crypto.randomUUID(), message: draft.trim(), providerId, model: modelId,
-      ...(effort ? { effort } : {}), scope, ...(contextPath ? { contextPath } : {}), ...(draftStore.current.attachments.length ? { attachments: draftStore.current.attachments } : {})
+      ...(effort ? { effort } : {}), scope, ...(contextPath ? { contextPath } : {}), ...(draftStore.current.projectId ? { projectId: draftStore.current.projectId } : {}), ...(draftStore.current.projectRevision !== undefined ? { projectRevision: draftStore.current.projectRevision } : {}), ...(draftStore.current.attachments.length ? { attachments: draftStore.current.attachments } : {})
     };
   }
 

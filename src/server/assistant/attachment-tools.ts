@@ -27,7 +27,7 @@ export function createAssistantTools(input: {
   companyTools?: readonly AssistantTool[];
   proposeArchive?: (request: AttachmentArchiveProposalRequest, signal?: AbortSignal) => Promise<AssistantPlanAction>;
   markActionPending?: () => void;
-  attachments: AttachmentSelection[]; userMessage: string; scope: 'brain' | 'current'; contextPath?: string;
+  attachments: AttachmentSelection[]; userMessage: string; scope: 'brain' | 'current' | 'project'; projectId?: string; projectRevision?: number | string; contextPath?: string;
   model: string; signal: AbortSignal; emit(event: AssistantEvent): void;
 }): AssistantTool[] {
   const selected = new Map(input.attachments.map((selection, index) => [selection.id, { selection, sourceId: `S${index + 1}` }]));
