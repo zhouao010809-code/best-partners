@@ -229,15 +229,18 @@ export function SettingsPage() {
     }
   };
 
-  const openUpdateDownload = async (): Promise<void> => {
-    if (!updateResult) return;
+  const openUpdateLink = async (url: string): Promise<void> => {
     setUpdateDownloadError(false);
     try {
-      if (desktop?.openUpdateDownload) await desktop.openUpdateDownload(updateResult.assetUrl);
-      else window.open(updateResult.assetUrl, '_blank', 'noopener,noreferrer');
+      if (desktop?.openUpdateDownload) await desktop.openUpdateDownload(url);
+      else window.open(url, '_blank', 'noopener,noreferrer');
     } catch {
       if (mountedRef.current) setUpdateDownloadError(true);
     }
+  };
+
+  const openUpdateDownload = async (): Promise<void> => {
+    if (updateResult) await openUpdateLink(updateResult.assetUrl);
   };
 
   const vault = snapshot === undefined ? undefined : vaultDiagnostic(snapshot);
@@ -308,7 +311,9 @@ export function SettingsPage() {
                   <p className="settings-updates__notes">{updateResult.notes}</p>
                   <div className="settings-updates__actions">
                     <button type="button" className="settings-button settings-button--primary" onClick={() => void openUpdateDownload()}>打开下载页面</button>
-                    {updateResult.releaseUrl && <a className="settings-button settings-button--quiet" href={updateResult.releaseUrl} target="_blank" rel="noopener noreferrer">查看 Release 页面</a>}
+                    {updateResult.releaseUrl && (desktop?.openUpdateDownload
+                      ? <button type="button" className="settings-button settings-button--quiet" onClick={() => void openUpdateLink(updateResult.releaseUrl)}>查看 Release 页面</button>
+                      : <a className="settings-button settings-button--quiet" href={updateResult.releaseUrl} target="_blank" rel="noopener noreferrer">查看 Release 页面</a>)}
                   </div>
                   {updateDownloadError && <p className="settings-feedback settings-feedback--error" role="alert">未能打开下载页面，请复制 Release 页面地址后重试。</p>}
                 </div>}

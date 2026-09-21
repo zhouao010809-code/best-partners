@@ -32,6 +32,8 @@ it('shows an available update with plain-text notes and opens the asset URL', as
   expect(screen.getByText((_, element) => Boolean(element?.classList.contains('settings-updates__notes') && element.textContent === '修复\n第二行'))).toBeVisible();
   await user.click(screen.getByRole('button', { name: '打开下载页面' }));
   expect(desktop.openUpdateDownload).toHaveBeenCalledExactlyOnceWith('https://github.com/example/app.dmg');
+  await user.click(screen.getByRole('button', { name: '查看 Release 页面' }));
+  expect(desktop.openUpdateDownload).toHaveBeenCalledWith('https://github.com/example/release');
 });
 
 it('shows up-to-date result', async () => {
@@ -67,6 +69,16 @@ it('keeps the update card and reports an actionable download error', async () =>
   const user = userEvent.setup(); open();
   await user.click(await screen.findByRole('button', { name: '检查应用更新' }));
   await user.click(await screen.findByRole('button', { name: '打开下载页面' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('未能打开下载页面');
+  expect(screen.getByText('发现新版本 0.1.1')).toBeVisible();
+});
+
+it('reports a release-page opening failure while keeping the update card', async () => {
+  desktop.checkForUpdates.mockResolvedValue({ status: 'available', currentVersion: '0.1.0', version: '0.1.1', releaseUrl: 'https://github.com/example/release', assetUrl: 'https://github.com/example/app.dmg', notes: '修复' });
+  desktop.openUpdateDownload.mockRejectedValueOnce(new Error('failed'));
+  const user = userEvent.setup(); open();
+  await user.click(await screen.findByRole('button', { name: '检查应用更新' }));
+  await user.click(await screen.findByRole('button', { name: '查看 Release 页面' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('未能打开下载页面');
   expect(screen.getByText('发现新版本 0.1.1')).toBeVisible();
 });
