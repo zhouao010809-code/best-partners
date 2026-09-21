@@ -27,8 +27,10 @@ function open() { render(<MemoryRouter><SettingsPage /></MemoryRouter>); }
 it('shows an available update with plain-text notes and opens the asset URL', async () => {
   desktop.checkForUpdates.mockResolvedValue({ status: 'available', currentVersion: '0.1.0', version: '0.1.1', releaseUrl: 'https://github.com/example/release', assetUrl: 'https://github.com/example/app.dmg', notes: '修复\n第二行' });
   const user = userEvent.setup(); open();
+  expect(screen.queryByText('当前版本 0.1.0')).not.toBeInTheDocument();
   await user.click(await screen.findByRole('button', { name: '检查应用更新' }));
   expect(await screen.findByText('发现新版本 0.1.1')).toBeVisible();
+  expect(screen.getByText('当前版本 0.1.0')).toBeVisible();
   expect(screen.getByText((_, element) => Boolean(element?.classList.contains('settings-updates__notes') && element.textContent === '修复\n第二行'))).toBeVisible();
   await user.click(screen.getByRole('button', { name: '打开下载页面' }));
   expect(desktop.openUpdateDownload).toHaveBeenCalledExactlyOnceWith('https://github.com/example/app.dmg');

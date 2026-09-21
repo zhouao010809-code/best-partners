@@ -28,6 +28,8 @@ it('shows the actual desktop vault path and opens that vault without passing a u
   expect(desktop.openVaultDirectory).toHaveBeenCalledExactlyOnceWith();
   expect(desktop.chooseVaultDirectory).not.toHaveBeenCalled();
   expect(screen.getByText('版本 0.1.0')).toBeVisible();
+  expect(screen.getAllByText('版本 0.1.0')).toHaveLength(1);
+  expect(screen.queryByText('当前版本 0.1.0')).not.toBeInTheDocument();
   expect(screen.queryByText('自动归档尚未启用。新资料在收件箱预览，确认后再归档。')).not.toBeInTheDocument();
 });
 

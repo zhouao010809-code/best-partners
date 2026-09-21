@@ -303,7 +303,6 @@ export function SettingsPage() {
               <div><h2>应用更新</h2><p>手动检查桌面版是否有新版本</p></div>
             </header>
             <div className="settings-section__body">
-              <p className="settings-updates__current">当前版本 {appVersion ?? '读取中'}</p>
               {desktop?.checkForUpdates ? <>
                 <div className="settings-updates__actions">
                   <button type="button" className="settings-button" disabled={updateState === 'checking'} onClick={() => void checkUpdates()}>
