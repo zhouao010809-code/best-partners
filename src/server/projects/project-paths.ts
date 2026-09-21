@@ -26,7 +26,8 @@ async function canonicalExistingPath(value: string, label: string): Promise<stri
 export async function canonicalProjectRoot(selectedPath: string, input: { protectedRoots: readonly string[] }): Promise<string> {
   if (typeof selectedPath !== 'string' || selectedPath.length === 0) throw coded('PROJECT_ROOT_INVALID', 'Project root is required');
   const info = await lstat(selectedPath);
-  if (info.isSymbolicLink() || !info.isDirectory()) throw coded('PROJECT_ROOT_INVALID', 'Project root must be a real directory');
+  if (info.isSymbolicLink()) throw coded('PROJECT_ROOT_SYMLINK', 'Project root must not be a symbolic link');
+  if (!info.isDirectory()) throw coded('PROJECT_ROOT_INVALID', 'Project root must be a real directory');
   const root = await realpath(selectedPath);
   const afterResolve = await lstat(selectedPath);
   if (afterResolve.isSymbolicLink() || !afterResolve.isDirectory()) throw coded('PROJECT_ROOT_INVALID', 'Project root changed while resolving');
@@ -55,6 +56,7 @@ export function resolveProjectPath(root: string, relativePath: string): string {
 export function resolveProjectOutputPath(root: string, category: ProjectCategory, filename: string): string {
   const parsedCategory = projectCategorySchema.safeParse(category);
   if (!parsedCategory.success) throw coded('PROJECT_PATH_INVALID', 'Project output category is invalid');
+  if (filename.includes('/')) throw coded('PROJECT_PATH_INVALID', 'Project output filename must be a single path segment');
   assertProjectRelativePath(filename);
   return resolveProjectPath(root, `AI工作区/${parsedCategory.data}/${filename}`);
 }

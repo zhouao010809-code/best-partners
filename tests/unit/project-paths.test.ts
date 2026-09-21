@@ -15,7 +15,7 @@ describe('project paths', () => {
     const link = join(parent, 'link');
     await symlink(root, link);
     await expect(canonicalProjectRoot(root, { protectedRoots: [] })).resolves.toBe(await realpath(root));
-    await expect(canonicalProjectRoot(link, { protectedRoots: [] })).rejects.toThrow();
+    await expect(canonicalProjectRoot(link, { protectedRoots: [] })).rejects.toMatchObject({ code: 'PROJECT_ROOT_SYMLINK' });
   });
 
   it('rejects protected roots in either containment direction', async () => {
@@ -36,6 +36,7 @@ describe('project paths', () => {
     expect(resolved).toBe(join(root, 'docs', 'note.md'));
     expect(() => resolveProjectPath(root, '../outside')).toThrow();
     expect(resolveProjectOutputPath(root, '内容草稿', 'week-1.md')).toBe(join(root, 'AI工作区', '内容草稿', 'week-1.md'));
+    expect(() => resolveProjectOutputPath(root, '内容草稿', 'nested/week-1.md')).toThrow();
   });
 
   it('does not mistake a valid file for a root directory', async () => {

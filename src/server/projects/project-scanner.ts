@@ -31,7 +31,7 @@ const MAX_TEXT_CHARACTERS = 200_000;
 const IGNORED_DIRECTORY_NAMES = new Set(['.git', '.hg', '.svn', 'node_modules', 'system']);
 const SUPPORTED_TEXT_EXTENSIONS = new Set(['.md', '.markdown', '.txt']);
 
-type ScanOptions = { signal?: AbortSignal; protectedRoots?: readonly string[]; maxIndexedBytes?: number };
+type ScanOptions = { signal?: AbortSignal; protectedRoots?: readonly string[]; maxIndexedBytes?: number; beforeVerify?: () => void | Promise<void> };
 type FileSnapshot = { relativePath: string; kind: 'file' | 'directory'; bytes?: number; modifiedAt?: string; sha256?: string; parseStatus?: ProjectScanEntry['parseStatus'] };
 type ScanState = { entries: ProjectScanEntry[]; snapshots: FileSnapshot[]; issues: string[]; ignoredCount: number };
 
@@ -185,6 +185,7 @@ export async function scanProjectFolder(selectedPath: string, input: ScanOptions
   const state: ScanState = { entries: [], snapshots: [], issues: [], ignoredCount: 0 };
   const options = { maxIndexedBytes, ...(input.signal === undefined ? {} : { signal: input.signal }) };
   await walk(root, root, options, state);
+  await input.beforeVerify?.();
   await verifySnapshot(root, state, options);
   state.entries.sort(comparePath);
   state.issues = [...new Set(state.issues)].sort();

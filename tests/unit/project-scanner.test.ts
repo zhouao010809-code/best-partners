@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, symlink, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -14,6 +14,9 @@ describe('project scanner', () => {
     const root = await temp('basic');
     await mkdir(join(root, '.git'), { recursive: true });
     await mkdir(join(root, 'node_modules'), { recursive: true });
+    await mkdir(join(root, '.hg'), { recursive: true });
+    await mkdir(join(root, '.svn'), { recursive: true });
+    await mkdir(join(root, 'system'), { recursive: true });
     await mkdir(join(root, 'docs'), { recursive: true });
     await writeFile(join(root, '.git', 'ignored.md'), 'ignored');
     await writeFile(join(root, 'node_modules', 'ignored.txt'), 'ignored');
@@ -24,7 +27,7 @@ describe('project scanner', () => {
     const result = await scanProjectFolder(root);
     expect(result.sourceRoot).toBe(await realpath(root));
     expect(result.suggestedName).toBe(root.split('/').at(-1));
-    expect(result.ignoredCount).toBe(2);
+    expect(result.ignoredCount).toBe(5);
     expect(result.entries.map(entry => entry.relativePath)).toEqual([...result.entries].map(entry => entry.relativePath).sort());
     expect(result.entries.find(entry => entry.relativePath === 'docs/readme.md')).toMatchObject({ parseStatus: 'readable', content: '# Hello' });
     expect(result.entries.find(entry => entry.relativePath === 'notes.txt')).toMatchObject({ parseStatus: 'readable', content: 'plain text' });
@@ -58,9 +61,15 @@ describe('project scanner', () => {
     const root = await temp('change');
     await writeFile(join(root, 'note.txt'), 'before');
     await expect(scanProjectFolder(root, { protectedRoots: [root] })).rejects.toMatchObject({ code: 'PROJECT_ROOT_PROTECTED' });
-    await utimes(join(root, 'note.txt'), new Date(), new Date());
-    // The scanner performs a second stat/hash pass; a concurrent mutation is surfaced with a stable code.
-    const original = await scanProjectFolder(root);
-    expect(original.sourceSha256).toMatch(/^[a-f0-9]{64}$/u);
+    await expect(scanProjectFolder(root, {
+      beforeVerify: async () => { await writeFile(join(root, 'note.txt'), 'after'); }
+    })).rejects.toMatchObject({ code: 'PROJECT_SOURCE_CHANGED' });
+  });
+
+  it('honors an already-aborted signal', async () => {
+    const root = await temp('aborted');
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled'));
+    await expect(scanProjectFolder(root, { signal: controller.signal })).rejects.toThrow('cancelled');
   });
 });
