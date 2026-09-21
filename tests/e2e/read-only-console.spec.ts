@@ -190,9 +190,10 @@ test('renders the settings overview responsively and opens document issue detail
   await expect(cards).toHaveCount(3);
   const boxes = await cards.evaluateAll((items) => items.map((item) => {
     const box = item.getBoundingClientRect();
-    return { y: box.y, bottom: box.bottom };
+    return { y: box.y, bottom: box.bottom, left: box.left, right: box.right };
   }));
   expect(boxes.every((box, index) => index === 0 || box.y >= boxes[index - 1]!.bottom)).toBe(true);
+  expect(boxes.every((box) => box.left >= 0 && box.right <= 390)).toBe(true);
 });
 
 test('opens the dashboard deck by keyboard and restores the exact trigger on Escape', async ({ page }) => {
