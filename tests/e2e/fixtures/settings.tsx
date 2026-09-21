@@ -15,6 +15,7 @@ let failHealth = scenario === 'offline';
 let failSave = scenario === 'save-error';
 let failLocation = scenario === 'location-error';
 let failOpen = scenario === 'location-error';
+const updateAvailable = scenario === 'update-available';
 let credentialProblem = scenario === 'storage-error';
 let verification: { status: 'verified' | 'failed'; checkedAt: string; message: string } | undefined;
 const ok = <T,>(value: T) => ({ ok: true as const, value });
@@ -31,7 +32,14 @@ window.xiaozhaoDesktop = {
   getAppVersion: async () => '0.1.0', chooseVaultDirectory: async () => ({ selected: false, reason: 'unchanged' }),
   getVaultInfo: async () => { if (failLocation) { failLocation = false; throw new Error('Fixture location unavailable'); } return { displayName: '我的大脑 · 示例', path: '/Users/example/Documents/个人知识管理/我的大脑 · 示例' }; },
   openVaultDirectory: async () => { if (failOpen) { failOpen = false; throw new Error('Fixture Finder unavailable'); } },
-  revealDocument: async () => {}
+  revealDocument: async () => {},
+  checkForUpdates: async () => updateAvailable ? ({
+    status: 'available', currentVersion: '0.1.0', version: '0.1.1',
+    releaseUrl: 'https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.1',
+    assetUrl: 'https://github.com/zhouao010809-code/best-partners/releases/download/v0.1.1/best-partners-0.1.1-arm64.dmg',
+    publishedAt: '2026-09-18T00:00:00Z', notes: '修复 Skill 库同步问题'
+  }) : ({ status: 'up-to-date', currentVersion: '0.1.0', checkedAt: '2026-09-20T12:00:00Z' }),
+  openUpdateDownload: async () => {}
 };
 const api = {
   getHealth: async () => {
