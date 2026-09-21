@@ -172,6 +172,7 @@ export const projectFilePageSchema = z.strictObject({
   total: z.number().int().nonnegative(),
   revision: z.number().int().nonnegative()
 });
+export type ProjectFilePage = z.infer<typeof projectFilePageSchema>;
 
 export const projectContextSchema = z.strictObject({
   id: z.uuid(),
@@ -209,11 +210,7 @@ export interface ProjectService {
   get(id: string): Promise<ProjectSummary>;
   refresh(id: string, signal?: AbortSignal): Promise<ProjectSummary>;
   ensureFresh(id: string, signal?: AbortSignal): Promise<ProjectSummary>;
-  listFiles(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }): Promise<{
-    readonly items: readonly ProjectFile[];
-    readonly total: number;
-    readonly revision: number;
-  }>;
+  listFiles(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }): Promise<ProjectFilePage>;
   readFile(id: string, relativePath: string): Promise<ProjectFileDetail>;
   context(id: string): Promise<ProjectContext>;
 }

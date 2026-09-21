@@ -172,6 +172,7 @@ test('renders the settings overview responsively and opens document issue detail
   await expect(page.getByRole('heading', { level: 1, name: '设置', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { level: 2, name: '大脑文件夹', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { level: 2, name: 'AI 模型', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: '应用更新', exact: true })).toBeVisible();
 
   const issuesAlert = page.getByRole('status', { name: '资料检查提醒' });
   await expect(issuesAlert).toBeVisible();

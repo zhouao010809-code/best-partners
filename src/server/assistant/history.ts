@@ -19,7 +19,7 @@ export function listAssistantHistory(database: Database.Database, input: Assista
   const rows = database.prepare(`SELECT id, updated_at, json_remove(payload, '$.messages') AS metadata
     FROM assistant_conversations
     WHERE instr(lower(json_extract(payload, '$.title') || ' ' || coalesce(json_extract(payload, '$.contextPath'), '')), lower(@search)) > 0
-      ${query.projectId ? "AND json_extract(payload, '$.projectId') = @projectId" : ''}
+      ${query.projectId ? "AND json_extract(payload, '$.scope') = 'project' AND json_extract(payload, '$.projectId') = @projectId" : "AND coalesce(json_extract(payload, '$.scope'), 'brain') <> 'project'"}
       ${cursor ? 'AND (updated_at < @updatedAt OR (updated_at = @updatedAt AND id < @id))' : ''}
     ORDER BY updated_at DESC, id DESC LIMIT @limit`).all({ search, limit: query.limit + 1, ...(query.projectId ? { projectId: query.projectId } : {}), ...(cursor ? { updatedAt: cursor.updatedAt, id: cursor.id } : {}) }) as Array<{ id: string; updated_at: string; metadata: string }>;
   const hasMore = rows.length > query.limit;

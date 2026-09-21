@@ -103,7 +103,8 @@ it('filters assistant history by projectId without accepting a path selector', (
     const conversation = (id: string, scope: 'brain' | 'project', project?: string) => ({ id, title: scope, createdAt: now, updatedAt: now, status: 'idle' as const, providerId: 'test', model: 'pro', scope, ...(project ? { projectId: project, projectRevision: 1 } : {}), messages: [] });
     insert.run(randomUUID(), now, JSON.stringify(conversation(randomUUID(), 'brain')));
     insert.run(randomUUID(), now, JSON.stringify(conversation(randomUUID(), 'project', projectId)));
-    expect(listAssistantHistory(database).conversations).toHaveLength(2);
+    expect(listAssistantHistory(database).conversations).toHaveLength(1);
+    expect(listAssistantHistory(database).conversations[0]?.scope).toBe('brain');
     expect(listAssistantHistory(database, { projectId }).conversations).toHaveLength(1);
     expect(() => listAssistantHistory(database, { path: '/private/project' } as never)).toThrow();
   } finally {
