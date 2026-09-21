@@ -1,10 +1,28 @@
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createPasswordPdf, createTextPdf } from '../helpers/pdf-fixture.js';
 import { scanProjectFolder } from '../../src/server/projects/project-scanner.js';
+
+const race = vi.hoisted(() => ({ noteLstatCount: 0, mutate: false }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    lstat: async (path: string) => {
+      if (race.mutate && path.endsWith('/note.txt')) {
+        race.noteLstatCount += 1;
+        // The first scan performs two lstat calls for this file; mutate before
+        // the third call, which belongs to the second consistency pass.
+        if (race.noteLstatCount === 3) writeFileSync(path, 'after');
+      }
+      return actual.lstat(path);
+    }
+  };
+});
 
 const temp = (name: string) => mkdtemp(join(tmpdir(), `xiaozhao-scan-${name}-`));
 const sha256 = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
@@ -61,9 +79,10 @@ describe('project scanner', () => {
     const root = await temp('change');
     await writeFile(join(root, 'note.txt'), 'before');
     await expect(scanProjectFolder(root, { protectedRoots: [root] })).rejects.toMatchObject({ code: 'PROJECT_ROOT_PROTECTED' });
-    await expect(scanProjectFolder(root, {
-      beforeVerify: async () => { await writeFile(join(root, 'note.txt'), 'after'); }
-    })).rejects.toMatchObject({ code: 'PROJECT_SOURCE_CHANGED' });
+    race.noteLstatCount = 0;
+    race.mutate = true;
+    await expect(scanProjectFolder(root)).rejects.toMatchObject({ code: 'PROJECT_SOURCE_CHANGED' });
+    race.mutate = false;
   });
 
   it('honors an already-aborted signal', async () => {
