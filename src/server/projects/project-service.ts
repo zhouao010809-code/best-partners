@@ -1,7 +1,6 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { lstat, open, realpath } from 'node:fs/promises';
-import { lstatSync } from 'node:fs';
 import { basename, relative, sep } from 'node:path';
 import {
   projectContextSchema,
@@ -95,6 +94,12 @@ function contained(parent: string, candidate: string): boolean {
 }
 
 function publicFile(row: FileRow): ProjectFile {
+  const persistedProblem = row.parse_problem !== null && /^[A-Z][A-Z0-9_]{1,127}$/u.test(row.parse_problem) ? row.parse_problem : undefined;
+  const problem = persistedProblem ?? (
+    row.parse_status === 'unsupported' ? 'FILE_TYPE_UNSUPPORTED' :
+      row.parse_status === 'too-large' ? 'FILE_TOO_LARGE_FOR_INDEX' :
+        row.parse_status === 'failed' ? 'PARSE_FAILED' : undefined
+  );
   return {
     relativePath: row.relative_path,
     kind: row.kind,
@@ -102,7 +107,7 @@ function publicFile(row: FileRow): ProjectFile {
     ...(row.modified_at === null ? {} : { modifiedAt: row.modified_at }),
     ...(row.sha256 === null ? {} : { sha256: row.sha256 }),
     ...(row.parse_status === null ? {} : { parseStatus: row.parse_status }),
-    ...(row.parse_problem === null ? {} : { problem: row.parse_problem }),
+    ...(problem === undefined ? {} : { problem }),
     origin: row.origin
   };
 }
@@ -223,6 +228,16 @@ async function canonicalBoundRoot(root: string): Promise<string> {
   }
 }
 
+async function canonicalProposalRoot(root: string, protectedRootPaths: readonly string[]): Promise<string> {
+  try {
+    return await canonicalProjectRoot(root, { protectedRoots: protectedRootPaths });
+  } catch (error) {
+    if (isCoded(error, 'PROJECT_ROOT_PROTECTED')) throw coded('PROJECT_ROOT_PROTECTED', 'Project root overlaps a protected root');
+    if (isCoded(error, 'PROJECT_ROOT_RECONNECT_REQUIRED')) throw error;
+    throw coded('PROJECT_ROOT_RECONNECT_REQUIRED', 'Project root is unavailable');
+  }
+}
+
 export function createProjectService(input: {
   database: Database.Database;
   vaultRoot: string;
@@ -241,6 +256,18 @@ export function createProjectService(input: {
   async function scanWithOptions(rootPath: string, signal?: AbortSignal): Promise<ProjectScanResult> {
     const options = { protectedRoots: protectedRoots(input.vaultRoot, input.stateRoot), ...(signal === undefined ? {} : { signal }) };
     return scan(rootPath, options);
+  }
+
+  async function scanProposalRoot(rootPath: string): Promise<ProjectScanResult> {
+    try {
+      return await scanWithOptions(rootPath);
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error ? String((error as CodedError).code) : '';
+      if (['PROJECT_ROOT_INVALID', 'PROJECT_ROOT_SYMLINK', 'PROJECT_ROOT_PROTECTED', 'PROJECT_ROOT_RECONNECT_REQUIRED', 'ENOENT', 'ENOTDIR', 'ELOOP', 'EACCES'].includes(code)) {
+        throw coded('PROJECT_ROOT_RECONNECT_REQUIRED', 'Project root is unavailable');
+      }
+      throw error;
+    }
   }
 
   function withLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
@@ -284,14 +311,6 @@ export function createProjectService(input: {
     const rows = database.prepare('SELECT id, root_path FROM personal_projects').all() as Array<{ id: string; root_path: string }>;
     for (const existing of rows) {
       if (existing.id === excludeId) continue;
-      try {
-        const info = lstatSync(existing.root_path);
-        if (info.isSymbolicLink() || !info.isDirectory()) continue;
-      } catch (error) {
-        const code = error && typeof error === 'object' && 'code' in error ? String((error as NodeJS.ErrnoException).code) : '';
-        if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ELOOP') continue;
-        throw error;
-      }
       if (contained(existing.root_path, root) || contained(root, existing.root_path)) throw coded('PROJECT_ROOT_OVERLAP', 'Project root overlaps an existing project');
     }
   }
@@ -316,9 +335,9 @@ export function createProjectService(input: {
       const row = scanRowOrThrow(database, scanId);
       const proposal = parseScan(row);
       assertAvailableScan(row, proposal, bindInput.sourceSha256);
-      const root = await canonicalProjectRoot(proposal.sourceRoot, { protectedRoots: protectedRoots(input.vaultRoot, input.stateRoot) });
+      const root = await canonicalProposalRoot(proposal.sourceRoot, protectedRoots(input.vaultRoot, input.stateRoot));
       if (root !== proposal.sourceRoot) throw coded('PROJECT_ROOT_CHANGED', 'Project root changed since scan');
-      const rescanned = await scanWithOptions(proposal.sourceRoot);
+      const rescanned = await scanProposalRoot(proposal.sourceRoot);
       if (rescanned.sourceSha256 !== proposal.sourceSha256) throw coded('PROJECT_SCAN_HASH_MISMATCH', 'Project source changed since scan');
       const timestamp = dateText(now());
       const id = makeId();
@@ -405,8 +424,8 @@ export function createProjectService(input: {
       const row = scanRowOrThrow(database, scanId);
       const proposal = parseScan(row);
       assertAvailableScan(row, proposal, reconnectInput.sourceSha256);
-      const root = await canonicalProjectRoot(proposal.sourceRoot, { protectedRoots: protectedRoots(input.vaultRoot, input.stateRoot) });
-      const rescanned = await scanWithOptions(root);
+      const root = await canonicalProposalRoot(proposal.sourceRoot, protectedRoots(input.vaultRoot, input.stateRoot));
+      const rescanned = await scanProposalRoot(root);
       if (rescanned.sourceSha256 !== proposal.sourceSha256) throw coded('PROJECT_SCAN_HASH_MISMATCH', 'Project source changed since scan');
       const revision = project.source_revision + 1;
       const timestamp = dateText(now());
@@ -470,10 +489,11 @@ export function createProjectService(input: {
       if (!contained(canonicalRoot, canonicalFile)) throw coded('PROJECT_FILE_UNAVAILABLE', 'Project file is outside the project root');
       const handle = await open(absolute, 'r');
       try {
-        const buffer = Buffer.allocUnsafe(MAX_CONTENT_CHARACTERS + 1);
+        const buffer = Buffer.allocUnsafe(MAX_CONTENT_CHARACTERS * 4 + 1);
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        const content = buffer.subarray(0, bytesRead).toString('utf8');
-        return projectFileDetailSchema.parse({ ...metadata, content, totalCharacters: content.length, truncated: bytesRead > MAX_CONTENT_CHARACTERS });
+        const decoded = buffer.subarray(0, bytesRead).toString('utf8');
+        const content = decoded.slice(0, MAX_CONTENT_CHARACTERS);
+        return projectFileDetailSchema.parse({ ...metadata, content, totalCharacters: content.length, truncated: decoded.length > MAX_CONTENT_CHARACTERS || bytesRead === buffer.length });
       } finally {
         await handle.close();
       }

@@ -89,6 +89,7 @@ describe('personal project registry and index', () => {
     const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
     await rm(f.projectRoot, { recursive: true, force: true });
     expect((await f.service.refresh(summary.id)).availability).toBe('reconnect-required');
+    expect((await f.service.listFiles(summary.id, {})).items.length).toBeGreaterThan(0);
     expect((await f.service.ensureFresh(summary.id)).availability).toBe('reconnect-required');
     const count = f.database.prepare('SELECT COUNT(*) AS count FROM personal_project_operations WHERE project_id = ?').get(summary.id) as { count: number };
     expect(count.count).toBe(1);
@@ -112,6 +113,24 @@ describe('personal project registry and index', () => {
     const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
     const binary = (await f.service.listFiles(summary.id, { search: 'binary.md' })).items[0];
     expect(binary).toMatchObject({ parseStatus: 'failed' });
+    expect(binary?.problem).toBe('PARSE_FAILED');
     expect((await f.service.listFiles(summary.id, { search: '获客' })).total).toBe(1);
+  });
+
+  it('refreshes after the freshness throttle and exposes stable problems for unsupported and oversized files', async () => {
+    const f = await fixture();
+    await writeFile(join(f.projectRoot, 'archive.bin'), Buffer.from([1, 2, 3]));
+    await writeFile(join(f.projectRoot, 'large.md'), Buffer.alloc(2 * 1024 * 1024 + 1, 'x'));
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    await writeFile(join(f.projectRoot, 'brief.txt'), '外部编辑后的选题\n');
+    f.advance(1_001);
+    const refreshed = await f.service.ensureFresh(summary.id);
+    expect(refreshed.sourceRevision).toBe(2);
+    expect((await f.service.listFiles(summary.id, { search: '外部编辑' })).total).toBe(1);
+    expect((await f.service.listFiles(summary.id, { search: 'archive.bin' })).items[0]).toMatchObject({ parseStatus: 'unsupported', problem: 'FILE_TYPE_UNSUPPORTED' });
+    expect((await f.service.listFiles(summary.id, { search: 'large.md' })).items[0]).toMatchObject({ parseStatus: 'too-large', problem: 'FILE_TOO_LARGE_FOR_INDEX' });
+    expect(await f.service.readFile(summary.id, 'archive.bin')).toMatchObject({ parseStatus: 'unsupported', problem: 'FILE_TYPE_UNSUPPORTED' });
+    expect(await f.service.readFile(summary.id, 'large.md')).toMatchObject({ parseStatus: 'too-large', problem: 'FILE_TOO_LARGE_FOR_INDEX' });
   });
 });
