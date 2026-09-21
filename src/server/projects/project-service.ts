@@ -69,6 +69,7 @@ interface FileRow {
 const MAX_CONTENT_CHARACTERS = 200_000;
 const SCAN_TTL_MS = 15 * 60 * 1000;
 const FRESHNESS_TTL_MS = 1_000;
+const MAX_FILE_SEARCH_CANDIDATES = 5_000;
 
 function coded(code: string, message: string, cause?: unknown): CodedError {
   const error = new Error(message, cause === undefined ? undefined : { cause }) as CodedError;
@@ -157,6 +158,16 @@ function parseScan(row: ScanRow): ScanProposal {
 
 function isExpired(proposal: ScanProposal, now: Date): boolean {
   return Date.parse(proposal.expiresAt) <= now.getTime();
+}
+
+function sanitizeScanError(error: unknown): CodedError {
+  const code = error instanceof Error && 'code' in error ? String((error as CodedError).code) : '';
+  if (code === 'PROJECT_SOURCE_CHANGED') return coded('PROJECT_SOURCE_CHANGED', 'Project source changed during scan');
+  if (code === 'PROJECT_ROOT_PROTECTED') return coded('PROJECT_ROOT_PROTECTED', 'Project root overlaps a protected root');
+  if (code === 'PROJECT_ROOT_SYMLINK') return coded('PROJECT_ROOT_SYMLINK', 'Project root must not be a symbolic link');
+  if (code === 'PROJECT_ROOT_INVALID' || code === 'PROJECT_ROOT_RECONNECT_REQUIRED') return coded('PROJECT_ROOT_RECONNECT_REQUIRED', 'Project root is unavailable');
+  if (['ENOENT', 'ENOTDIR', 'ELOOP', 'EACCES', 'EPERM'].includes(code)) return coded('PROJECT_SCAN_FAILED', 'Project scan could not access the selected folder');
+  return coded('PROJECT_SCAN_FAILED', 'Project scan failed');
 }
 
 function guidanceFiles(entries: readonly ProjectScanEntry[]): string[] {
@@ -298,7 +309,11 @@ export function createProjectService(input: {
   }
 
   async function scanPublic(rootPath: string, signal?: AbortSignal): Promise<ProjectScanPreview> {
-    return previewFromProposal(await scanFolder(rootPath, signal));
+    try {
+      return previewFromProposal(await scanFolder(rootPath, signal));
+    } catch (error) {
+      throw sanitizeScanError(error);
+    }
   }
 
   function assertAvailableScan(row: ScanRow, proposal: ScanProposal, sourceSha256: string): void {
@@ -359,13 +374,17 @@ export function createProjectService(input: {
 
   async function setRefreshFailure(row: ProjectRow, availability: ProjectRow['availability'], error: unknown): Promise<ProjectSummary> {
     const timestamp = dateText(now());
-    database.transaction(() => {
-      database.prepare('UPDATE personal_projects SET availability = ?, updated_at = ? WHERE id = ?').run(availability, timestamp, row.id);
+    const transaction = database.transaction(() => {
+      const updated = database.prepare('UPDATE personal_projects SET availability = ?, updated_at = ? WHERE id = ? AND source_revision = ? AND root_path = ?')
+        .run(availability, timestamp, row.id, row.source_revision, row.root_path);
+      if (updated.changes !== 1) return false;
       database.prepare(`INSERT INTO personal_project_operations
         (id, project_id, plan_id, event_type, target_path, old_sha256, new_sha256, payload_json, created_at)
         VALUES (?, ?, NULL, 'project-refresh', '__refresh__', NULL, NULL, ?, ?)`)
         .run(makeId(), row.id, JSON.stringify({ status: 'failed', code: error instanceof Error && 'code' in error ? (error as CodedError).code : 'PROJECT_REFRESH_FAILED' }), timestamp);
-    }).immediate();
+      return true;
+    });
+    transaction.immediate();
     return projectSummary(rowOrThrow(database, row.id), database);
   }
 
@@ -389,17 +408,25 @@ export function createProjectService(input: {
     }
     const revision = row.source_revision + 1;
     const timestamp = dateText(now());
-    const transaction = database.transaction(() => {
-      database.prepare('DELETE FROM personal_project_files WHERE project_id = ?').run(id);
+    try {
+      const transaction = database.transaction(() => {
+        const guarded = database.prepare(`UPDATE personal_projects
+          SET source_revision = ?, source_sha256 = ?, availability = 'ready', updated_at = ?, last_scanned_at = ?
+          WHERE id = ? AND source_revision = ? AND root_path = ?`)
+          .run(revision, result.sourceSha256, timestamp, timestamp, id, row.source_revision, row.root_path);
+        if (guarded.changes !== 1) throw coded('PROJECT_STALE', 'Project changed while refreshing');
+        database.prepare('DELETE FROM personal_project_files WHERE project_id = ?').run(id);
       insertIndex(id, revision, result.entries);
-      database.prepare(`UPDATE personal_projects SET source_revision = ?, source_sha256 = ?, availability = 'ready', updated_at = ?, last_scanned_at = ? WHERE id = ?`)
-        .run(revision, result.sourceSha256, timestamp, timestamp, id);
       database.prepare(`INSERT INTO personal_project_operations
         (id, project_id, plan_id, event_type, target_path, old_sha256, new_sha256, payload_json, created_at)
         VALUES (?, ?, NULL, 'project-refresh', '__refresh__', ?, ?, ?, ?)`)
         .run(makeId(), id, row.source_sha256, result.sourceSha256, JSON.stringify({ status: 'completed', revision }), timestamp);
-    });
-    transaction.immediate();
+      });
+      transaction.immediate();
+    } catch (error) {
+      if (isCoded(error, 'PROJECT_STALE')) return projectSummary(rowOrThrow(database, id), database);
+      throw error;
+    }
     return projectSummary(rowOrThrow(database, id), database);
   }
 
@@ -419,7 +446,7 @@ export function createProjectService(input: {
   }
 
   async function reconnect(id: string, scanId: string, reconnectInput: { sourceSha256: string; displayName?: string }): Promise<ProjectSummary> {
-    return withLock('projects', async () => {
+    return withLock('projects', () => withLock(`project:${id}`, async () => {
       const project = rowOrThrow(database, id);
       const row = scanRowOrThrow(database, scanId);
       const proposal = parseScan(row);
@@ -429,10 +456,14 @@ export function createProjectService(input: {
       if (rescanned.sourceSha256 !== proposal.sourceSha256) throw coded('PROJECT_SCAN_HASH_MISMATCH', 'Project source changed since scan');
       const revision = project.source_revision + 1;
       const timestamp = dateText(now());
-      const transaction = database.transaction(() => {
+      try {
+        const transaction = database.transaction(() => {
+        const guarded = database.prepare(`UPDATE personal_projects
+          SET root_path = ?, display_name = ?, source_revision = ?, source_sha256 = ?, availability = 'ready', updated_at = ?, last_scanned_at = ?
+          WHERE id = ? AND source_revision = ? AND root_path = ?`)
+          .run(root, reconnectInput.displayName?.trim() || project.display_name, revision, rescanned.sourceSha256, timestamp, timestamp, id, project.source_revision, project.root_path);
+        if (guarded.changes !== 1) throw coded('PROJECT_STALE', 'Project changed while reconnecting');
         assertNoOverlap(root, id);
-        database.prepare(`UPDATE personal_projects SET root_path = ?, display_name = ?, source_revision = ?, source_sha256 = ?, availability = 'ready', updated_at = ?, last_scanned_at = ? WHERE id = ?`)
-          .run(root, reconnectInput.displayName?.trim() || project.display_name, revision, rescanned.sourceSha256, timestamp, timestamp, id);
         database.prepare('DELETE FROM personal_project_files WHERE project_id = ?').run(id);
         insertIndex(id, revision, rescanned.entries);
         database.prepare("UPDATE personal_project_write_plans SET status = 'stale', updated_at = ? WHERE project_id = ? AND status IN ('pending', 'running')").run(timestamp, id);
@@ -441,10 +472,14 @@ export function createProjectService(input: {
           VALUES (?, ?, NULL, 'project-reconnect', '__root__', ?, ?, ?, ?)`)
           .run(makeId(), id, project.source_sha256, rescanned.sourceSha256, JSON.stringify({ status: 'completed', revision }), timestamp);
         markScanConfirmed(scanId, id, timestamp);
-      });
-      transaction.immediate();
+        });
+        transaction.immediate();
+      } catch (error) {
+        if (isCoded(error, 'PROJECT_STALE')) return projectSummary(rowOrThrow(database, id), database);
+        throw error;
+      }
       return projectSummary(rowOrThrow(database, id), database);
-    });
+    }));
   }
 
   async function list(): Promise<readonly ProjectSummary[]> {
@@ -459,8 +494,16 @@ export function createProjectService(input: {
     const project = rowOrThrow(database, id);
     const limit = Math.min(200, Math.max(1, Math.trunc(query.limit ?? 50)));
     const tokens = (query.search ?? '').trim().toLocaleLowerCase().split(/\s+/u).filter(Boolean);
-    const rows = database.prepare(`SELECT * FROM personal_project_files WHERE project_id = ?${query.origin === undefined ? '' : ' AND origin = ?'} ORDER BY relative_path ASC`)
-      .all(...(query.origin === undefined ? [id] : [id, query.origin])) as FileRow[];
+    const searchClause = tokens.length === 0 ? '' : ` AND ${tokens.map(() => '(lower(relative_path) LIKE ? OR lower(COALESCE(content_text, \'\')) LIKE ?)').join(' AND ')}`;
+    const select = tokens.length === 0
+      ? 'relative_path, kind, bytes, modified_at, sha256, parse_status, parse_problem, origin, indexed_revision'
+      : 'relative_path, kind, bytes, modified_at, sha256, parse_status, parse_problem, content_text, origin, indexed_revision';
+    const params: unknown[] = [id];
+    if (query.origin !== undefined) params.push(query.origin);
+    for (const token of tokens) params.push(`%${token}%`, `%${token}%`);
+    params.push(MAX_FILE_SEARCH_CANDIDATES);
+    const rows = database.prepare(`SELECT ${select} FROM personal_project_files WHERE project_id = ?${query.origin === undefined ? '' : ' AND origin = ?'}${searchClause} ORDER BY relative_path ASC LIMIT ?`)
+      .all(...params) as FileRow[];
     const matched = rows.filter((row) => {
       if (tokens.length === 0) return true;
       const haystack = `${row.relative_path}\n${row.content_text ?? ''}`.toLocaleLowerCase();
@@ -481,10 +524,10 @@ export function createProjectService(input: {
     if (row.parse_status !== 'readable' || row.kind !== 'file') return projectFileDetailSchema.parse(metadata);
     let absolute: string;
     try {
-      absolute = resolveProjectPath(project.root_path, relativePath);
+      const canonicalRoot = await canonicalBoundRoot(project.root_path);
+      absolute = resolveProjectPath(canonicalRoot, relativePath);
       const info = await lstat(absolute);
       if (info.isSymbolicLink() || !info.isFile()) throw coded('PROJECT_FILE_UNAVAILABLE', 'Project file is unavailable');
-      const canonicalRoot = await realpath(project.root_path);
       const canonicalFile = await realpath(absolute);
       if (!contained(canonicalRoot, canonicalFile)) throw coded('PROJECT_FILE_UNAVAILABLE', 'Project file is outside the project root');
       const handle = await open(absolute, 'r');
@@ -498,7 +541,7 @@ export function createProjectService(input: {
         await handle.close();
       }
     } catch (error) {
-      const problem = isCoded(error, 'PROJECT_FILE_UNAVAILABLE') ? 'PROJECT_FILE_UNAVAILABLE' : 'PROJECT_FILE_CHANGED';
+      const problem = isCoded(error, 'PROJECT_ROOT_RECONNECT_REQUIRED') ? 'PROJECT_ROOT_RECONNECT_REQUIRED' : isCoded(error, 'PROJECT_FILE_UNAVAILABLE') ? 'PROJECT_FILE_UNAVAILABLE' : 'PROJECT_FILE_CHANGED';
       return projectFileDetailSchema.parse({ ...metadata, problem });
     }
   }

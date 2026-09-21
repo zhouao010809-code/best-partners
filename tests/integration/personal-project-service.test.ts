@@ -197,4 +197,67 @@ describe('personal project registry and index', () => {
     expect(await f.service.readFile(summary.id, 'archive.bin')).toMatchObject({ parseStatus: 'unsupported', problem: 'FILE_TYPE_UNSUPPORTED' });
     expect(await f.service.readFile(summary.id, 'large.md')).toMatchObject({ parseStatus: 'too-large', problem: 'FILE_TOO_LARGE_FOR_INDEX' });
   });
+
+  it('does not read through a replaced project-root symlink', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const external = join(f.root, 'external-target');
+    await mkdir(external);
+    await writeFile(join(external, 'README.md'), '外部目录绝不能被读取');
+    await rm(f.projectRoot, { recursive: true, force: true });
+    await symlink(external, f.projectRoot);
+    const detail = await f.service.readFile(summary.id, 'README.md');
+    expect(detail.problem).toBe('PROJECT_ROOT_RECONNECT_REQUIRED');
+    expect(detail.content).toBeUndefined();
+  });
+
+  it('sanitizes scanner errors before exposing them from scan', async () => {
+    const f = await fixture();
+    const service = createProjectService({
+      database: f.database,
+      vaultRoot: f.vaultRoot,
+      stateRoot: f.stateRoot,
+      scan: async () => {
+        const error = new Error(`permission denied: ${f.projectRoot}`) as Error & { code: string };
+        error.code = 'EACCES';
+        throw error;
+      }
+    });
+    await expect(service.scan(f.projectRoot)).rejects.toSatisfy((error: unknown) => {
+      expect(String(error)).not.toContain(f.projectRoot);
+      expect(error).toMatchObject({ code: 'PROJECT_SCAN_FAILED' });
+      return true;
+    });
+  });
+
+  it('guards refresh commits across two service instances', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const secondService = createProjectService({ database: f.database, vaultRoot: f.vaultRoot, stateRoot: f.stateRoot });
+    await writeFile(join(f.projectRoot, 'brief.txt'), '两个实例同时刷新');
+    const results = await Promise.all([f.service.refresh(summary.id), secondService.refresh(summary.id)]);
+    const final = await f.service.get(summary.id);
+    const revisions = f.database.prepare('SELECT DISTINCT indexed_revision AS revision FROM personal_project_files WHERE project_id = ?').all(summary.id) as Array<{ revision: number }>;
+    expect(final.sourceRevision).toBe(2);
+    expect(revisions).toEqual([{ revision: 2 }]);
+    expect(results.every((item) => item.sourceRevision === 2)).toBe(true);
+  });
+
+  it('bounds large search candidate sets before returning the requested page', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const insert = f.database.prepare(`INSERT INTO personal_project_files
+      (project_id, relative_path, kind, bytes, modified_at, sha256, parse_status, parse_problem, content_text, origin, indexed_revision)
+      VALUES (?, ?, 'file', 6, ?, ?, 'readable', NULL, ?, 'source', ?)`);
+    const timestamp = '2026-09-22T00:00:00.000Z';
+    for (let index = 0; index < 5_005; index += 1) {
+      insert.run(summary.id, `bulk/${String(index).padStart(5, '0')}.md`, timestamp, '0'.repeat(64), `needle-${index}`, summary.sourceRevision);
+    }
+    const page = await f.service.listFiles(summary.id, { search: 'needle', limit: 200 });
+    expect(page.items).toHaveLength(200);
+    expect(page.total).toBeLessThanOrEqual(5_000);
+  });
 });
