@@ -94,10 +94,14 @@ export function createOperationLedger(sources: Sources) {
     await collect('收件箱回收', sources.intakeTrash && (() => sources.intakeTrash!().items.map(row => recycled(row, true))));
     await collect('项目输出', sources.projectOperations && (async () => {
       const rows = await sources.projectOperations!();
-      return rows.map(row => {
+      // Refresh/reconnect receipts intentionally stay in the project service.
+      // The global ledger exposes only output receipts, whose target is a
+      // public project-relative path (never the private root or sentinel
+      // paths used for refresh bookkeeping).
+      return rows.filter(row => row.eventType === 'project-write').map(row => {
         const done = row.status === 'completed';
         const stale = row.status === 'stale';
-        return { id: `project-write:${row.id}`, sourceId: row.id, title: `项目输出 · ${row.targetPath}`, kind: 'project-write',
+        return { id: `project:${row.id}`, sourceId: row.id, title: `项目输出 · ${row.targetPath}`, kind: 'project-output',
           bucket: done ? 'history' : 'attention', statusLabel: done ? '已保存' : stale ? '计划已失效' : '写入未完成',
           occurredAt: row.createdAt, timeLabel: '操作时间', paths: [row.targetPath],
           summary: done ? '内容已保存到项目 AI 工作区。' : stale ? '项目内容已变化，这次计划没有写入。' : '项目输出没有完成，保留了操作记录。',

@@ -126,7 +126,7 @@ export const operationQuerySchema = z.object({
 }).strict();
 export const operationRecordSchema = z.object({
   id: z.string().min(1), sourceId: z.string().min(1), title: z.string().min(1),
-  kind: z.enum(['archive', 'extraction', 'ingestion', 'trash', 'restore', 'delete', 'project-write']),
+  kind: z.enum(['archive', 'extraction', 'ingestion', 'trash', 'restore', 'delete', 'project-output', 'project-write']),
   bucket: z.enum(['attention', 'running', 'history']), statusLabel: z.string(),
   occurredAt: z.iso.datetime().optional(), timeLabel: z.string().optional(),
   summary: z.string(), preserved: z.string(), nextStep: z.string(), paths: z.array(z.string()),

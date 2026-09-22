@@ -9,7 +9,7 @@ import '../styles/operations.css';
 
 type View = NonNullable<OperationQuery['view']>;
 const views: { id: View; label: string }[] = [{ id: 'attention', label: '需要处理' }, { id: 'running', label: '进行中' }, { id: 'all', label: '全部记录' }];
-const kinds: Record<OperationRecord['kind'], string> = { archive: '资料归档', extraction: 'AI 提炼', ingestion: '知识入库', trash: '移入回收站', restore: '恢复资料', delete: '彻底删除', 'project-write': '项目输出' };
+const kinds: Record<OperationRecord['kind'], string> = { archive: '资料归档', extraction: 'AI 提炼', ingestion: '知识入库', trash: '移入回收站', restore: '恢复资料', delete: '彻底删除', 'project-output': '项目输出', 'project-write': '项目输出' };
 const dateLabel = (record: OperationRecord) => record.occurredAt ? new Date(record.occurredAt).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '历史记录 · 时间未记录';
 const timeLabel = (record: OperationRecord) => record.occurredAt ? new Date(record.occurredAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '时间未记录';
 
