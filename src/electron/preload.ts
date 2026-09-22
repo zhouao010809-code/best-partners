@@ -11,5 +11,7 @@ contextBridge.exposeInMainWorld('xiaozhaoDesktop', Object.freeze({
   revealSkill: (skillId) => ipcRenderer.invoke('desktop:reveal-skill', skillId),
   openClipperInstall: () => ipcRenderer.invoke('desktop:open-clipper-install'),
   installClipperHost: () => ipcRenderer.invoke('desktop:install-clipper-host'),
-  getClipperStatus: (test) => ipcRenderer.invoke('desktop:clipper-status', test)
+  getClipperStatus: (test) => ipcRenderer.invoke('desktop:clipper-status', test),
+  checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
+  openUpdateDownload: (url) => ipcRenderer.invoke('desktop:open-update-download', url)
 } satisfies XiaozhaoDesktopApi));

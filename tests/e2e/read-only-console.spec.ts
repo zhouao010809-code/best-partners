@@ -165,6 +165,37 @@ test('keeps every secondary read page within the 390px viewport', async ({ page 
   }
 });
 
+test('renders the settings overview responsively and opens document issue details', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openPage(page, '/settings');
+
+  await expect(page.getByRole('heading', { level: 1, name: '设置', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: '大脑文件夹', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: 'AI 模型', exact: true })).toBeVisible();
+
+  const issuesAlert = page.getByRole('status', { name: '资料检查提醒' });
+  await expect(issuesAlert).toBeVisible();
+  await expect(issuesAlert).toContainText('3 项资料待确认');
+  await expect(issuesAlert.getByRole('button', { name: '查看待确认资料', exact: true })).toBeVisible();
+  await issuesAlert.getByRole('button', { name: '查看待确认资料', exact: true }).click();
+  const issues = page.getByRole('region', { name: '待确认资料' });
+  await expect(issues).toBeVisible();
+  await expect(issues.getByRole('heading', { level: 2, name: '待确认资料', exact: true })).toBeVisible();
+  await expect(issues.locator('li')).toHaveCount(3);
+  await expect(issues.locator('li').first().locator('strong')).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoRootOverflow(page);
+  const cards = page.locator('.settings-primary-grid > .settings-card');
+  await expect(cards).toHaveCount(3);
+  const boxes = await cards.evaluateAll((items) => items.map((item) => {
+    const box = item.getBoundingClientRect();
+    return { y: box.y, bottom: box.bottom, left: box.left, right: box.right };
+  }));
+  expect(boxes.every((box, index) => index === 0 || box.y >= boxes[index - 1]!.bottom)).toBe(true);
+  expect(boxes.every((box) => box.left >= 0 && box.right <= 390)).toBe(true);
+});
+
 test('opens the dashboard deck by keyboard and restores the exact trigger on Escape', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await openPage(page, '/');
@@ -290,7 +321,7 @@ test('renders safe connection diagnostics without leaking server secrets', async
   await expect(page.getByText(/此项仅诊断旧版通用接口；个人 App 的确认归档和候选入库使用独立入口/u)).toBeVisible();
   await expect(page.getByRole('button', { name: '更换大脑文件夹' })).toBeDisabled();
   await expect(page.getByText('请在桌面 App 中更换大脑文件夹')).toBeVisible();
-  await expect(page.getByText('DeepSeek 设置将在后续阶段启用')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'DeepSeek 设置' })).toBeVisible();
 
   const dom = await page.locator('html').evaluate((element) => element.outerHTML);
   expect(dom).not.toContain(SERVER_SECRET);

@@ -1,0 +1,178 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  RELEASES_URL,
+  RELEASE_PAGE_URL,
+  checkForUpdate,
+  type UpdateCheckResult,
+} from '../../src/electron/update-check';
+
+const release = (overrides: Record<string, unknown> = {}) => {
+  const tag = String(overrides.tag_name ?? 'v0.1.2');
+  const tagPath = tag.replace(/^v/, '');
+  return {
+  tag_name: 'v0.1.2',
+  draft: false,
+  prerelease: false,
+  html_url: `${RELEASE_PAGE_URL}/tag/${tag}`,
+  body: '## Notes\n\n**Fast** fix [details](https://example.invalid/details).',
+  published_at: '2026-09-20T00:00:00Z',
+  assets: [
+    { name: `Best-Partners-${tagPath}-arm64.dmg`, browser_download_url: `https://github.com/zhouao010809-code/best-partners/releases/download/${tag}/Best-Partners-${tagPath}-arm64.dmg` },
+    { name: `Best-Partners-${tagPath}-x64.dmg`, browser_download_url: `https://github.com/zhouao010809-code/best-partners/releases/download/${tag}/Best-Partners-${tagPath}-x64.dmg` },
+  ],
+  ...overrides,
+  };
+};
+
+const fetcher = (payload: unknown, status = 200) => vi.fn(async () => new Response(JSON.stringify(payload), { status }));
+const input = (currentVersion: string, payload: unknown, extra: Record<string, unknown> = {}) => ({
+  currentVersion,
+  fetcher: fetcher(payload),
+  now: () => new Date('2026-09-20T12:00:00Z'),
+  ...extra,
+});
+
+function expectError(result: UpdateCheckResult, code: string) {
+  expect(result.status).toBe('error');
+  if (result.status === 'error') expect(result.code).toBe(code);
+}
+
+describe('checkForUpdate', () => {
+  it('exports the stable GitHub feed URLs', () => {
+    expect(RELEASES_URL).toBe('https://api.github.com/repos/zhouao010809-code/best-partners/releases?per_page=20');
+    expect(RELEASE_PAGE_URL).toBe('https://github.com/zhouao010809-code/best-partners/releases');
+  });
+
+  it('selects the highest stable arm64 release and sanitizes notes', async () => {
+    const result = await checkForUpdate(input('0.1.1', [
+      release({ tag_name: 'v9.0.0', draft: true }),
+      release({ tag_name: 'v0.1.2-beta.1', prerelease: true }),
+      release({ tag_name: 'v0.1.1' }),
+      release({ tag_name: 'v0.1.2' }),
+      release({ tag_name: 'v0.1.3' }),
+    ]));
+    expect(result).toMatchObject({ status: 'available', currentVersion: '0.1.1', version: '0.1.3', releaseUrl: `${RELEASE_PAGE_URL}/tag/v0.1.3` });
+    if (result.status === 'available') {
+      expect(result.assetUrl).toContain('v0.1.3/');
+      expect(result.notes).toBe('Notes\n\nFast fix details.');
+      expect(result.publishedAt).toBe('2026-09-20T00:00:00Z');
+    }
+  });
+
+  it('accepts common extra fields from the GitHub Release API', async () => {
+    const result = await checkForUpdate(input('0.1.1', [release({
+      id: 123,
+      url: 'https://api.github.com/repos/zhouao010809-code/best-partners/releases/123',
+      node_id: 'RE_kwDO123',
+      assets_url: 'https://api.github.com/repos/zhouao010809-code/best-partners/releases/123/assets',
+      author: { login: 'release-bot', id: 1 },
+      assets: [{
+        name: 'Best-Partners-0.1.2-arm64.dmg',
+        browser_download_url: 'https://github.com/zhouao010809-code/best-partners/releases/download/v0.1.2/Best-Partners-0.1.2-arm64.dmg',
+        id: 456,
+        url: 'https://api.github.com/repos/zhouao010809-code/best-partners/releases/assets/456',
+        state: 'uploaded',
+        size: 1234,
+        created_at: '2026-09-20T00:00:00Z',
+        updated_at: '2026-09-20T00:00:00Z',
+      }],
+    })]));
+    expect(result).toMatchObject({ status: 'available', version: '0.1.2' });
+  });
+
+  it('skips prerelease releases for stable apps', async () => {
+    const result = await checkForUpdate(input('0.1.1', [release({ tag_name: 'v0.1.2-beta.1', prerelease: true })]));
+    expect(result).toMatchObject({ status: 'up-to-date', currentVersion: '0.1.1' });
+  });
+
+  it('skips releases with illegal tags', async () => {
+    const result = await checkForUpdate(input('0.1.1', [release({ tag_name: 'not-a-version' })]));
+    expect(result).toMatchObject({ status: 'up-to-date', currentVersion: '0.1.1' });
+  });
+
+  it('allows a prerelease app to upgrade to a higher prerelease', async () => {
+    const result = await checkForUpdate(input('0.1.2-beta.1', [release({ tag_name: 'v0.1.2-beta.2', prerelease: true })]));
+    expect(result).toMatchObject({ status: 'available', version: '0.1.2-beta.2' });
+  });
+
+  it('returns up-to-date when there is no matching arm64 asset', async () => {
+    const result = await checkForUpdate(input('0.1.1', [release({ assets: [{ name: 'Best-Partners-0.1.2-x64.dmg', browser_download_url: 'https://github.com/x/x/releases/download/v0.1.2/x.dmg' }] })]));
+    expect(result).toMatchObject({ status: 'up-to-date', currentVersion: '0.1.1' });
+  });
+
+  it('truncates long notes by Unicode characters', async () => {
+    const result = await checkForUpdate(input('0.1.1', [release({ body: '😀'.repeat(5000) })]));
+    expect(result.status).toBe('available');
+    if (result.status === 'available') expect(Array.from(result.notes)).toHaveLength(4000);
+  });
+
+  it('rejects a non-string asset URL as an invalid feed', async () => {
+    expectError(await checkForUpdate(input('0.1.1', [release({ assets: [{ name: 'x-arm64.dmg', browser_download_url: 42 }] })])), 'UPDATE_FEED_INVALID');
+  });
+
+  it('returns feed unavailable for HTTP and fetch failures', async () => {
+    expectError(await checkForUpdate({ currentVersion: '0.1.1', fetcher: fetcher({}, 503) }), 'UPDATE_FEED_UNAVAILABLE');
+    expectError(await checkForUpdate({ currentVersion: '0.1.1', fetcher: vi.fn(async () => { throw new Error('network'); }) }), 'UPDATE_FEED_UNAVAILABLE');
+  });
+
+  it('returns feed invalid for malformed JSON and schema', async () => {
+    expectError(await checkForUpdate({ currentVersion: '0.1.1', fetcher: vi.fn(async () => new Response('{', { status: 200 })) }), 'UPDATE_FEED_INVALID');
+    expectError(await checkForUpdate(input('0.1.1', { nope: true })), 'UPDATE_FEED_INVALID');
+  });
+
+  it('returns version invalid for malformed current versions', async () => {
+    const fetch = vi.fn();
+    const result = await checkForUpdate({ currentVersion: 'v1.2', fetcher: fetch });
+    expectError(result, 'UPDATE_VERSION_INVALID');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('reports stable versions as up-to-date', async () => {
+    const result = await checkForUpdate(input('0.1.2', [release({ tag_name: 'v0.1.2' })]));
+    expect(result).toMatchObject({ status: 'up-to-date', currentVersion: '0.1.2' });
+  });
+
+  it('rejects non-canonical release and asset URLs', async () => {
+    for (const html_url of [
+      'https://user:pass@github.com/zhouao010809-code/best-partners/releases/tag/v0.1.2',
+      'https://github.com:443/zhouao010809-code/best-partners/releases/tag/v0.1.2',
+      'https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.2?x=1',
+      'https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.2#x',
+      'https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.2/extra',
+    ]) {
+      expect((await checkForUpdate(input('0.1.1', [release({ html_url })]))).status).toBe('up-to-date');
+    }
+    const badAsset = 'https://github.com/zhouao010809-code/best-partners/releases/download/v0.1.2/x-arm64.dmg?x=1';
+    expect((await checkForUpdate(input('0.1.1', [release({ assets: [{ name: 'x-arm64.dmg', browser_download_url: badAsset }] })]))).status).toBe('up-to-date');
+  });
+
+  it('compares very large numeric version identifiers safely', async () => {
+    const result = await checkForUpdate(input('999999999999999999999999999999.0.0', [release({ tag_name: 'v999999999999999999999999999999.0.1' })]));
+    expect(result).toMatchObject({ status: 'available', version: '999999999999999999999999999999.0.1' });
+  });
+
+  it('cleans inline code, HTML, links, empty bodies, and keeps notes a string', async () => {
+    const result = await checkForUpdate(input('0.1.1', [release({ body: '<b>Fast</b> `fix` [details](https://example.invalid/details)' })]));
+    expect(result.status).toBe('available');
+    if (result.status === 'available') expect(result.notes).toBe('Fast fix details');
+    const empty = await checkForUpdate(input('0.1.1', [release({ body: null })]));
+    expect(empty.status).toBe('available');
+    if (empty.status === 'available') expect(empty.notes).toBe('');
+  });
+
+  it('uses AbortSignal.timeout with an eight second deadline and GitHub headers', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((milliseconds: number) => {
+      expect(milliseconds).toBe(8_000);
+      return new AbortController().signal;
+    });
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(_url).toBe(RELEASES_URL);
+      expect(init?.headers).toEqual({ Accept: 'application/vnd.github+json', 'User-Agent': 'best-partners-update-check' });
+      expect(init?.signal).toBeDefined();
+      return new Response('[]', { status: 200 });
+    });
+    await checkForUpdate({ currentVersion: '0.1.1', fetcher: fetch });
+    expect(timeout).toHaveBeenCalledWith(8_000);
+    timeout.mockRestore();
+  });
+});
