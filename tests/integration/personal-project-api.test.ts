@@ -90,6 +90,15 @@ describe('personal project API', () => {
     const requestId = '2c0ce1ae-511b-4bf4-9a9d-444444444447';
     const response = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/write-plans/${action.id}/confirm`, headers: f.authHeaders, payload: { clientRequestId: requestId } });
     expect(response.statusCode).toBe(200); expect(response.json().data.status).toBe('completed'); expect(response.json().data).not.toHaveProperty('content');
+    const duplicate = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/write-plans/${action.id}/confirm`, headers: f.authHeaders, payload: { clientRequestId: requestId } });
+    expect(duplicate.statusCode).toBe(200); expect(duplicate.json().data).toEqual(response.json().data);
+    const extra = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/write-plans/${action.id}/confirm`, headers: f.authHeaders, payload: { clientRequestId: requestId, conversationId: 'conversation-1' } });
+    expect(extra.statusCode).toBe(400);
+    const wrongProject = await f.app.inject({ method: 'POST', url: `/api/v1/projects/33333333-3333-4333-8333-333333333333/write-plans/${action.id}/confirm`, headers: f.authHeaders, payload: { clientRequestId: '2c0ce1ae-511b-4bf4-9a9d-444444444451' } });
+    expect(wrongProject.statusCode).toBe(409);
+    const cancelAction = await f.plans.proposeDraft({ projectId, conversationId: 'conversation-1', messageId: 'message-2', category: '工作日志', title: '取消日志', summary: '日志', content: '待取消', expectedRevision: 1 });
+    const cancelled = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/write-plans/${cancelAction.id}/cancel`, headers: f.authHeaders, payload: { clientRequestId: '2c0ce1ae-511b-4bf4-9a9d-444444444452' } });
+    expect(cancelled.statusCode).toBe(200); expect(cancelled.json().data.status).toBe('cancelled');
     expect((await f.app.inject({ url: `/api/v1/projects/${projectId}/operations`, headers: f.authHeaders })).json().data.operations[0].targetPath).toContain('AI工作区/周计划');
   });
 });

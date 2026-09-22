@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { applyMigrations } from '../../src/server/db/migrate.js';
@@ -19,7 +19,7 @@ async function fixture() {
   const projects = createProjectService({ database, vaultRoot, stateRoot }); const plans = createProjectWritePlanService({ database });
   const scan = await projects.scan(projectRoot); const project = await projects.bind(scan.scanId, { sourceSha256: scan.sourceSha256 });
   cleanups.push(async () => { await projects.close(); database.close(); await rm(root, { recursive: true, force: true }); });
-  return { database, projectRoot, project, plans };
+  return { database, projectRoot, project, plans, projects };
 }
 
 describe('project write plans', () => {
@@ -31,6 +31,7 @@ describe('project write plans', () => {
     await expect(f.plans.confirm(action.id, f.project.id, '2c0ce1ae-511b-4bf4-9a9d-444444444448')).rejects.toMatchObject({ code: 'PROJECT_WRITE_PLAN_NOT_FOUND' });
     const completed = await f.plans.confirm(action.id, 'conversation-1', '2c0ce1ae-511b-4bf4-9a9d-444444444444');
     expect(completed.status).toBe('completed'); expect(await readFile(join(f.projectRoot, completed.resultPath!), 'utf8')).toContain('下周获客内容');
+    expect(await f.plans.confirm(action.id, 'conversation-1', '2c0ce1ae-511b-4bf4-9a9d-444444444444')).toEqual(completed);
     expect((await f.plans.operations(f.project.id))[0]).toMatchObject({ targetPath: completed.targetPath, status: 'completed' });
   });
 
@@ -49,5 +50,22 @@ describe('project write plans', () => {
     const requestId = '2c0ce1ae-511b-4bf4-9a9d-444444444446'; const cancelled = f.plans.cancel(action.id, 'conversation-1', requestId);
     expect(cancelled.status).toBe('cancelled'); expect(f.plans.cancel(action.id, 'conversation-1', requestId)).toMatchObject({ status: 'cancelled' });
     await expect(readFile(join(f.projectRoot, action.targetPath))).rejects.toThrow();
+  });
+
+  it('rejects stale revisions, oversized content and invalid categories', async () => {
+    const f = await fixture();
+    const stale = await f.plans.proposeDraft({ projectId: f.project.id, conversationId: 'conversation-1', messageId: 'message-1', category: '周计划', title: '过期计划', summary: '计划', content: 'stale', expectedRevision: 1 });
+    await writeFile(join(f.projectRoot, 'README.md'), '# changed\n'); await f.projects.refresh(f.project.id);
+    expect((await f.plans.confirm(stale.id, 'conversation-1', '2c0ce1ae-511b-4bf4-9a9d-444444444449')).status).toBe('stale');
+    await expect(f.plans.proposeDraft({ projectId: f.project.id, conversationId: 'conversation-1', messageId: 'message-1', category: '周计划', title: '大文件', summary: '计划', content: '字'.repeat(80_001), expectedRevision: 2 })).rejects.toMatchObject({ code: 'PROJECT_OUTPUT_TOO_LARGE' });
+    await expect(f.plans.proposeDraft({ projectId: f.project.id, conversationId: 'conversation-1', messageId: 'message-1', category: '../越界' as never, title: '标题', summary: '计划', content: 'x', expectedRevision: 2 })).rejects.toMatchObject({ code: 'PROJECT_CATEGORY_INVALID' });
+  });
+
+  it('rejects symlinked output parents and records relative hashes only', async () => {
+    const f = await fixture(); const outside = join(f.projectRoot, 'outside'); await mkdir(outside); await mkdir(join(f.projectRoot, 'AI工作区')); await symlink(outside, join(f.projectRoot, 'AI工作区', '工作日志'));
+    const action = await f.plans.proposeDraft({ projectId: f.project.id, conversationId: 'conversation-1', messageId: 'message-1', category: '工作日志', title: '符号链接', summary: '日志', content: 'hello', expectedRevision: 1 });
+    await expect(f.plans.confirm(action.id, 'conversation-1', '2c0ce1ae-511b-4bf4-9a9d-444444444450')).rejects.toMatchObject({ code: 'PROJECT_OUTPUT_WRITE_FAILED' });
+    const operation = (await f.plans.operations(f.project.id)).find(item => item.id);
+    expect(operation?.targetPath.startsWith('/')).toBe(false); expect(operation?.oldSha256).toBeUndefined(); expect(operation?.newSha256).toBeUndefined(); expect(operation?.status).toBe('failed');
   });
 });

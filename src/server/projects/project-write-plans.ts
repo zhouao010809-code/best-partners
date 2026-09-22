@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, realpath, unlink, link } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, unlink, link, rename } from 'node:fs/promises';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import { projectCategorySchema, projectWriteActionSchema, projectOperationSchema, type ProjectCategory, type ProjectOperation, type ProjectWriteAction, type ProjectWritePlanService } from '../../shared/api/projects.js';
@@ -80,17 +80,20 @@ async function writeExclusive(root: string, targetPath: string, content: string,
   try { const info = await lstat(target); if (info.isSymbolicLink() || info.isFile() || info.isDirectory()) throw coded('PROJECT_OUTPUT_EXISTS', 'Project output already exists'); }
   catch (error) { const code = error instanceof Error && 'code' in error ? String((error as CodedError).code) : ''; if (code !== 'ENOENT') throw error; }
   const temporary = join(directory, `.xiao-project-${id}.tmp`);
+  const staged = join(directory, `.xiao-project-${id}.staged`);
   const bytes = Buffer.from(content, 'utf8');
   const handle = await open(temporary, 'wx', 0o600);
   try { await handle.write(bytes); await handle.sync(); } finally { await handle.close(); }
   try {
-    // link() is atomic and fails when another writer won the target first;
-    // rename() is intentionally never used to overwrite user files.
-    await link(temporary, target);
-    await unlink(temporary);
+    // rename() only stages the fsynced temporary file atomically. The final
+    // link() is the no-clobber step: it fails if another writer owns target.
+    await rename(temporary, staged);
+    await link(staged, target);
+    await unlink(staged);
     const directoryHandle = await open(directory, 'r'); try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
   } catch (error) {
     await unlink(temporary).catch(() => undefined);
+    await unlink(staged).catch(() => undefined);
     if (error instanceof Error && 'code' in error && String((error as CodedError).code) === 'EEXIST') throw coded('PROJECT_OUTPUT_EXISTS', 'Project output already exists');
     throw error;
   }
@@ -103,7 +106,7 @@ export function createProjectWritePlanService(input: {
   ttlMs?: number;
 }): ProjectWritePlanService {
   const database = input.database; const now = input.now ?? (() => new Date()); const makeId = input.idFactory ?? randomUUID; const ttl = input.ttlMs ?? TTL_MS;
-  function proposeDraft(value: { projectId: string; conversationId: string; messageId: string; category: ProjectCategory; title: string; summary: string; content: string; expectedRevision: number }): Promise<ProjectWriteAction> {
+  async function proposeDraft(value: { projectId: string; conversationId: string; messageId: string; category: ProjectCategory; title: string; summary: string; content: string; expectedRevision: number }): Promise<ProjectWriteAction> {
     const category = projectCategorySchema.safeParse(value.category); if (!category.success) throw coded('PROJECT_CATEGORY_INVALID', 'Project output category is invalid');
     if (Buffer.byteLength(value.content, 'utf8') > MAX_CONTENT_BYTES) throw coded('PROJECT_OUTPUT_TOO_LARGE', 'Project output is too large');
     const project = rowOrThrow(database, value.projectId);
@@ -115,7 +118,7 @@ export function createProjectWritePlanService(input: {
     database.prepare(`INSERT INTO personal_project_write_plans
       (id, project_id, conversation_id, message_id, category, title, summary, content, content_sha256, source_revision, target_path, status, created_at, expires_at, updated_at, confirm_request_id, result_path, problem)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`).run(row.id, row.project_id, row.conversation_id, row.message_id, row.category, row.title, row.summary, row.content, row.content_sha256, row.source_revision, row.target_path, row.status, row.created_at, row.expires_at, row.updated_at);
-    return Promise.resolve(publicAction(database, row));
+    return publicAction(database, row);
   }
   function mark(id: string, status: PlanRow['status'], requestId: string, problem?: string, resultPath?: string): ProjectWriteAction {
     const timestamp = iso(now());
@@ -130,7 +133,12 @@ export function createProjectWritePlanService(input: {
     if (Date.parse(plan.expires_at) <= now().getTime() || project.availability !== 'ready' || project.source_revision !== plan.source_revision) {
       return mark(plan.id, 'stale', clientRequestId, '项目内容已变化，计划已失效');
     }
-    database.prepare('UPDATE personal_project_write_plans SET status = \'running\', confirm_request_id = ?, updated_at = ? WHERE id = ? AND status = \'pending\'').run(clientRequestId, iso(now()), plan.id);
+    const claimed = database.prepare('UPDATE personal_project_write_plans SET status = \'running\', confirm_request_id = ?, updated_at = ? WHERE id = ? AND status = \'pending\'').run(clientRequestId, iso(now()), plan.id);
+    if (claimed.changes !== 1) {
+      const current = planRow(database, plan.id, conversationId);
+      if (current.confirm_request_id === clientRequestId) return publicAction(database, current);
+      throw coded('PROJECT_WRITE_PLAN_RESOLVED', 'Project write plan already resolved');
+    }
     plan = planRow(database, plan.id, conversationId);
     try {
       await writeExclusive(project.root_path, plan.target_path, plan.content, plan.id);
