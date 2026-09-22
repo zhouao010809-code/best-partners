@@ -2,7 +2,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReadConsoleApi } from '../../src/client/api/client.js';
 import type { ProjectFilePage, ProjectScanPreview, ProjectSummary } from '../../src/shared/api/projects.js';
@@ -32,8 +32,13 @@ const runtime = {
 
 vi.mock('../../src/client/app/ConsoleRuntime.js', () => ({ useConsoleRuntime: () => runtime }));
 
+function ProjectShellProbe() {
+  const location = useLocation();
+  return <><output data-testid="project-route">{location.pathname}</output><p data-testid="visible-project-conversation">已有项目问问会话：上次讨论仍在这里</p></>;
+}
+
 function renderPage() {
-  return render(<MemoryRouter initialEntries={[`/projects/${id}`]}><Routes><Route path="/projects/:id" element={<ProjectWorkspacePage />} /></Routes></MemoryRouter>);
+  return render(<MemoryRouter initialEntries={[`/projects/${id}`]}><Routes><Route path="/projects/:id" element={<><ProjectWorkspacePage /><ProjectShellProbe /></>} /></Routes></MemoryRouter>);
 }
 
 beforeEach(() => {
@@ -59,9 +64,20 @@ describe('ProjectWorkspacePage', () => {
     await user.click(screen.getByRole('button', { name: '重新连接' }));
     expect(await screen.findByRole('heading', { name: '确认项目文件夹' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: '重新连接项目' }));
+    expect(scanApi).toHaveBeenCalledWith('/tmp/A项目新位置');
     expect(reconnect).toHaveBeenCalledWith(id, { scanId: scan.scanId, sourceSha256: scan.sourceSha256, displayName: 'A项目新位置' });
     expect(await screen.findByText('项目已重新连接；旧的项目写入计划已标记为过期，需要重新确认。')).toBeVisible();
     expect(screen.getByText('A项目新位置')).toBeVisible();
+    expect(screen.getByTestId('project-route')).toHaveTextContent(`/projects/${id}`);
+    expect(screen.getByTestId('visible-project-conversation')).toHaveTextContent('已有项目问问会话：上次讨论仍在这里');
+  });
+
+  it('shows the connected project context when the bound folder is ready', async () => {
+    get.mockResolvedValueOnce(ok({ ...project, availability: 'ready' }));
+    renderPage();
+    expect((await screen.findAllByText('项目语料：已连接')).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('全局知识库：可检索')).toBeVisible();
+    expect(screen.getByText('写入范围：A项目 / AI工作区')).toBeVisible();
   });
 
   it('refreshes without replacing the page when the bound root needs reconnect', async () => {
