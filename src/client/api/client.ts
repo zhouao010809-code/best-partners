@@ -158,6 +158,8 @@ export interface ReadConsoleApi {
     files(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }, signal?: AbortSignal): Promise<ApiClientResult<ProjectFilePage>>;
     file(id: string, relativePath: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectFileDetail>>;
     operations(id: string, signal?: AbortSignal): Promise<ApiClientResult<{ operations: ProjectOperation[] }>>;
+    confirmWritePlan(projectId: string, planId: string, clientRequestId: string): Promise<ApiClientResult<AssistantConversation>>;
+    cancelWritePlan(projectId: string, planId: string, clientRequestId: string): Promise<ApiClientResult<AssistantConversation>>;
   };
   readonly assistant?: {
     providers(signal?: AbortSignal): Promise<ApiClientResult<{ providers: AssistantProvider[] }>>;
@@ -472,7 +474,19 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
       file: (id, relativePath, signal) => requestData(fetcher, withQuery(`/api/v1/projects/${encodeURIComponent(id)}/file`, parameters => {
         parameters.set('path', relativePath);
       }), projectFileResponseSchema, getInit(signal)),
-      operations: (id, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(id)}/operations`, projectOperationsResponseSchema, getInit(signal))
+      operations: (id, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(id)}/operations`, projectOperationsResponseSchema, getInit(signal)),
+      confirmWritePlan: (projectId, planId, clientRequestId) => postWithCsrf(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/write-plans/${encodeURIComponent(planId)}/confirm`,
+        assistantConversationResponseSchema,
+        { clientRequestId },
+        clientRequestId
+      ),
+      cancelWritePlan: (projectId, planId, clientRequestId) => postWithCsrf(
+        `/api/v1/projects/${encodeURIComponent(projectId)}/write-plans/${encodeURIComponent(planId)}/cancel`,
+        assistantConversationResponseSchema,
+        { clientRequestId },
+        clientRequestId
+      )
     },
     assistantDrafts: {
       list: (projectId, signal) => requestData(fetcher, withQuery('/api/v1/assistant/drafts', parameters => {

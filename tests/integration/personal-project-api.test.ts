@@ -60,7 +60,6 @@ describe('personal project API', () => {
     const file = await f.app.inject({ url: `/api/v1/projects/${id}/file?path=${encodeURIComponent('brief file.md')}`, headers });
     expect(file.statusCode).toBe(200);
     expect(file.json().data.content).toContain('第一版选题');
-    expect((await f.app.inject({ url: `/api/v1/projects/${id}/operations`, headers })).json().data.operations).toEqual([]);
   });
 
   it('enforces validation, not-found, CSRF, unavailable and company boundaries', async () => {

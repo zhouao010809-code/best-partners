@@ -9,7 +9,6 @@ import {
   projectFileResponseSchema,
   projectIdParamSchema,
   projectListResponseSchema,
-  projectOperationsResponseSchema,
   projectReconnectRequestSchema,
   projectScanPreviewResponseSchema,
   projectScanRequestSchema,
@@ -114,18 +113,4 @@ export function registerProjectRoutes(app: FastifyInstance, service?: ProjectSer
     return parseApiOutput(projectFileResponseSchema, { data: result, version: API_VERSION });
   });
 
-  app.get('/api/v1/projects/:id/operations', async (request, reply) => {
-    reply.header('cache-control', 'no-store');
-    const { id } = parseApiInput(projectIdParamSchema, request.params);
-    const projectService = requiredService(service);
-    const result = await safely(async () => {
-      const operations = (projectService as ProjectService & {
-        operations?: (projectId: string) => Promise<readonly unknown[]>;
-      }).operations;
-      if (typeof operations === 'function') return operations.call(projectService, id);
-      await projectService.get(id);
-      return [] as const;
-    });
-    return parseApiOutput(projectOperationsResponseSchema, { data: { operations: result }, version: API_VERSION });
-  });
 }

@@ -447,7 +447,6 @@ describe('read console API facade', () => {
       .mockResolvedValueOnce(success(project))
       .mockResolvedValueOnce(success({ items: [{ relativePath: 'brief file.md', kind: 'file', origin: 'source' }], total: 1, revision: 1 }))
       .mockResolvedValueOnce(success({ relativePath: 'brief file.md', kind: 'file', origin: 'source', content: '内容', totalCharacters: 2, truncated: false }))
-      .mockResolvedValueOnce(success({ operations: [] }))
       .mockResolvedValueOnce(success(project));
     const api = createBrowserReadConsoleApi(fetchMock);
 
@@ -458,15 +457,47 @@ describe('read console API facade', () => {
     const filesResult = await api.projects!.files(projectId, { search: '文件 名', origin: 'source', limit: 5 });
     expect(filesResult).toEqual({ ok: true, value: { items: [{ relativePath: 'brief file.md', kind: 'file', origin: 'source' }], total: 1, revision: 1 } });
     expect((await api.projects!.file(projectId, '目录/brief file.md')).ok).toBe(true);
-    expect((await api.projects!.operations(projectId)).ok).toBe(true);
     expect((await api.projects!.refresh(projectId)).ok).toBe(true);
     expect(fetchMock.mock.calls.map(call => String(call[0]))).toEqual([
       '/api/v1/bootstrap', '/api/v1/projects/scan', '/api/v1/projects', '/api/v1/projects', `/api/v1/projects/${projectId}`,
       `/api/v1/projects/${projectId}/files?search=%E6%96%87%E4%BB%B6+%E5%90%8D&origin=source&limit=5`,
-      `/api/v1/projects/${projectId}/file?path=%E7%9B%AE%E5%BD%95%2Fbrief+file.md`,
-      `/api/v1/projects/${projectId}/operations`, `/api/v1/projects/${projectId}/refresh`
+      `/api/v1/projects/${projectId}/file?path=%E7%9B%AE%E5%BD%95%2Fbrief+file.md`, `/api/v1/projects/${projectId}/refresh`
     ]);
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: 'POST', headers: expect.objectContaining({ 'x-csrf-token': CSRF }) });
+  });
+
+  it('uses CSRF and idempotency keys for project write-plan confirmation/cancellation', async () => {
+    const conversation = {
+      id: 'conversation-1', title: '项目对话', createdAt: '2026-09-01T00:00:00.000Z',
+      updatedAt: '2026-09-01T00:00:00.000Z', status: 'idle' as const, providerId: 'deepseek', model: 'v4',
+      scope: 'brain' as const, messages: []
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(success({ csrfToken: CSRF, runtimeMode: 'personal' }))
+      .mockResolvedValueOnce(success(conversation))
+      .mockResolvedValueOnce(success(conversation));
+    const api = createBrowserReadConsoleApi(fetchMock);
+    const projectId = 'project/with space';
+    const planId = 'plan/with space';
+    const requestId = 'request/123';
+
+    expect((await api.projects!.confirmWritePlan(projectId, planId, requestId)).ok).toBe(true);
+    expect((await api.projects!.cancelWritePlan(projectId, planId, requestId)).ok).toBe(true);
+    expect(fetchMock.mock.calls.map(call => String(call[0]))).toEqual([
+      '/api/v1/bootstrap',
+      '/api/v1/projects/project%2Fwith%20space/write-plans/plan%2Fwith%20space/confirm',
+      '/api/v1/projects/project%2Fwith%20space/write-plans/plan%2Fwith%20space/cancel'
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({ clientRequestId: requestId }),
+      headers: expect.objectContaining({ 'x-csrf-token': CSRF, 'idempotency-key': requestId })
+    });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({ clientRequestId: requestId }),
+      headers: expect.objectContaining({ 'x-csrf-token': CSRF, 'idempotency-key': requestId })
+    });
   });
 
   it.each([
