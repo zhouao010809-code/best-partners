@@ -356,7 +356,13 @@ export function buildServer(options: BuildServerOptions = {}) {
   registerOperationRoutes(app, { database: options.readApi?.database,
     intakeHistory: options.intakeService?.history,
     trash: options.trashService ? () => options.trashService!.list() : undefined,
-    intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined });
+    intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined,
+    projectOperations: options.projectWritePlans ? async () => {
+      const projects = options.readApi?.database.prepare('SELECT id FROM personal_projects').all() as Array<{ id: string }> | undefined;
+      if (!projects) return [];
+      const rows = await Promise.all(projects.map(project => options.projectWritePlans!.operations(project.id)));
+      return rows.flat();
+    } : undefined });
   registerIndexJobRoutes(app, indexJobs);
   if (runtimeMode === 'personal') registerProjectRoutes(app, options.projectService, options.projectWritePlans);
   if (companyRuntime !== undefined) {

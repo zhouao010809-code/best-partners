@@ -236,3 +236,22 @@
 .assistant-queued-intent { margin-bottom: 10px; padding: 10px 12px; border: 1px solid #4a6172; border-radius: 8px; background: #263640; color: #c6d7e4; font-size: 12px; }
 .assistant-queued-intent > div { display: flex; gap: 12px; margin-top: 6px; }
 .assistant-queued-intent button { border: 0; padding: 3px 0; background: transparent; color: #c4e0f5; font-size: 12px; }
+.assistant-project-write { margin: 14px 24px; padding: 14px; border: 1px solid #536d7e; border-radius: 10px; background: #1e2d37; color: #dce9f1; }
+.assistant-project-write__heading, .assistant-project-write__heading > div, .assistant-project-write__actions, .assistant-project-write__dialog > div { display: flex; align-items: center; gap: 8px; }
+.assistant-project-write__heading { justify-content: space-between; }
+.assistant-project-write__heading svg { width: 15px; }
+.assistant-project-write__heading span { color: #a9c2d2; font-size: 12px; }
+.assistant-project-write__not-written { color: #e2c98c; font-size: 12px; }
+.assistant-project-write__meta { margin: 10px 0; font-size: 12px; }
+.assistant-project-write__meta div { display: flex; gap: 10px; margin-top: 5px; }
+.assistant-project-write__meta dt { color: #91a9b9; min-width: 54px; }
+.assistant-project-write__meta dd { margin: 0; overflow-wrap: anywhere; }
+.assistant-project-write__actions button, .assistant-project-write__dialog button { border: 1px solid #6d8999; border-radius: 6px; padding: 6px 10px; background: #2c4656; color: #eaf3f8; }
+.assistant-project-write__actions button + button { background: transparent; }
+.assistant-project-write__problem, .assistant-project-write__error { color: #f0b2a9; font-size: 12px; }
+.assistant-project-write__backdrop { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; padding: 20px; background: #06101899; }
+.assistant-project-write__dialog { width: min(430px, 100%); padding: 20px; border: 1px solid #607384; border-radius: 12px; background: #20282e; box-shadow: 0 20px 70px #0009; }
+.assistant-project-write__dialog h2 { margin: 0; font-size: 17px; }
+.assistant-project-write__dialog code { display: block; margin: 12px 0; overflow-wrap: anywhere; }
+.assistant-project-write__dialog > div { justify-content: flex-end; }
+.assistant-project-write__dialog svg { width: 14px; }

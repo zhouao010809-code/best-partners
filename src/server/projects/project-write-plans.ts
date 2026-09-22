@@ -56,6 +56,7 @@ function publicAction(database: Database.Database, row: PlanRow): ProjectWriteAc
 }
 async function assertNoSymlinkParents(root: string, targetDirectory: string): Promise<void> {
   const canonicalRoot = await realpath(root);
+  if (canonicalRoot !== root) throw coded('PROJECT_ROOT_RECONNECT_REQUIRED', 'Project root identity changed');
   const target = targetDirectory;
   if (!contained(canonicalRoot, target)) throw coded('PROJECT_PATH_INVALID', 'Project output path escapes the project root');
   const segments = relative(canonicalRoot, target).split(sep).filter(Boolean);

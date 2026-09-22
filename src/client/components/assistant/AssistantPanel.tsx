@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'rea
 import { ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronLeft, History, LoaderCircle, Maximize2, Minimize2, Pin, Plus, RefreshCw, Search, Square, X } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import type { ApiClientResult, ReadConsoleApi } from '../../api/client.js';
-import type { AssistantConversation, AssistantProvider, AssistantSend, AssistantPlanAction } from '../../../shared/api/assistant.js';
+import type { AssistantConversation, AssistantProvider, AssistantSend, AssistantPlanAction, AssistantProjectWriteAction } from '../../../shared/api/assistant.js';
 import type { Attachment, AttachmentSelection } from '../../../shared/api/attachments.js';
 import type { AssistantDraft } from '../../../shared/api/assistant-drafts.js';
 import type { SkillMatchCandidate } from '../../../shared/api/skills.js';
@@ -458,6 +458,17 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     throw new Error(errorMessage(result, '取消归档未完成，请重试。'));
   }
 
+  async function resolveProjectWrite(action: AssistantProjectWriteAction, cancel = false): Promise<void> {
+    const result = cancel
+      ? await api.projects?.cancelWritePlan(action.projectId, action.id, crypto.randomUUID())
+      : await api.projects?.confirmWritePlan(action.projectId, action.id, crypto.randomUUID());
+    if (!result) throw new Error('当前项目服务尚未启用。');
+    if (!result.ok) throw new Error(errorMessage(result, cancel ? '取消项目写入未完成，请重试。' : '项目写入未完成，请重试。'));
+    const next = result.value;
+    const current = conversationRef.current;
+    if (current) receive({ ...current, messages: current.messages.map(message => ({ ...message, actions: message.actions.map(item => item.type === 'project-write' && item.id === action.id ? next : item) })) });
+  }
+
   function regenerateAction(action: AssistantPlanAction): void {
     void startNewConversation('请重新生成这个附件的归档计划。', [{ id: action.attachmentId }]);
   }
@@ -560,7 +571,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       {login && <div className="assistant-notice" role="status"><p>{login.message}</p>{safeAuthUrl && (window.xiaozhaoDesktop?.openAssistantLogin ? <button onClick={() => { void window.xiaozhaoDesktop!.openAssistantLogin!(safeAuthUrl).catch(() => setError('未能打开登录页，请重试。')); }}>继续登录 <ArrowRight /></button> : <a href={safeAuthUrl} target="_blank" rel="noopener noreferrer">继续登录 <ArrowRight /></a>)}<button onClick={() => void loadProviders()} disabled={providerLoading}>我已完成登录，刷新状态</button></div>}
 
       <div ref={timeline} className="assistant-timeline" onScroll={event => { const el = event.currentTarget; savedScroll.current = el.scrollTop; followOutput.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; if (followOutput.current) setHasNewContent(false); }}>
-        {!conversation?.messages.length ? <div className="assistant-welcome"><div className="assistant-welcome__mark"><AssistantEyes /></div><h3>{contextPath ? '这份资料，一起读懂。' : '让收藏，变成你的答案。'}</h3><p>从一个问题开始，把有用的想法留下来。</p>{history.length > 0 && <button type="button" className="assistant-resume" disabled={locked} onClick={() => void openConversation(history[0]!)}>继续上次对话：{history[0]!.title}<ArrowRight size={14} /></button>}<div className="assistant-suggestions">{(contextPath ? ['解释这份资料的核心观点', contextPath.startsWith('02知识库/') ? '用这篇知识拟一个文章提纲' : '把这份资料提炼成知识候选', '举一个具体的应用例子'] : ['找出大脑里关于创作的方法', '搜索关于学习方法的知识', '整理资料时，你能帮我做什么？']).map(text => <button key={text} type="button" onClick={() => { setDraft(text); if (contextPath) setScope('current'); textArea.current?.focus(); }}><span>{text}</span><ArrowRight /></button>)}</div></div> : <div className="assistant-messages">{conversation.messages.map(message => <AssistantMessageView key={message.id} message={message} onFollowUp={text => { setDraft(text); textArea.current?.focus(); }} onConfirmAction={confirmAction} onCancelAction={cancelAction} onRegenerateAction={regenerateAction} />)}</div>}
+        {!conversation?.messages.length ? <div className="assistant-welcome"><div className="assistant-welcome__mark"><AssistantEyes /></div><h3>{contextPath ? '这份资料，一起读懂。' : '让收藏，变成你的答案。'}</h3><p>从一个问题开始，把有用的想法留下来。</p>{history.length > 0 && <button type="button" className="assistant-resume" disabled={locked} onClick={() => void openConversation(history[0]!)}>继续上次对话：{history[0]!.title}<ArrowRight size={14} /></button>}<div className="assistant-suggestions">{(contextPath ? ['解释这份资料的核心观点', contextPath.startsWith('02知识库/') ? '用这篇知识拟一个文章提纲' : '把这份资料提炼成知识候选', '举一个具体的应用例子'] : ['找出大脑里关于创作的方法', '搜索关于学习方法的知识', '整理资料时，你能帮我做什么？']).map(text => <button key={text} type="button" onClick={() => { setDraft(text); if (contextPath) setScope('current'); textArea.current?.focus(); }}><span>{text}</span><ArrowRight /></button>)}</div></div> : <div className="assistant-messages">{conversation.messages.map(message => <AssistantMessageView key={message.id} message={message} onFollowUp={text => { setDraft(text); textArea.current?.focus(); }} onConfirmAction={confirmAction} onCancelAction={cancelAction} onRegenerateAction={regenerateAction} onConfirmProjectWrite={action => resolveProjectWrite(action)} onCancelProjectWrite={action => resolveProjectWrite(action, true)} />)}</div>}
         {isRunning && <div className="assistant-activity" role="status"><LoaderCircle className="assistant-spin" /><span>{lastAssistant?.activity || '正在思考…'}<small>已用时 {elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`}</small></span></div>}
         {Boolean(lastAssistant?.steps?.length) && <details className="assistant-steps"><summary>处理过程 · {lastAssistant!.steps!.filter(step => step.status === 'completed').length} 步已完成</summary><ol>{lastAssistant!.steps!.map(step => <li key={step.id}>{step.label}<span>{step.status === 'completed' ? '已完成' : step.status === 'running' ? '进行中' : step.status === 'stopped' ? '已停止' : '未完成'}</span></li>)}</ol></details>}
         {conversation?.status === 'stopped' && <p className="assistant-run-note" role="status">已停止。你可以继续补充问题。</p>}

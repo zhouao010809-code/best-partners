@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { buildServer } from '../../src/server/app.js';
 import { applyMigrations } from '../../src/server/db/migrate.js';
 import { createProjectService } from '../../src/server/projects/project-service.js';
+import { createProjectWritePlanService } from '../../src/server/projects/project-write-plans.js';
 
 const headers = { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317' };
 const cleanup: Array<() => Promise<void>> = [];
@@ -24,8 +25,10 @@ async function fixture() {
   await writeFile(join(projectRoot, 'brief file.md'), '第一版选题\n');
   const database = new Database(':memory:');
   applyMigrations(database);
+  database.prepare('INSERT INTO assistant_conversations (id, updated_at, payload) VALUES (?, ?, ?)').run('conversation-1', new Date().toISOString(), '{}');
   const service = createProjectService({ database, vaultRoot, stateRoot });
-  const app = buildServer({ projectService: service });
+  const plans = createProjectWritePlanService({ database });
+  const app = buildServer({ projectService: service, projectWritePlans: plans });
   cleanup.push(async () => { await app.close(); await service.close(); database.close(); await rm(root, { recursive: true, force: true }); });
   const bootstrap = await app.inject({ url: '/api/v1/bootstrap', headers });
   const authHeaders = {
@@ -33,7 +36,7 @@ async function fixture() {
     cookie: String(bootstrap.headers['set-cookie']).split(';')[0]!,
     'x-csrf-token': bootstrap.json().data.csrfToken as string
   };
-  return { app, projectRoot, authHeaders };
+  return { app, projectRoot, authHeaders, plans };
 }
 
 describe('personal project API', () => {
@@ -76,5 +79,17 @@ describe('personal project API', () => {
     const company = buildServer({ runtimeMode: 'company' });
     cleanup.push(() => company.close());
     expect((await company.inject({ url: '/api/v1/projects', headers })).statusCode).toBe(404);
+  });
+
+  it('confirms project output through a dedicated route with only an idempotency token', async () => {
+    const f = await fixture();
+    const scan = await f.app.inject({ method: 'POST', url: '/api/v1/projects/scan', headers: f.authHeaders, payload: { rootPath: f.projectRoot } });
+    const bind = await f.app.inject({ method: 'POST', url: '/api/v1/projects', headers: f.authHeaders, payload: { scanId: scan.json().data.scanId, sourceSha256: scan.json().data.sourceSha256 } });
+    const projectId = bind.json().data.id as string;
+    const action = await f.plans.proposeDraft({ projectId, conversationId: 'conversation-1', messageId: 'message-1', category: '周计划', title: '下周获客', summary: '计划', content: '# 下周获客', expectedRevision: 1 });
+    const requestId = '2c0ce1ae-511b-4bf4-9a9d-444444444447';
+    const response = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/write-plans/${action.id}/confirm`, headers: f.authHeaders, payload: { clientRequestId: requestId } });
+    expect(response.statusCode).toBe(200); expect(response.json().data.status).toBe('completed'); expect(response.json().data).not.toHaveProperty('content');
+    expect((await f.app.inject({ url: `/api/v1/projects/${projectId}/operations`, headers: f.authHeaders })).json().data.operations[0].targetPath).toContain('AI工作区/周计划');
   });
 });

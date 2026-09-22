@@ -467,15 +467,16 @@ describe('read console API facade', () => {
   });
 
   it('uses CSRF and idempotency keys for project write-plan confirmation/cancellation', async () => {
-    const conversation = {
-      id: 'conversation-1', title: '项目对话', createdAt: '2026-09-01T00:00:00.000Z',
-      updatedAt: '2026-09-01T00:00:00.000Z', status: 'idle' as const, providerId: 'deepseek', model: 'v4',
-      scope: 'brain' as const, messages: []
+    const action = {
+      id: '11111111-1111-4111-8111-111111111111', type: 'project-write' as const, label: '保存到周计划', status: 'completed' as const,
+      projectId: '22222222-2222-4222-8222-222222222222', projectName: '项目', category: '周计划' as const,
+      targetPath: 'AI工作区/周计划/2026-09-01-项目.md', contentSha256: SHA, sourceRevision: 1,
+      summary: '计划', createdAt: '2026-09-01T00:00:00.000Z', expiresAt: '2026-09-01T00:30:00.000Z', resultPath: 'AI工作区/周计划/2026-09-01-项目.md'
     };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(success({ csrfToken: CSRF, runtimeMode: 'personal' }))
-      .mockResolvedValueOnce(success(conversation))
-      .mockResolvedValueOnce(success(conversation));
+      .mockResolvedValueOnce(success(action))
+      .mockResolvedValueOnce(success(action));
     const api = createBrowserReadConsoleApi(fetchMock);
     const projectId = 'project/with space';
     const planId = 'plan/with space';

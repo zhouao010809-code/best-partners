@@ -44,3 +44,17 @@ it('marks an assistant answer with the confirmed Skill name and short revision',
   expect(screen.getByText(/写作 · b{8}/u)).toBeVisible();
   expect(screen.queryByText(/[/\\]/u)).not.toBeInTheDocument();
 });
+
+it('renders a project output plan without exposing its content', () => {
+  render(<MemoryRouter><AssistantMessageView message={{ id: 'message', role: 'assistant', text: '', sources: [], actions: [{
+    id: '6f9c3b4e-9c3f-4d7a-8c5f-1a8e0e5f2f66', type: 'project-write', label: '保存到周计划', status: 'pending',
+    projectId: '7f9c3b4e-9c3f-4d7a-8c5f-1a8e0e5f2f66', projectName: '客户项目', category: '周计划',
+    targetPath: 'AI工作区/周计划/2026-09-22-下周获客.md', contentSha256: 'a'.repeat(64), sourceRevision: 1,
+    summary: '保存周计划草稿', createdAt: '2026-09-22T00:00:00.000Z', expiresAt: '2026-09-22T00:30:00.000Z'
+  }] }} onFollowUp={() => {}} onConfirmProjectWrite={async () => {}} /></MemoryRouter>);
+  expect(screen.getByRole('article', { name: '项目输出写入计划' })).toBeVisible();
+  expect(screen.getByText('尚未写入项目')).toBeVisible();
+  expect(screen.getByText('客户项目 · 保存周计划草稿')).toBeVisible();
+  expect(screen.getByText('AI工作区/周计划/2026-09-22-下周获客.md')).toBeVisible();
+  expect(screen.getByRole('button', { name: '确认写入' })).toBeVisible();
+});

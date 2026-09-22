@@ -5,12 +5,14 @@ import type { IntakeArchiveOutcome } from '../archive/intake-archive.js';
 import type { TrashEntry } from '../../shared/api/trash.js';
 import type { IntakeTrashEntry } from '../../shared/api/intake-trash.js';
 import { readMaterialVisibility, readDeletedSourceCutoffs } from './material-visibility.js';
+import type { ProjectOperation } from '../../shared/api/projects.js';
 
 interface Sources {
   database?: Database.Database | undefined;
   intakeHistory?: (() => IntakeArchiveOutcome[] | Promise<IntakeArchiveOutcome[]>) | undefined;
   trash?: (() => { items: TrashEntry[] }) | undefined;
   intakeTrash?: (() => { items: IntakeTrashEntry[] }) | undefined;
+  projectOperations?: (() => ProjectOperation[] | Promise<ProjectOperation[]>) | undefined;
 }
 type RunRow = { id: string; material_path: string; title: string; created_at: string; status: string; problem: string | null };
 type BatchRow = { id: string; run_id: string; title: string | null; material_path: string | null; created_at: string; status: string; indexed: number; problem: string | null; paths: string };
@@ -90,6 +92,21 @@ export function createOperationLedger(sources: Sources) {
     }
     await collect('文档回收', sources.trash && (() => sources.trash!().items.map(row => recycled(row, false))));
     await collect('收件箱回收', sources.intakeTrash && (() => sources.intakeTrash!().items.map(row => recycled(row, true))));
+    await collect('项目输出', sources.projectOperations && (async () => {
+      const rows = await sources.projectOperations!();
+      return rows.map(row => {
+        const done = row.status === 'completed';
+        const stale = row.status === 'stale';
+        return { id: `project-write:${row.id}`, sourceId: row.id, title: `项目输出 · ${row.targetPath}`, kind: 'project-write',
+          bucket: done ? 'history' : 'attention', statusLabel: done ? '已保存' : stale ? '计划已失效' : '写入未完成',
+          occurredAt: row.createdAt, timeLabel: '操作时间', paths: [row.targetPath],
+          summary: done ? '内容已保存到项目 AI 工作区。' : stale ? '项目内容已变化，这次计划没有写入。' : '项目输出没有完成，保留了操作记录。',
+          preserved: '项目源文件与全局知识库均未被修改。',
+          nextStep: done ? '打开项目工作区查看输出。' : '打开项目工作区检查状态后重新生成。',
+          action: { kind: 'navigate', label: '打开项目', href: `/projects/${encodeURIComponent(row.projectId)}` }
+        } satisfies OperationRecord;
+      });
+    }));
     records.sort((a, b) => (b.occurredAt || '').localeCompare(a.occurredAt || '') || a.id.localeCompare(b.id));
     const counts = { all: records.length, attention: records.filter(r => r.bucket === 'attention').length, running: records.filter(r => r.bucket === 'running').length };
     const filtered = records.filter(row => !query.view || query.view === 'all' || row.bucket === query.view);
