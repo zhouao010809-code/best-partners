@@ -6,6 +6,13 @@ export interface DesktopVaultSelection {
   readonly reason?: 'cancelled' | 'unchanged' | 'busy';
 }
 
+export interface DesktopProjectDirectorySelection {
+  readonly selected: boolean;
+  readonly path?: string;
+  readonly displayName?: string;
+  readonly reason?: 'cancelled' | 'busy' | 'unavailable';
+}
+
 export interface XiaozhaoClipperStatus {
   readonly installed: boolean;
   readonly connected: boolean;
@@ -16,6 +23,7 @@ export interface XiaozhaoDesktopApi {
   openAssistantLogin?(url: string): Promise<void>;
   getAppVersion(): Promise<string>;
   chooseVaultDirectory(): Promise<DesktopVaultSelection>;
+  chooseProjectDirectory?(): Promise<DesktopProjectDirectorySelection>;
   getVaultInfo?(): Promise<{ readonly displayName: string; readonly path: string }>;
   openVaultDirectory?(): Promise<void>;
   revealDocument?(relativePath: string): Promise<void>;

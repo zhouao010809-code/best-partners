@@ -10,6 +10,7 @@ import { FileSystemVaultGateway } from '../server/vault/FileSystemVaultGateway.j
 import type { StartedServer } from '../server/start-server.js';
 import { createModelKeyStore } from './model-key-store.js';
 import { changeDesktopVault } from './vault-selection.js';
+import { chooseProjectDirectory, validateProjectSelection } from './project-selection.js';
 import { createDesktopVaultNavigation } from './vault-navigation.js';
 import { validateAssistantLoginUrl } from './assistant-login.js';
 import { runClipperHost } from './clipper-host.js';
@@ -25,6 +26,7 @@ let started: StartedServer | undefined;
 let window: BrowserWindow | undefined;
 let quitState: 'idle' | 'closing' | 'ready' = 'idle';
 let choosing = false;
+let projectChoosing = false;
 
 function createMainWindow(origin: string): BrowserWindow {
   const policy = createDesktopWindowPolicy(origin);
@@ -215,6 +217,29 @@ async function bootstrap(): Promise<void> {
       });
     } catch { throw new Error('大脑文件夹设置未能保存，请重试。'); }
     finally { choosing = false; }
+  });
+  ipcMain.handle('desktop:choose-project-directory', async (event) => {
+    assertMainSender(event);
+    if (projectChoosing) return { selected: false, reason: 'busy' as const };
+    projectChoosing = true;
+    try {
+      return await chooseProjectDirectory({
+        busy: false,
+        chooseDirectory: async () => {
+          if (process.env.NODE_ENV === 'test' && process.env.XIAOZHAO_TEST_PROJECT_ROOT) {
+            return process.env.XIAOZHAO_TEST_PROJECT_ROOT;
+          }
+          const result = await dialog.showOpenDialog({
+            title: '选择项目文件夹',
+            properties: ['openDirectory']
+          });
+          return result.canceled ? undefined : result.filePaths[0];
+        },
+        validateDirectory: value => validateProjectSelection(value, [settings.vaultRoot, userDataDir])
+      });
+    } finally {
+      projectChoosing = false;
+    }
   });
   await window.loadURL(started.origin);
 }

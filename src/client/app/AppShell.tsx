@@ -5,6 +5,7 @@ import {
   BrainCircuit,
   CircleDot,
   DatabaseZap,
+  FolderKanban,
   Archive,
   Inbox,
   GitPullRequestArrow,
@@ -39,6 +40,7 @@ const NAVIGATION = [
   { to: '/queue', label: '提炼队列', icon: ListFilter, end: false },
   { to: '/library', label: '档案库', icon: Archive, end: false },
   { to: '/knowledge', label: '知识库', icon: BookOpenText, end: false },
+  { to: '/projects', label: '我的项目', icon: FolderKanban, end: false },
   { to: '/skills', label: 'Skill 库', icon: Sparkles, end: false },
   { to: '/operations', label: '操作与恢复', icon: GitPullRequestArrow, end: false },
   { to: '/settings', label: '设置', icon: Settings, end: false }
@@ -195,6 +197,13 @@ function pageIdentity(pathname: string): PageIdentity {
       description: '在真正写入前核对路径、版本与变更摘要。'
     };
   }
+  if (pathname.startsWith('/projects/')) {
+    return {
+      eyebrow: 'PROJECT / ISOLATED WORKSPACE',
+      title: '项目工作区',
+      description: '读取当前项目语料，调用全局知识库，产出只进入项目 AI工作区。'
+    };
+  }
 
   const canonicalPath = pathname.length > 1 ? pathname.replace(/\/+$/u, '') : pathname;
 
@@ -224,6 +233,12 @@ function pageIdentity(pathname: string): PageIdentity {
         eyebrow: 'KNOWLEDGE / RETRIEVAL',
         title: '知识库',
         description: '按标题与 YAML 召回字段检索已结构化的知识。'
+      };
+    case '/projects':
+      return {
+        eyebrow: 'PROJECTS / LOCAL FOLDERS',
+        title: '我的项目',
+        description: '绑定已有项目文件夹，保持每个项目与全局大脑彼此隔离。'
       };
     case '/skills':
       return {

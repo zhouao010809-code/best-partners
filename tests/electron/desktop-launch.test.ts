@@ -53,7 +53,7 @@ test(`${mode}: independent read-only desktop, isolated renderer and automatic re
       process: typeof (globalThis as unknown as { process?: unknown }).process,
       require: typeof (globalThis as unknown as { require?: unknown }).require,
       bridge: Object.keys((window as unknown as { xiaozhaoDesktop: object }).xiaozhaoDesktop).sort()
-    }))).toEqual({ process: 'undefined', require: 'undefined', bridge: ['checkForUpdates', 'chooseVaultDirectory', 'getAppVersion', 'getClipperStatus', 'getVaultInfo', 'installClipperHost', 'openAssistantLogin', 'openClipperInstall', 'openUpdateDownload', 'openVaultDirectory', 'revealDocument', 'revealSkill'] });
+    }))).toEqual({ process: 'undefined', require: 'undefined', bridge: ['checkForUpdates', 'chooseProjectDirectory', 'chooseVaultDirectory', 'getAppVersion', 'getClipperStatus', 'getVaultInfo', 'installClipperHost', 'openAssistantLogin', 'openClipperInstall', 'openUpdateDownload', 'openVaultDirectory', 'revealDocument', 'revealSkill'] });
     await expect(window.getByTestId('metric-pending')).toContainText('1');
     const health = await fetch(`${origin}/api/v1/health`).then((r) => r.json());
     expect(health.data.vaultSource.adapter).toBe('filesystem');

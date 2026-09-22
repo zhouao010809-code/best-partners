@@ -5,6 +5,8 @@ import { SettingsPage } from '../pages/SettingsPage.js';
 import { DashboardPage } from '../pages/DashboardPage.js';
 import { KnowledgePage } from '../pages/KnowledgePage.js';
 import { OperationsPage } from '../pages/OperationsPage.js';
+import { ProjectsPage } from '../pages/ProjectsPage.js';
+import { ProjectWorkspacePage } from '../pages/ProjectWorkspacePage.js';
 import { QueuePage } from '../pages/QueuePage.js';
 import { LibraryPage } from '../pages/LibraryPage.js';
 import { TrashPage } from '../pages/TrashPage.js';
@@ -64,6 +66,8 @@ export function AppRouter({ api, runtimeMode = 'personal' }: AppRouterProps = {}
         <Route path="library" element={<LibraryPage />} />
         <Route path="trash" element={<TrashPage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
+        <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:id" element={<ProjectWorkspacePage />} />
         <Route path="skills" element={<SkillsPage />} />
         <Route path="operations" element={<OperationsPage />} />
         <Route path="settings" element={<SettingsPage />} />

@@ -26,6 +26,7 @@ const MAIN_NAVIGATION_NAMES = [
   '提炼队列',
   '档案库',
   '知识库',
+  '我的项目',
   'Skill 库',
   '操作与恢复',
   '设置'
@@ -226,12 +227,12 @@ describe('black-glass application shell', () => {
     expect(screen.getByRole('main')).toHaveAttribute('tabindex', '-1');
   });
 
-  it('contains the eight main navigation destinations including the Skill catalog', () => {
+  it('contains the main navigation destinations including projects and the Skill catalog', () => {
     render(<App />);
 
     const navigation = screen.getByRole('navigation', { name: '主导航' });
     const links = within(navigation).getAllByRole('link');
-    expect(links).toHaveLength(8);
+    expect(links).toHaveLength(9);
     expect(links.map((link) => link.textContent?.trim())).toEqual(MAIN_NAVIGATION_NAMES);
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
       '/',
@@ -239,6 +240,7 @@ describe('black-glass application shell', () => {
       '/queue',
       '/library',
       '/knowledge',
+      '/projects',
       '/skills',
       '/operations',
       '/settings'
@@ -297,7 +299,7 @@ describe('black-glass application shell', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
     const navigation = screen.getByRole('navigation', { name: '主导航' });
-    expect(within(navigation).getAllByRole('link')).toHaveLength(8);
+    expect(within(navigation).getAllByRole('link')).toHaveLength(9);
     expect(within(navigation).queryByText(heading)).not.toBeInTheDocument();
   });
 
