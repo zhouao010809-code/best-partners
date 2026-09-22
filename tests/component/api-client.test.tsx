@@ -473,10 +473,11 @@ describe('read console API facade', () => {
       targetPath: 'AI工作区/周计划/2026-09-01-项目.md', contentSha256: SHA, sourceRevision: 1,
       summary: '计划', createdAt: '2026-09-01T00:00:00.000Z', expiresAt: '2026-09-01T00:30:00.000Z', resultPath: 'AI工作区/周计划/2026-09-01-项目.md'
     };
+    const cancelledAction = { ...action, status: 'cancelled' as const, resultPath: undefined };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(success({ csrfToken: CSRF, runtimeMode: 'personal' }))
       .mockResolvedValueOnce(success(action))
-      .mockResolvedValueOnce(success(action));
+      .mockResolvedValueOnce(success(cancelledAction));
     const api = createBrowserReadConsoleApi(fetchMock);
     const projectId = 'project/with space';
     const planId = 'plan/with space';
