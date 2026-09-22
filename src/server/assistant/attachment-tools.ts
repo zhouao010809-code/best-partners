@@ -9,7 +9,7 @@ import type { ExtractionService } from '../services/extraction-service.js';
 import { createBrainTools } from './brain-tools.js';
 import { attachmentIntent } from './attachment-intent.js';
 import { evidenceFragment } from './presentation.js';
-import type { AssistantEvent, AssistantTool, AssistantToolEffect } from './types.js';
+import { createAssistantSourceAllocator, type AssistantEvent, type AssistantTool, type AssistantToolEffect } from './types.js';
 
 const readInput = z.strictObject({ id: z.uuid(), page: z.number().int().positive().optional(), offset: z.number().int().nonnegative().default(0), length: z.number().int().min(1).max(12_000).default(8000) });
 const prepareInput = z.strictObject({ id: z.uuid(), readingState: z.enum(['未看', '已看']).default('未看') });
@@ -21,16 +21,19 @@ export type AttachmentArchiveProposalRequest = {
 };
 
 /** Combines file and vault tools while keeping file scope and write intent outside the model. */
-export function createAssistantTools(input: {
+export function createAttachmentTools(input: {
   readService: ReadService; extractionService?: ExtractionService; attachmentService?: AttachmentPort;
   /** Company tools are opt-in and must be supplied by the company composition root. */
   companyTools?: readonly AssistantTool[];
+  allowCandidateWrites?: boolean;
+  sourceAllocator?: { next(): string };
   proposeArchive?: (request: AttachmentArchiveProposalRequest, signal?: AbortSignal) => Promise<AssistantPlanAction>;
   markActionPending?: () => void;
   attachments: AttachmentSelection[]; userMessage: string; scope: 'brain' | 'current' | 'project'; projectId?: string; projectRevision?: number; contextPath?: string;
   model: string; signal: AbortSignal; emit(event: AssistantEvent): void;
 }): AssistantTool[] {
-  const selected = new Map(input.attachments.map((selection, index) => [selection.id, { selection, sourceId: `S${index + 1}` }]));
+  const sourceAllocator = input.sourceAllocator ?? createAssistantSourceAllocator();
+  const selected = new Map(input.attachments.map((selection, index) => [selection.id, { selection, sourceId: input.sourceAllocator ? sourceAllocator.next() : `S${index + 1}` }]));
   const additionalPaths = new Set<string>();
   const paths = new Map<string, AttachmentSelection>();
   const intent = attachmentIntent(input.userMessage);
@@ -87,6 +90,8 @@ export function createAssistantTools(input: {
       coversWholeSource: startPage === 1 && endPage === attachment.pageCount };
   }
   const brainTools = createBrainTools({ ...input, ...(input.companyTools === undefined ? {} : { companyTools: input.companyTools }), additionalPaths, sourceOffset: selected.size,
+    ...(input.sourceAllocator ? { sourceAllocator } : {}),
+    ...(input.allowCandidateWrites === undefined ? {} : { allowCandidateWrites: input.allowCandidateWrites }),
     canPreparePath: path => !paths.has(path) || intent.extract, resolveExtractionRange: sourceRange });
   if (!selected.size) return brainTools;
   function tool<T extends z.ZodType>(name: string, description: string, schema: T, execute: (value: z.output<T>) => Promise<unknown>, effect?: AssistantToolEffect): AssistantTool {
@@ -172,3 +177,6 @@ export function createAssistantTools(input: {
     })
   ];
 }
+
+/** Compatibility export for existing personal assistant callers. */
+export const createAssistantTools = createAttachmentTools;

@@ -40,7 +40,7 @@ import type { IntakeTrashService } from './trash/intake-trash-service.js';
 import { registerIntakeTrashRoutes } from './api/routes/intake-trash.js';
 import { registerAssistantRoutes } from './api/routes/assistant.js';
 import { createAssistantService } from './assistant/service.js';
-import { createAssistantTools } from './assistant/attachment-tools.js';
+import { createAssistantTools } from './assistant/tool-factory.js';
 import { createAssistantActionPlanService } from './assistant/action-plan-service.js';
 import { createAssistantActionPlanStore } from './assistant/action-plan-store.js';
 import type { AssistantAdapter } from './assistant/types.js';
@@ -236,10 +236,14 @@ export function buildServer(options: BuildServerOptions = {}) {
   const assistant = options.assistantAdapters && options.readApi && readService
     ? createAssistantService({ database: options.readApi.database, adapters: options.assistantAdapters,
       projectExists: projectId => options.readApi!.database.prepare('SELECT 1 AS present FROM personal_projects WHERE id = ?').get(projectId) !== undefined,
+      ...(options.projectService ? { projectService: options.projectService } : {}),
+      ...(options.projectWritePlans ? { projectWritePlans: options.projectWritePlans } : {}),
       ...(options.skillCatalog ? { skillCatalog: options.skillCatalog } : {}),
       ...(actionPlans ? { actionPlans } : {}),
       ...(options.attachmentService ? { resolveAttachment: (id: string) => options.attachmentService!.get(id) } : {}),
       createTools: context => createAssistantTools({ ...context, readService,
+        ...(options.projectService ? { projectService: options.projectService } : {}),
+        ...(options.projectWritePlans ? { projectWritePlans: options.projectWritePlans } : {}),
         ...(options.attachmentService ? { attachmentService: options.attachmentService } : {}),
         ...(options.extractionService ? { extractionService: options.extractionService } : {}) }) })
     : undefined;

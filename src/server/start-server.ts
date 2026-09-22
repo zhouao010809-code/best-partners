@@ -29,6 +29,9 @@ import { listIntakeArchives } from './archive/intake-archive.js';
 import { createDeepSeekAssistantAdapter } from './assistant/deepseek-adapter.js';
 import { createAttachmentService, type AttachmentService } from './attachments/service.js';
 import { createSkillCatalogService, type SkillCatalogService } from './services/skill-catalog.js';
+import { createProjectService } from './projects/project-service.js';
+import { createProjectWritePlanService } from './projects/project-write-plans.js';
+import type { ProjectService, ProjectWritePlanService } from '../shared/api/projects.js';
 
 export interface EmbeddedServerConfig {
   readonly host: '127.0.0.1';
@@ -80,6 +83,8 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
   let intakeTrashService: IntakeTrashService | undefined;
   let attachmentService: AttachmentService | undefined;
   let skillCatalog: SkillCatalogService | undefined;
+  let projectService: (ProjectService & { close(): Promise<void> }) | undefined;
+  let projectWritePlans: ProjectWritePlanService | undefined;
   const intakeMutation = createIntakeMutationGate();
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
@@ -92,7 +97,9 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
                 try { intakeTrashPort?.close(); } finally {
                   try { trashPort?.close(); } finally {
                     try { ingestionPort?.close(); } finally {
-                      try { archivePort?.close(); } finally { if (kernel.mode === 'normal') kernel.close(); }
+                      try { archivePort?.close(); } finally {
+                        try { await projectService?.close(); } finally { if (kernel.mode === 'normal') kernel.close(); }
+                      }
                     }
                   }
                 }
@@ -106,6 +113,10 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
   };
   try {
     const repository = kernel.mode === 'normal' ? createIndexRepository(kernel.db) : undefined;
+    if (kernel.mode === 'normal' && config.adapter === 'filesystem') {
+      projectService = createProjectService({ database: kernel.db, vaultRoot: config.vaultRealRoot, stateRoot: config.appDataDir });
+      projectWritePlans = createProjectWritePlanService({ database: kernel.db });
+    }
     let indexer: SearchIndexer | undefined;
     if (kernel.mode === 'normal' && repository !== undefined) {
       const metadata = loadIndexMetadata(kernel.db);
@@ -290,6 +301,8 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
       ...(ingestionService ? { ingestionService } : {}),
       ...(trashService ? { trashService } : {}),
       ...(skillCatalog ? { skillCatalog } : {}),
+      ...(projectService ? { projectService } : {}),
+      ...(projectWritePlans ? { projectWritePlans } : {}),
       httpPolicy: {
         isAllowedHost: policy.isAllowedHost,
         isAllowedOrigin: (origin, required) => policy.isAllowedOrigin(origin, required)

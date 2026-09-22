@@ -6,7 +6,7 @@ import type { KnowledgeRecord, MaterialRecord } from '../../shared/domain/record
 import type { ReadService } from '../services/read-service.js';
 import type { AssistantExtractionPreparation, ExtractionService } from '../services/extraction-service.js';
 import { validateFilesystemPath } from '../vault/filesystem-path.js';
-import { ASSISTANT_MAX_SOURCES, type AssistantEvent, type AssistantTool } from './types.js';
+import { ASSISTANT_MAX_SOURCES, createAssistantSourceAllocator, type AssistantEvent, type AssistantTool } from './types.js';
 import { evidenceFragment } from './presentation.js';
 
 const MAX_DOCUMENTS = 10;
@@ -32,12 +32,17 @@ export function createBrainTools(input: {
   sourceOffset?: number;
   /** Explicit company-runtime registration point; omitted in the personal runtime. */
   companyTools?: readonly AssistantTool[];
+  /** Candidate preparation is disabled for project turns. */
+  allowCandidateWrites?: boolean;
+  /** Shared with attachment/project tools so one turn has one citation namespace. */
+  sourceAllocator?: { next(): string };
   model: string;
   signal: AbortSignal;
   emit: (event: AssistantEvent) => void;
 }): AssistantTool[] {
   const readPaths = new Set<string>();
   const emittedPaths = new Map<string, AssistantSource>();
+  const sourceAllocator = input.sourceAllocator ?? createAssistantSourceAllocator();
   const preparations = new Map<string, AssistantExtractionPreparation>();
   const preparationByContext = new Map<string, AssistantExtractionPreparation>();
   let readCharacters = 0;
@@ -59,7 +64,7 @@ export function createBrainTools(input: {
   function source(path: string, title: string, kind: 'search' | 'read' = 'search', evidence?: AssistantEvidence): string {
     const existing = emittedPaths.get(path);
     if (!existing && emittedPaths.size >= ASSISTANT_MAX_SOURCES) throw new PublicApiError('ASSISTANT_SOURCE_LIMIT', '本轮已找到 50 个来源，请先依据已有来源回答，或缩小范围后继续。', 400);
-    const value = existing ?? { id: `S${emittedPaths.size + 1 + (input.sourceOffset ?? 0)}`, path, title, kind };
+    const value = existing ?? { id: input.sourceAllocator ? sourceAllocator.next() : `S${emittedPaths.size + 1 + (input.sourceOffset ?? 0)}`, path, title, kind };
     let changed = !existing;
     if (kind === 'read' && value.kind !== 'read') { value.kind = 'read'; changed = true; }
     if (evidence) {
@@ -201,5 +206,5 @@ export function createBrainTools(input: {
         message: candidateCount ? '候选已保存，正式入库需由用户在审阅界面确认。原文与正式知识未修改。' : '提炼已完成，本轮没有知识候选，可查看导读。原文与正式知识未修改。' };
     })
   ];
-  return [...baseTools, ...(input.companyTools ?? [])];
+  return [...(input.allowCandidateWrites === false ? baseTools.slice(0, 3) : baseTools), ...(input.companyTools ?? [])];
 }

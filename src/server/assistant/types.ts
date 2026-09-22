@@ -2,6 +2,12 @@ import type { AssistantProvider, AssistantSource, AssistantAction, AssistantUsag
 
 export const ASSISTANT_MAX_SOURCES = 50;
 
+/** Citation identifiers are scoped to one assistant turn. */
+export function createAssistantSourceAllocator(): { next(): string } {
+  let count = 0;
+  return { next: () => `S${++count}` };
+}
+
 export type AssistantToolEffect = 'read' | 'propose-write';
 
 export interface AssistantTool {
