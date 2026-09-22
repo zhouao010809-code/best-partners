@@ -20,15 +20,27 @@ const conversation: AssistantConversation = { id: '11c7a1d4-7cbf-4e92-9c64-ad175
 const service = { providers: vi.fn(), history: vi.fn(), get: vi.fn(), send: vi.fn(), stop: vi.fn(), confirmAction: vi.fn(), cancelAction: vi.fn(), login: vi.fn() };
 const skills = { match: vi.fn() };
 const api = { assistant: service, skills } as unknown as ReadConsoleApi;
+const projectId = '22c7a1d4-7cbf-4e92-9c64-ad175aa17d18';
+const projectSummary = {
+  id: projectId, displayName: 'A项目', sourceRevision: 7, availability: 'ready' as const, outputRoot: 'AI工作区',
+  fileCount: 3, readableFileCount: 3, issueCount: 0, createdAt: '2026-09-09T06:00:00Z', updatedAt: '2026-09-09T06:00:01Z', lastScannedAt: '2026-09-09T06:00:01Z'
+};
+const projectGet = vi.fn();
+const projectApi = { assistant: service, skills, projects: { get: projectGet } } as unknown as ReadConsoleApi;
 function Harness({ path = '/knowledge?path=02知识库%2F09学习%2F学习方法.md', dataRevision = 0 }: { path?: string; dataRevision?: number }) {
   const [open, setOpen] = useState(true); const [running, setRunning] = useState(false); const [width, setWidth] = useState(430);
   const close = useCallback(() => setOpen(false), []);
   return <MemoryRouter initialEntries={[path]}><AssistantToggle open={open} running={running} onClick={() => setOpen(value => !value)} /><AssistantPanel api={api} open={open} onClose={close} width={width} onWidthChange={setWidth} onRunningChange={setRunning} dataRevision={dataRevision} /></MemoryRouter>;
 }
+function ProjectHarness({ id = projectId }: { id?: string }) {
+  const [open, setOpen] = useState(true); const [running, setRunning] = useState(false); const [width, setWidth] = useState(430);
+  return <MemoryRouter initialEntries={[`/projects/${id}`]}><AssistantPanel api={projectApi} open={open} onClose={() => setOpen(false)} width={width} onWidthChange={setWidth} onRunningChange={setRunning} /></MemoryRouter>;
+}
 beforeEach(() => {
   service.providers.mockResolvedValue(ok({ providers: [provider, secondary] })); service.history.mockResolvedValue(ok({ conversations: [] })); service.send.mockResolvedValue(ok(conversation)); service.get.mockResolvedValue(ok(conversation)); service.stop.mockResolvedValue(ok({ ...conversation, status: 'stopped' }));
   skills.match.mockResolvedValue(ok({ candidates: [] }));
   service.login.mockResolvedValue(ok({ authUrl: 'https://auth.example.com/secondary', message: '请完成登录。' }));
+  projectGet.mockResolvedValue(ok(projectSummary));
 });
 afterEach(() => { cleanup(); vi.resetAllMocks(); vi.useRealTimers(); Reflect.deleteProperty(window, 'xiaozhaoDesktop'); });
 
@@ -44,6 +56,23 @@ it('uses provider recommendations, sends the selected context, and links real so
   expect(await screen.findByText('具体问题')).toBeVisible();
   expect(screen.getByRole('link', { name: 'S1 学习方法' })).toHaveAttribute('href', '/knowledge?path=02%E7%9F%A5%E8%AF%86%E5%BA%93%2F09%E5%AD%A6%E4%B9%A0%2F%E5%AD%A6%E4%B9%A0%E6%96%B9%E6%B3%95.md');
   expect(screen.getByRole('link', { name: '审阅知识候选' })).toHaveAttribute('href', '/extractions/run-123');
+});
+
+it('binds the single panel to a project, sends its source revision, and scopes history', async () => {
+  const projectConversation = { ...conversation, scope: 'project' as const, projectId, projectRevision: 7 };
+  service.send.mockResolvedValueOnce(ok(projectConversation));
+  service.history.mockResolvedValue(ok({ conversations: [] }));
+  const user = userEvent.setup(); render(<ProjectHarness />);
+  expect((await screen.findAllByText('项目模式 · A项目')).length).toBeGreaterThan(0);
+  expect(screen.getByText('项目语料：已连接')).toBeVisible();
+  expect(screen.getByText('全局知识库：可检索')).toBeVisible();
+  expect(screen.getByText('写入范围：A项目 / AI工作区')).toBeVisible();
+  await user.type(screen.getByLabelText('发送给问问的消息'), '下周拍 6 条获客内容');
+  await user.click(screen.getByRole('button', { name: '发送消息' }));
+  await waitFor(() => expect(service.send).toHaveBeenCalledTimes(1));
+  expect(service.send.mock.calls[0]![0]).toMatchObject({ scope: 'project', projectId, projectRevision: 7, message: '下周拍 6 条获客内容' });
+  await user.click(screen.getByRole('button', { name: '历史对话' }));
+  await waitFor(() => expect(service.history).toHaveBeenLastCalledWith(expect.any(AbortSignal), expect.objectContaining({ projectId })));
 });
 
 it('confirms an archive plan through the panel and retains it when the API fails', async () => {

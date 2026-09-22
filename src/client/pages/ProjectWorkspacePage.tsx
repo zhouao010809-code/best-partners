@@ -9,6 +9,7 @@ import { ProjectFilesPanel } from '../components/projects/ProjectFilesPanel.js';
 import { ProjectStatusCard } from '../components/projects/ProjectStatusCard.js';
 import { PageState } from '../components/PageState.js';
 import { isCancelled } from './pageSupport.js';
+import { askAssistant, PROJECT_WORKSPACE_UPDATED_EVENT } from '../components/assistant/assistantIntent.js';
 import '../styles/projects.css';
 
 function resultMessage(result: ApiClientResult<unknown>, fallback: string): string {
@@ -34,6 +35,7 @@ export function ProjectWorkspacePage() {
   const [reconnecting, setReconnecting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [staleNotice, setStaleNotice] = useState(false);
+  const [filesRefreshVersion, setFilesRefreshVersion] = useState(0);
   const controllerRef = useRef<AbortController | undefined>(undefined);
 
   const load = useCallback(async (): Promise<void> => {
@@ -69,6 +71,16 @@ export function ProjectWorkspacePage() {
     void load();
     return () => controllerRef.current?.abort();
   }, [load]);
+
+  useEffect(() => {
+    const refreshFiles = (event: Event) => {
+      const detail = (event as CustomEvent<{ projectId?: string }>).detail;
+      if (!id || detail?.projectId !== id) return;
+      setFilesRefreshVersion(value => value + 1);
+    };
+    window.addEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, refreshFiles);
+    return () => window.removeEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, refreshFiles);
+  }, [id]);
 
   async function refreshProject(): Promise<void> {
     if (!id || projectsApi === undefined || project === undefined || refreshing || reconnecting) return;
@@ -172,6 +184,7 @@ export function ProjectWorkspacePage() {
       <Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link>
       <header className="projects-page__heading project-workspace__heading">
         <div><p className="projects-eyebrow">PROJECT / ISOLATED WORKSPACE</p><h2 id="project-workspace-title"><FolderKanban size={22} aria-hidden="true" />{project.displayName}</h2><p>项目语料、项目问问和 AI 工作区各自独立；全局知识库只作为可检索的辅助来源。</p></div>
+        <button type="button" className="projects-button projects-button--primary" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}>打开项目问问</button>
       </header>
       {message !== undefined && <p className="projects-inline-message" role="status">{message}</p>}
       {staleNotice && <p className="project-stale-notice" role="status"><ShieldCheck size={15} aria-hidden="true" />重新连接后，旧的项目写入计划不会自动执行；请重新确认当前资料。</p>}
@@ -181,7 +194,7 @@ export function ProjectWorkspacePage() {
         <div><Sparkles size={16} aria-hidden="true" /><span><strong>全局知识库：可检索</strong><small>按本次任务召回相关方法和证据</small></span></div>
         <div><ShieldCheck size={16} aria-hidden="true" /><span><strong>写入范围：{project.displayName} / AI工作区</strong><small>确认后才会生成项目产出</small></span></div>
       </section>
-      <ProjectFilesPanel api={api} projectId={project.id} revision={project.sourceRevision} />
+      <ProjectFilesPanel key={`${project.id}:${filesRefreshVersion}`} api={api} projectId={project.id} revision={project.sourceRevision} />
     </section>
   );
 }

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { attachmentResponseSchema, attachmentPagesResponseSchema, attachmentListResponseSchema, attachmentArchiveResponseSchema, type Attachment, type AttachmentPages, type AttachmentArchiveResult } from '../../shared/api/attachments.js';
-import { assistantDraftListResponseSchema, assistantDraftResponseSchema, assistantDraftDeleteResponseSchema, type AssistantDraft, type AssistantDraftList, type AssistantDraftSave } from '../../shared/api/assistant-drafts.js';
+import { assistantDraftListResponseSchema, assistantDraftResponseSchema, assistantDraftDeleteResponseSchema, type AssistantDraft, type AssistantDraftList, type AssistantDraftSave, type AssistantDraftQuery } from '../../shared/api/assistant-drafts.js';
 import { assistantProvidersResponseSchema, assistantConversationResponseSchema, assistantHistoryResponseSchema, assistantLoginResponseSchema,
   type AssistantProvider, type AssistantConversation, type AssistantSend, type AssistantHistoryPage, type AssistantHistoryQuery } from '../../shared/api/assistant.js';
 import { libraryPageResponseSchema, type LibraryQuery, type LibraryPage } from '../../shared/api/library.js';
@@ -98,6 +98,12 @@ export type ApiClientResult<T> =
   }
   | { readonly ok: false; readonly cancelled: true };
 
+type AssistantDraftListClient = {
+  (signal?: AbortSignal, query?: AssistantDraftQuery): Promise<ApiClientResult<AssistantDraftList>>;
+  /** Compatibility with the pre-query client signature. */
+  (projectId?: string, signal?: AbortSignal): Promise<ApiClientResult<AssistantDraftList>>;
+};
+
 export type MaterialPage = z.infer<typeof materialPageSchema>;
 export type KnowledgePage = z.infer<typeof knowledgePageSchema>;
 export type LiveKnowledgeDetail = z.infer<typeof liveKnowledgeDetailSchema>;
@@ -146,7 +152,7 @@ export interface ReadConsoleApi {
     cancel(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
   };
   assistantDrafts?: {
-    list(projectId?: string, signal?: AbortSignal): Promise<ApiClientResult<AssistantDraftList>>;
+    list: AssistantDraftListClient;
     save(id: string, input: AssistantDraftSave): Promise<ApiClientResult<{ draft: AssistantDraft }>>;
     delete(id: string, revision: number): Promise<ApiClientResult<{ deleted: true }>>;
   };
@@ -491,9 +497,17 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
       )
     },
     assistantDrafts: {
-      list: (projectId, signal) => requestData(fetcher, withQuery('/api/v1/assistant/drafts', parameters => {
-        appendQuery(parameters, 'projectId', projectId);
-      }), assistantDraftListResponseSchema, getInit(signal)),
+      list: ((first?: string | AbortSignal, second?: AbortSignal | AssistantDraftQuery) => {
+        const projectId = typeof first === 'string'
+          ? first
+          : second !== undefined && !(second instanceof AbortSignal) ? second.projectId : undefined;
+        const signal = typeof first === 'string'
+          ? (second instanceof AbortSignal ? second : undefined)
+          : first instanceof AbortSignal ? first : undefined;
+        return requestData(fetcher, withQuery('/api/v1/assistant/drafts', parameters => {
+          appendQuery(parameters, 'projectId', projectId);
+        }), assistantDraftListResponseSchema, getInit(signal));
+      }) as AssistantDraftListClient,
       save: (id, input) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}`, assistantDraftResponseSchema, 'PUT', JSON.stringify(input)),
       delete: (id, revision) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}?revision=${revision}`, assistantDraftDeleteResponseSchema, 'DELETE')
     },

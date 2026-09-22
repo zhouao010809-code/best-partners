@@ -32,11 +32,16 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
     if (!service) { setReady(true); return; }
     const sequence = ++loadSequence.current; setError('');
     try {
-      const result = await service.list(requestedProjectId); if (!mounted.current || sequence !== loadSequence.current) return;
+      const result = await service.list(undefined, requestedProjectId === undefined ? undefined : { projectId: requestedProjectId }); if (!mounted.current || sequence !== loadSequence.current) return;
       if (!result.ok) { setError('state' in result ? result.state.message ?? '未能恢复本机草稿。' : '未能恢复本机草稿。'); return; }
       setDrafts(result.value.drafts); draftsRef.current = result.value.drafts;
       const active = result.value.drafts.find(item => item.id === result.value.activeId);
       if (active) { replace(active); acknowledged.current = fingerprint(active); }
+      else {
+        const blank = fresh();
+        replace(requestedProjectId === undefined ? blank : { ...blank, scope: 'project', projectId: requestedProjectId });
+        acknowledged.current = fingerprint(currentRef.current);
+      }
       setReady(true);
     } catch { if (mounted.current && sequence === loadSequence.current) setError('未能恢复本机草稿，请重新连接后重试。'); }
   }, [projectId, service, replace]);
@@ -81,16 +86,29 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
     window.addEventListener('beforeunload', beforeUnload); return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [service, flush]);
 
-  async function select(next: LocalDraft): Promise<boolean> {
+  const select = useCallback(async (next: LocalDraft): Promise<boolean> => {
     if (!await flush()) return false;
     if (next.id === currentRef.current.id) next = currentRef.current;
     replace(next); acknowledged.current = ''; setNotice('');
     // Flush also records which draft should be restored after a full app restart.
     await flush(); return true;
-  }
+  }, [flush, replace]);
   async function newDraft(text = '', attachments: AssistantDraftFields['attachments'] = []): Promise<boolean> {
     return select({ ...fresh(), text, attachments });
   }
+  const enterProject = useCallback(async (id: string, sourceRevision: number): Promise<boolean> => {
+    if (service) await load(id);
+    const existing = draftsRef.current.find(item => item.projectId === id);
+    const next: LocalDraft = existing
+      ? { ...existing, scope: 'project', projectId: id, projectRevision: sourceRevision, contextPath: undefined }
+      : { ...fresh(), scope: 'project', projectId: id, projectRevision: sourceRevision };
+    if (next.id === currentRef.current.id) {
+      if (!await flush()) return false;
+      replace(next); acknowledged.current = ''; setNotice('');
+      return flush();
+    }
+    return select(next);
+  }, [load, select, service]);
   async function forConversation(value: AssistantConversation): Promise<boolean> {
     const existing = draftsRef.current.find(item => item.conversationId === value.id);
     // An existing empty selection represents an explicit removal. Only recover
@@ -103,5 +121,5 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
     replace({ ...currentRef.current, id: crypto.randomUUID(), revision: 0 }); acknowledged.current = '';
     const saved = await flush(); if (saved) setNotice('已另存当前草稿；其他窗口的版本也保留在草稿列表中。'); return saved;
   }
-  return { current, currentRef, drafts, ready, saving, dirty: acknowledged.current !== fingerprint(current), error, conflict, notice, update, flush, load, select, newDraft, forConversation, saveAsCopy };
+  return { current, currentRef, drafts, ready, saving, dirty: acknowledged.current !== fingerprint(current), error, conflict, notice, update, flush, load, select, newDraft, enterProject, forConversation, saveAsCopy };
 }

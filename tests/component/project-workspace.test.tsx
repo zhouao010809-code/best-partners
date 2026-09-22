@@ -80,6 +80,22 @@ describe('ProjectWorkspacePage', () => {
     expect(screen.getByText('写入范围：A项目 / AI工作区')).toBeVisible();
   });
 
+  it('opens the existing project assistant intent from the workspace', async () => {
+    const received: Event[] = [];
+    const listener = (event: Event) => received.push(event);
+    window.addEventListener('xiaozhao:ask', listener);
+    try {
+      const user = userEvent.setup();
+      renderPage();
+      await screen.findByText('写入范围：A项目 / AI工作区');
+      await user.click(screen.getByRole('button', { name: '打开项目问问' }));
+      expect(received).toHaveLength(1);
+      expect((received[0] as CustomEvent).detail).toMatchObject({ scope: 'project', projectId: id, projectRevision: project.sourceRevision });
+    } finally {
+      window.removeEventListener('xiaozhao:ask', listener);
+    }
+  });
+
   it('refreshes without replacing the page when the bound root needs reconnect', async () => {
     const user = userEvent.setup();
     refresh.mockResolvedValueOnce({ ok: false, code: 'PROJECT_ROOT_RECONNECT_REQUIRED', state: { status: 'operation-error', message: 'root unavailable' } });

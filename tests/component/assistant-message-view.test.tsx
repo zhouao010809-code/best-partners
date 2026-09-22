@@ -67,3 +67,21 @@ it('renders a project output plan without exposing its content', async () => {
   fireEvent.click(screen.getByRole('button', { name: '取消' }));
   expect(cancel).toHaveBeenCalledOnce();
 });
+
+it('links project sources to the project workspace and labels global context separately', () => {
+  const projectId = '7f9c3b4e-9c3f-4d7a-8c5f-1a8e0e5f2f66';
+  render(<MemoryRouter><AssistantMessageView
+    message={{
+      id: 'message', role: 'assistant', text: '参考 [P1] 和 [G1]',
+      sources: [
+        { id: 'P1', path: `project:${projectId}/资料/brief.md`, title: '项目 brief', kind: 'read' },
+        { id: 'G1', path: '02知识库/方法论.md', title: '全局方法论', kind: 'search' }
+      ], actions: []
+    }}
+    onFollowUp={() => {}}
+  /></MemoryRouter>);
+  fireEvent.click(screen.getByText('相关资料 · 2'));
+  expect(screen.getByText('项目资料')).toBeVisible();
+  expect(screen.getByText('全局知识')).toBeVisible();
+  expect(screen.getByRole('link', { name: 'P1 项目 brief' })).toHaveAttribute('href', `/projects/${projectId}?file=%E8%B5%84%E6%96%99%2Fbrief.md`);
+});

@@ -9,6 +9,15 @@ import { AssistantProjectWriteCard } from './AssistantProjectWriteCard.js';
 
 export const assistantSourceHref = (path: string) => `${path.startsWith('02知识库/') ? '/knowledge' : '/library'}?${new URLSearchParams({ path })}`;
 export const assistantPathTitle = (path: string) => path.split('/').at(-1)?.replace(/\.md$/iu, '') ?? path;
+export function projectSourceHref(path: string): string | undefined {
+  if (!path.startsWith('project:')) return undefined;
+  const separator = path.indexOf('/');
+  if (separator < 0) return undefined;
+  const projectId = path.slice('project:'.length, separator);
+  const relativePath = path.slice(separator + 1);
+  if (!projectId || !relativePath) return undefined;
+  return `/projects/${encodeURIComponent(projectId)}?file=${encodeURIComponent(relativePath)}`;
+}
 
 function Citation({ source }: { source: AssistantSource }) {
   const [open, setOpen] = useState(false);
@@ -30,7 +39,12 @@ function ReviewCard({ action }: { action: AssistantReviewAction }) {
 
 function SourceLink({ source, children }: { source: AssistantSource; children: React.ReactNode }) {
   const attachmentId = source.attachmentId ?? (source.path.startsWith('attachment:') ? source.path.slice(11) : undefined);
-  return attachmentId ? <a href={attachmentContentHref(attachmentId)} download={source.title} aria-label={`${source.id} ${source.title}`}>{children}</a> : <Link title={source.path} aria-label={`${source.id} ${source.title}`} to={assistantSourceHref(source.path)}>{children}</Link>;
+  const projectHref = projectSourceHref(source.path);
+  return attachmentId
+    ? <a href={attachmentContentHref(attachmentId)} download={source.title} aria-label={`${source.id} ${source.title}`}>{children}</a>
+    : projectHref
+      ? <Link title={source.path} aria-label={`${source.id} ${source.title}`} to={projectHref}>{children}</Link>
+      : <Link title={source.path} aria-label={`${source.id} ${source.title}`} to={assistantSourceHref(source.path)}>{children}</Link>;
 }
 function ArchiveCard({ action }: { action: AssistantArchiveAction }) {
   return <section className="assistant-task-card" aria-label="文件归档结果"><div className="assistant-task-card__heading"><strong>{action.materialTitle}</strong><span>{action.duplicate ? '已在档案库' : '已归档'}</span></div><p>{action.indexed === false ? '原件已保存，索引待更新。' : '资料已保存到档案库。'}</p><div className="assistant-task-card__footer"><a href={attachmentContentHref(action.attachmentId)} download={action.materialTitle}>下载原件</a><Link className="assistant-review" to={assistantSourceHref(action.materialPath)}><Check /><span>查看归档资料</span><ArrowRight /></Link></div></section>;
@@ -57,10 +71,14 @@ export function AssistantMessageView({ message, onFollowUp, onConfirmAction, onC
   }
   return <article className={`assistant-message assistant-message--${message.role}`} aria-label={message.role === 'user' ? '你的消息' : '问问的回答'} onMouseUp={event => { if ((event.target as Element).closest('.assistant-answer-tools')) return; const selected = window.getSelection(); setSelection(selected && event.currentTarget.contains(selected.anchorNode) && event.currentTarget.contains(selected.focusNode) ? selected.toString().trim().slice(0, 6000) : ''); }}>
     {message.role === 'assistant' && <div className="assistant-message__byline"><span className="assistant-eyes" aria-hidden="true"><i /><i /></span><span>问问</span>{message.skillUse && <span className="assistant-message__skill-use" title={`Skill 版本 ${message.skillUse.revision}`}>已使用 Skill：{message.skillUse.name} · {message.skillUse.folderName || '未分类'} · {message.skillUse.revision.slice(0, 8)}</span>}{message.model && <small title={message.model}>{message.model}</small>}</div>}
-    {message.role === 'user' && message.scope && <div className="assistant-message__context"><FileText size={12} />{message.scope === 'current' ? message.contextPath ? `本轮检索：仅《${message.contextTitle || assistantPathTitle(message.contextPath)}》${message.attachments?.length ? '和已选文件' : ''}` : '本轮检索：仅已选文件' : '本轮检索：整个大脑'}</div>}
+    {message.role === 'user' && message.scope && <div className="assistant-message__context"><FileText size={12} />{message.scope === 'project' ? `本轮检索：项目模式 · ${message.contextTitle || message.projectId || '当前项目'}；全局知识库可检索` : message.scope === 'current' ? message.contextPath ? `本轮检索：仅《${message.contextTitle || assistantPathTitle(message.contextPath)}》${message.attachments?.length ? '和已选文件' : ''}` : '本轮检索：仅已选文件' : '本轮检索：整个大脑'}</div>}
     {message.attachments?.length ? <div className="assistant-message__attachments">{message.attachments.map(file => <a key={file.id} href={attachmentContentHref(file.id)} download={file.name}><FileText size={12} />{file.name}{file.startPage || file.endPage ? ` · 第 ${file.startPage ?? 1}–${file.endPage ?? file.pageCount} 页` : ''}</a>)}</div> : null}
     {message.text && <SafeMarkdown renderCitation={id => { const source = sources.get(id); return source ? <Citation source={source} /> : undefined; }}>{message.text}</SafeMarkdown>}
-    {message.sources.length > 0 && <details className="assistant-sources"><summary>相关资料 · {message.sources.length}</summary><div>{message.sources.map(source => <SourceLink key={source.id} source={source}><span>{source.id}</span><FileText /><span>{source.title}</span><small>{source.kind === 'read' ? '已读取' : source.kind === 'search' ? '检索结果' : '历史引用'}</small></SourceLink>)}</div></details>}
+    {message.sources.length > 0 && <details className="assistant-sources"><summary>相关资料 · {message.sources.length}</summary><div>{(['project', 'global'] as const).map(group => {
+      const items = message.sources.filter(source => group === 'project' ? projectSourceHref(source.path) !== undefined : projectSourceHref(source.path) === undefined);
+      if (!items.length) return null;
+      return <section key={group} className="assistant-sources__group"><strong>{group === 'project' ? '项目资料' : '全局知识'}</strong>{items.map(source => <SourceLink key={source.id} source={source}><span>{source.id}</span><FileText /><span>{source.title}</span><small>{source.kind === 'read' ? '已读取' : source.kind === 'search' ? '检索结果' : '历史引用'}</small></SourceLink>)}</section>;
+    })}</div></details>}
     {message.actions.map(action => action.type === 'plan'
       ? <AssistantActionPlanCard key={action.id} action={action}
           onResolved={() => onConfirmAction ? onConfirmAction(action) : Promise.resolve()}

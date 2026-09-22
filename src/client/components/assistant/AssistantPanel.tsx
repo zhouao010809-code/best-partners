@@ -5,6 +5,7 @@ import type { ApiClientResult, ReadConsoleApi } from '../../api/client.js';
 import type { AssistantConversation, AssistantProvider, AssistantSend, AssistantPlanAction, AssistantProjectWriteAction } from '../../../shared/api/assistant.js';
 import type { Attachment, AttachmentSelection } from '../../../shared/api/attachments.js';
 import type { AssistantDraft } from '../../../shared/api/assistant-drafts.js';
+import type { ProjectSummary } from '../../../shared/api/projects.js';
 import type { SkillMatchCandidate } from '../../../shared/api/skills.js';
 import { AttachmentPicker } from './AttachmentPicker.js';
 import { ContextUsage } from './ContextUsage.js';
@@ -12,7 +13,7 @@ import { AssistantContinuation } from './AssistantContinuation.js';
 import { useAssistantDrafts } from './useAssistantDrafts.js';
 import { AssistantMessageView } from './AssistantMessageView.js';
 import { SkillRecommendationCard } from './SkillRecommendationCard.js';
-import { ASSISTANT_INTENT_EVENT, ASSISTANT_REVIEW_EVENT, type AssistantIntent } from './assistantIntent.js';
+import { ASSISTANT_INTENT_EVENT, ASSISTANT_REVIEW_EVENT, PROJECT_WORKSPACE_UPDATED_EVENT, type AssistantIntent } from './assistantIntent.js';
 import '../../styles/assistant.css';
 import '../../styles/ai-glow.css';
 
@@ -42,11 +43,17 @@ export interface AssistantPanelProps {
   onWidthChange: (width: number) => void;
   onRunningChange: (running: boolean) => void;
   dataRevision?: number;
+  projectId?: string;
 }
 
-export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRunningChange, dataRevision = 0 }: AssistantPanelProps) {
+export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRunningChange, dataRevision = 0, projectId: projectIdProp }: AssistantPanelProps) {
   const service = api.assistant;
   const location = useLocation();
+  const projectId = projectIdProp ?? (() => {
+    const match = location.pathname.match(/^\/projects\/([^/]+)$/u);
+    if (!match?.[1]) return undefined;
+    try { return decodeURIComponent(match[1]); } catch { return undefined; }
+  })();
   const query = new URLSearchParams(location.search);
   const explicitPath = ['/library', '/knowledge'].includes(location.pathname) ? query.get('path') : location.pathname === '/queue' || location.pathname.startsWith('/extractions/') ? query.get('materialPath') : null;
   const [extractionPath, setExtractionPath] = useState<string>();
@@ -55,12 +62,20 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const [providerId, setProviderId] = useState('');
   const [modelId, setModelId] = useState('');
   const [effort, setEffort] = useState('');
-  const draftStore = useAssistantDrafts(api.assistantDrafts);
+  const [project, setProject] = useState<ProjectSummary>();
+  const [projectLoading, setProjectLoading] = useState(false);
+  const [projectError, setProjectError] = useState('');
+  const [projectStale, setProjectStale] = useState(false);
+  const projectRequest = useRef<AbortController | undefined>(undefined);
+  const draftStore = useAssistantDrafts(api.assistantDrafts, projectId);
   const scope = draftStore.current.scope;
-  const setScope = (value: 'brain' | 'current' | 'project') => draftStore.update({
-    scope: value,
-    ...(value === 'project' ? { contextPath: undefined } : { projectId: undefined, projectRevision: undefined })
-  });
+  const setScope = (value: 'brain' | 'current' | 'project') => {
+    const nextScope = projectId ? 'project' : value;
+    draftStore.update({
+      scope: nextScope,
+      ...(nextScope === 'project' ? { contextPath: undefined, ...(projectId ? { projectId } : {}), ...(project?.sourceRevision !== undefined ? { projectRevision: project.sourceRevision } : {}) } : { projectId: undefined, projectRevision: undefined })
+    });
+  };
   const pinnedPath = draftStore.current.contextPath;
   const setPinnedPath = (value: string | undefined) => { draftStore.update({ contextPath: value }); setFollowPageContext(!value); };
   const [followPageContext, setFollowPageContext] = useState(!api.assistantDrafts);
@@ -132,8 +147,58 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const locked = isRunning || pending || !draftStore.ready || restoringConversation;
   const attachmentsReady = draftStore.current.attachments.every(item => attachmentRecords.some(record => record.id === item.id && record.status === 'ready'));
   const missingConversation = Boolean(draftStore.current.conversationId && draftStore.current.conversationId !== conversation?.id);
+  const projectRevisionStale = Boolean(projectId && project && draftStore.current.projectRevision !== undefined && draftStore.current.projectRevision !== project.sourceRevision);
+  const projectDraftUnbound = Boolean(projectId && (scope !== 'project' || draftStore.current.projectId !== projectId || draftStore.current.projectRevision === undefined));
+  const projectBlocked = Boolean(projectId && (projectLoading || projectStale || project === undefined || project.availability !== 'ready' || projectRevisionStale || projectDraftUnbound));
   const provider = providers.find(item => item.id === providerId);
   const model = provider?.models.find(item => item.id === modelId);
+
+  const loadProjectSummary = useCallback(async (): Promise<ProjectSummary | undefined> => {
+    projectRequest.current?.abort();
+    const controller = new AbortController();
+    projectRequest.current = controller;
+    if (!projectId || !api.projects) {
+      setProject(undefined);
+      setProjectLoading(false);
+      return undefined;
+    }
+    setProjectLoading(true); setProjectError('');
+    try {
+      const result = await api.projects.get(projectId, controller.signal);
+      if (controller.signal.aborted) return undefined;
+      if (!result.ok) {
+        setProjectError(errorMessage(result, '项目资料暂时无法读取。'));
+        return undefined;
+      }
+      setProject(result.value);
+      return result.value;
+    } catch {
+      if (!controller.signal.aborted) setProjectError('项目资料暂时无法读取，请刷新后重试。');
+      return undefined;
+    } finally {
+      if (!controller.signal.aborted) setProjectLoading(false);
+    }
+  }, [api.projects, projectId]);
+
+  useEffect(() => {
+    interactionEpoch.current += 1;
+    conversationRef.current = undefined;
+    setConversation(undefined);
+    setHistory([]); setHistoryResults([]); setHistoryNextCursor(undefined);
+    setError(''); setProject(undefined); setProjectError(''); setProjectStale(false);
+    restoredDraft.current = false;
+    if (!projectId) {
+      setProject(undefined);
+      setProjectLoading(false);
+      return;
+    }
+    let disposed = false;
+    void loadProjectSummary().then(async value => {
+      if (disposed || value === undefined) return;
+      await draftStore.enterProject(value.id, value.sourceRevision);
+    });
+    return () => { disposed = true; projectRequest.current?.abort(); };
+  }, [draftStore.enterProject, loadProjectSummary, projectId]);
 
   function chooseProvider(item: AssistantProvider) {
     selectionRef.current = item.id;
@@ -179,7 +244,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       const result = await service.history(controller.signal, {
         search: historyTerm,
         limit: 50,
-        ...(scope === 'project' && draftStore.current.projectId !== undefined ? { projectId: draftStore.current.projectId } : {}),
+        ...(projectId !== undefined ? { projectId } : {}),
         ...(cursor ? { cursor } : {})
       });
       if (!current()) return;
@@ -201,7 +266,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       }
     } catch { if (current()) (cursor ? setHistoryMoreError : setHistoryError)('无法读取对话记录，请重试。'); }
     finally { if (current()) setHistoryLoading(false); }
-  }, [historyTerm, receive, service, api.assistantDrafts, scope, draftStore.current.projectId]);
+  }, [historyTerm, receive, service, api.assistantDrafts, scope, projectId]);
 
   async function restoreConversation(id: string) {
     if (!service) return;
@@ -294,11 +359,29 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     tick(); const timer = setInterval(tick, 1000); return () => clearInterval(timer);
   }, [isRunning, conversation?.id]);
   async function loadIntent(intent: AssistantIntent) {
+    if (projectId && intent.projectId !== undefined && intent.projectId !== projectId) {
+      setError('这条提问属于另一个项目，当前项目不会载入它。');
+      return;
+    }
+    if (projectId && intent.scope !== undefined && intent.scope !== 'project') {
+      setError('当前已进入项目模式，请使用当前项目范围提问。');
+      return;
+    }
+    if (!projectId && intent.scope === 'project') {
+      setError('请先打开对应项目，再载入项目提问。');
+      return;
+    }
+    if (!intent.prompt.trim()) {
+      setShowHistory(false);
+      textArea.current?.focus();
+      return;
+    }
     if (intent.attachments?.length && !await startNewConversation(intent.prompt.slice(0, 16000), intent.attachments)) return;
     interactionEpoch.current += 1;
     clearSkillRecommendation();
     setDraft(intent.prompt.slice(0, 16000)); setShowHistory(false); setQueuedIntent(undefined);
     if (intent.scope === 'brain') { draftStore.update({ scope: 'brain', contextPath: undefined }); setFollowPageContext(false); }
+    if (projectId) draftStore.update({ scope: 'project', contextPath: undefined, projectId, ...(project?.sourceRevision !== undefined ? { projectRevision: project.sourceRevision } : {}) });
     if (intent.contextPath) { setPinnedPath(intent.contextPath); setScope('current'); }
     textArea.current?.focus();
   }
@@ -324,7 +407,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   }
 
   function buildSendPayload(): AssistantSend | undefined {
-    if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady) return undefined;
+    if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || projectBlocked) return undefined;
     if (!draft.trim() || !provider || provider.status !== 'ready' || !model) return undefined;
     if (scope === 'project' && (draftStore.current.projectId === undefined || draftStore.current.projectRevision === undefined)) return undefined;
     return {
@@ -341,7 +424,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   }
 
   async function dispatchSend(payload: AssistantSend): Promise<void> {
-    if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady) return;
+    if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || projectBlocked) return;
     clearSkillRecommendation();
     interactionEpoch.current += 1; localStartedAt.current = Date.now(); setElapsed(0);
     pendingRef.current = true; setPending(true); setSending(true); setError(''); setFailedSend(undefined); followOutput.current = true;
@@ -357,6 +440,15 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
           message: errorMessage(result, '所选 Skill 已不可用，请重新匹配后再试。'),
           epoch: interactionEpoch.current
         });
+      } else if ('code' in result && result.code === 'PROJECT_REVISION_STALE') {
+        setProjectStale(true);
+        setError('项目资料已更新，请确认后重试');
+        setFailedSend(undefined);
+        const latest = await loadProjectSummary();
+        if (latest !== undefined) {
+          await draftStore.enterProject(latest.id, latest.sourceRevision);
+          setProjectStale(false);
+        }
       } else { setError(errorMessage(result, '未能确认消息已发送，请重试。')); setFailedSend(payload); }
     } catch { setError('连接中断，尚未确认发送结果。可重试确认这条消息。'); setFailedSend(payload); }
     finally { pendingRef.current = false; setPending(false); setSending(false); }
@@ -467,6 +559,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     const next = result.value;
     const current = conversationRef.current;
     if (current) receive({ ...current, messages: current.messages.map(message => ({ ...message, actions: message.actions.map(item => item.type === 'project-write' && item.id === action.id ? next : item) })) });
+    if (!cancel) window.dispatchEvent(new CustomEvent(PROJECT_WORKSPACE_UPDATED_EVENT, { detail: { projectId: action.projectId } }));
   }
 
   function regenerateAction(action: AssistantPlanAction): void {
@@ -537,12 +630,21 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const safeAuthUrl = login?.authUrl && /^https:\/\//iu.test(login.authUrl) ? login.authUrl : undefined;
   return <aside id="assistant-panel" className={`assistant-panel assistant-panel--width-${width}${expanded ? ' assistant-panel--expanded' : ''}`} data-ai-active={isRunning || sending || undefined} aria-label="问问 AI">
     <div className="assistant-panel__resize" role="separator" aria-label="调整问问面板宽度" aria-orientation="vertical" aria-valuemin={360} aria-valuemax={600} aria-valuenow={width} tabIndex={0} onPointerDown={resize} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) onWidthChange(Math.min(600, Math.max(360, window.innerWidth - event.clientX))); }} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onWidthChange(Math.min(600, Math.max(360, width + (event.key === 'ArrowLeft' ? 80 : -80)))); } }} />
-    <header className="assistant-panel__header"><div><AssistantEyes active={Boolean(isRunning)} /><h2>问问</h2><span className="assistant-panel__caption">你的大脑助手</span></div><div className="assistant-panel__tools">
+    <header className="assistant-panel__header"><div><AssistantEyes active={Boolean(isRunning)} /><h2>{projectId ? `项目模式 · ${project?.displayName ?? '正在读取项目'}` : '问问'}</h2><span className="assistant-panel__caption">你的大脑助手</span></div><div className="assistant-panel__tools">
       <button type="button" className="assistant-icon-button" aria-label="历史对话" title="历史对话" aria-pressed={showHistory} onClick={() => { setShowHistory(value => !value); void loadHistory(); }}><History /></button>
       <button type="button" className="assistant-icon-button assistant-new-conversation" aria-label="新对话" title={locked ? '当前回答结束后可新建对话' : '新对话'} disabled={locked} onClick={() => void startNewConversation()}><Plus /><span>新对话</span></button>
       <button type="button" className="assistant-icon-button" aria-label={expanded ? '收起阅读' : '展开阅读'} title={expanded ? '收起阅读' : '展开阅读'} onClick={() => setExpanded(value => !value)}>{expanded ? <Minimize2 /> : <Maximize2 />}</button>
       <button type="button" className="assistant-icon-button" aria-label="关闭问问" title="关闭 · Esc" onClick={() => { clearSkillRecommendation(); onClose(); }}><X /></button>
     </div></header>
+
+    {projectId && <section className="assistant-project-context" aria-label="项目问问范围">
+      <strong>项目模式 · {project?.displayName ?? '正在读取项目'}</strong>
+      <span>项目语料：{project?.availability === 'ready' ? '已连接' : project?.availability === 'scanning' ? '扫描中' : projectLoading ? '读取中' : '需要重新连接'}</span>
+      <span>全局知识库：可检索</span>
+      <span>写入范围：{project?.displayName ?? '当前项目'} / AI工作区</span>
+      {projectError && <p role="alert">{projectError}<button type="button" onClick={() => void loadProjectSummary()} disabled={projectLoading}>重新读取项目</button></p>}
+      {(projectStale || projectRevisionStale) && <p role="status">项目资料已更新，请确认后重试</p>}
+    </section>}
 
     {showHistory && <div className="assistant-history"><div className="assistant-history__heading"><button className="assistant-text-button" onClick={() => setShowHistory(false)}><ChevronLeft />返回对话</button><span>历史对话</span></div>
       <label className="assistant-history__search"><Search size={15} /><input aria-label="搜索历史对话" placeholder="搜索全部话题或关联资料…" maxLength={200} value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} /></label>
@@ -606,12 +708,12 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
         {draftStore.error && <div className="assistant-notice" role="alert"><p>{draftStore.error}</p><button type="button" disabled={draftStore.saving} onClick={() => { void (draftStore.ready ? draftStore.flush() : draftStore.load()); }}>重试草稿保存或恢复</button>{draftStore.conflict && <button type="button" onClick={() => void draftStore.saveAsCopy()}>另存当前草稿</button>}</div>}
         {error && <div className="assistant-notice" role="alert"><p>{error}</p>{missingConversation && <button type="button" disabled={restoringConversation} onClick={() => void restoreConversation(draftStore.current.conversationId!)}>重新打开原对话</button>}{failedSend && <button disabled={pending} onClick={() => void send(failedSend)}>重试这条消息</button>}</div>}
         {!contextPath && currentPath && <p className="assistant-context-note">当前页面：《{titleFromPath(currentPath)}》 <button type="button" disabled={locked} onClick={() => { setPinnedPath(currentPath); setScope('current'); }}>带入这份资料</button></p>}
-        <div className="assistant-scope"><BookOpen /><select aria-label="资料范围" value={scope} disabled={locked} onChange={event => setScope(event.target.value as 'brain' | 'current' | 'project')}><option value="brain">整个大脑</option><option value="current" disabled={!contextPath && !draftStore.current.attachments.length}>{!contextPath && draftStore.current.attachments.length ? '仅本轮附件' : `当前资料${!contextPath ? ' · 请先打开一篇' : ''}`}</option><option value="project" disabled={!draftStore.current.projectId || draftStore.current.projectRevision === undefined}>我的项目{!draftStore.current.projectId ? ' · 请先选择项目' : ''}</option></select>{scope === 'project' && draftStore.current.projectId && <span>项目范围：{draftStore.current.projectId}</span>}{contextPath && scope !== 'project' && <span title={contextPath}>{hasPinnedContext ? '固定：' : '当前：'}{titleFromPath(contextPath)}</span>}{contextPath && scope !== 'project' && <button type="button" className="assistant-icon-button" aria-label={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} title={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} disabled={locked} aria-pressed={hasPinnedContext} onClick={() => setPinnedPath(hasPinnedContext ? undefined : contextPath)}><Pin size={13} /></button>}</div>
+        <div className="assistant-scope"><BookOpen />{projectId ? <span className="assistant-project-scope-label">项目模式 · {project?.displayName ?? projectId}</span> : <><select aria-label="资料范围" value={scope} disabled={locked} onChange={event => setScope(event.target.value as 'brain' | 'current' | 'project')}><option value="brain">整个大脑</option><option value="current" disabled={!contextPath && !draftStore.current.attachments.length}>{!contextPath && draftStore.current.attachments.length ? '仅本轮附件' : `当前资料${!contextPath ? ' · 请先打开一篇' : ''}`}</option><option value="project" disabled={!draftStore.current.projectId || draftStore.current.projectRevision === undefined}>我的项目{!draftStore.current.projectId ? ' · 请先选择项目' : ''}</option></select>{scope === 'project' && draftStore.current.projectId && <span>项目范围：{draftStore.current.projectId}</span>}{contextPath && scope !== 'project' && <span title={contextPath}>{hasPinnedContext ? '固定：' : '当前：'}{titleFromPath(contextPath)}</span>}{contextPath && scope !== 'project' && <button type="button" className="assistant-icon-button" aria-label={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} title={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} disabled={locked} aria-pressed={hasPinnedContext} onClick={() => setPinnedPath(hasPinnedContext ? undefined : contextPath)}><Pin size={13} /></button>}</>}</div>
         {hasPinnedContext && pinnedPath && currentPath && pinnedPath !== currentPath && <p className="assistant-context-change">已切换页面，本轮仍使用《{titleFromPath(pinnedPath)}》。<button type="button" disabled={locked} onClick={() => setPinnedPath(currentPath)}>改用当前页</button></p>}
         {scope === 'current' && conversation?.messages.length ? <p className="assistant-context-note">{contextPath ? `本轮仅检索这份资料${draftStore.current.attachments.length ? '及已选文件' : ''}` : '本轮仅检索已选文件'}；对话仍保留之前的消息。</p> : null}
         <AttachmentPicker key={draftStore.current.id} api={api} value={draftStore.current.attachments} groupId={draftStore.current.groupId} refreshKey={attachmentRefreshKey} disabled={locked} onAttachmentsChange={setAttachmentRecords} onChange={async attachments => { draftStore.update({ attachments }); if (!await draftStore.flush()) throw new Error('draft not saved'); }}>
         {!attachmentsReady && draftStore.current.attachments.length > 0 && <p className="assistant-context-note">附件可阅读后再发送；无法读取的文件可移除或在收件箱归档原件。</p>}
-        <form className="assistant-composer" onSubmit={event => { event.preventDefault(); void send(); }}><textarea ref={textArea} aria-label="发送给问问的消息" placeholder={provider?.status === 'ready' ? '问问你的大脑…' : '连接 AI 后，问问你的大脑…'} value={draft} disabled={pending || !draftStore.ready || restoringConversation} maxLength={16000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} /><div className="assistant-composer__footer"><span>{isRunning ? '关闭面板后仍会继续' : 'Enter 发送 · Shift Enter 换行'}</span><ContextUsage conversation={conversation} model={model} draftChanged={Boolean(draft.trim())} attachmentCount={draftStore.current.attachments.length} disabled={locked} onContinue={() => setShowContinuation(true)} />{isRunning ? <button type="button" className="assistant-send" aria-label="停止回答" title="停止回答" disabled={pending} onClick={() => void stop()}><Square /></button> : <button type="submit" className="assistant-send ai-glow-control" aria-label={pending ? '正在发送' : '发送消息'} title="发送消息" disabled={pending || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || !draft.trim() || provider?.status !== 'ready' || !model || Boolean(providerError) || Boolean(skillRecommendation && skillRecommendation.status !== 'invalidated')}>{pending ? <LoaderCircle className="assistant-spin" /> : <ArrowUp />}</button>}</div></form></AttachmentPicker>
+        <form className="assistant-composer" onSubmit={event => { event.preventDefault(); void send(); }}><textarea ref={textArea} aria-label="发送给问问的消息" placeholder={provider?.status === 'ready' ? '问问你的大脑…' : '连接 AI 后，问问你的大脑…'} value={draft} disabled={pending || !draftStore.ready || restoringConversation} maxLength={16000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} /><div className="assistant-composer__footer"><span>{isRunning ? '关闭面板后仍会继续' : 'Enter 发送 · Shift Enter 换行'}</span><ContextUsage conversation={conversation} model={model} draftChanged={Boolean(draft.trim())} attachmentCount={draftStore.current.attachments.length} disabled={locked} onContinue={() => setShowContinuation(true)} />{isRunning ? <button type="button" className="assistant-send" aria-label="停止回答" title="停止回答" disabled={pending} onClick={() => void stop()}><Square /></button> : <button type="submit" className="assistant-send ai-glow-control" aria-label={pending ? '正在发送' : '发送消息'} title="发送消息" disabled={pending || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || !draft.trim() || provider?.status !== 'ready' || !model || Boolean(providerError) || projectBlocked || Boolean(skillRecommendation && skillRecommendation.status !== 'invalidated')}>{pending ? <LoaderCircle className="assistant-spin" /> : <ArrowUp />}</button>}</div></form></AttachmentPicker>
         {api.assistantDrafts && <p className="assistant-draft-status" role="status">{draftStore.notice || (!draftStore.ready ? '正在恢复本机草稿…' : draftStore.saving || draftStore.dirty && !draftStore.error ? '正在保存到本机…' : draftStore.error ? '当前草稿尚未保存' : '草稿已保留在本机 · 新对话会保留旧记录')}</p>}
         <p className="assistant-disclosure">仅按问题读取所需资料，整理结果由你确认保存。</p>
       </div>

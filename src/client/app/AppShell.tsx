@@ -279,6 +279,11 @@ export interface AppShellProps {
 
 export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = false }: AppShellProps) {
   const location = useLocation();
+  const projectRouteId = (() => {
+    const match = location.pathname.match(/^\/projects\/([^/]+)$/u);
+    if (!match?.[1]) return undefined;
+    try { return decodeURIComponent(match[1]); } catch { return undefined; }
+  })();
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [selectedPassage, setSelectedPassage] = useState('');
@@ -294,6 +299,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
   }
   const headingRef = useRef<HTMLHeadingElement>(null);
   const previousPath = useRef<string | undefined>(undefined);
+  const previousProjectRouteId = useRef<string | undefined>(undefined);
   const mountedRef = useRef(false);
   const healthRef = useRef<Resource<HealthSnapshot>>({ status: 'loading' });
   const healthRequestRef = useRef<Promise<ApiClientResult<HealthSnapshot>> | undefined>(undefined);
@@ -552,6 +558,12 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
     return () => { window.removeEventListener(ASSISTANT_INTENT_EVENT, openAssistant); window.removeEventListener('keydown', keys); };
   }, []);
   useEffect(() => {
+    if (projectRouteId !== undefined && previousProjectRouteId.current !== projectRouteId) {
+      setAssistantOpen(true);
+    }
+    previousProjectRouteId.current = projectRouteId;
+  }, [projectRouteId]);
+  useEffect(() => {
     setSelectedPassage('');
     const query = new URLSearchParams(location.search);
     const path = ['/library', '/knowledge'].includes(location.pathname) ? query.get('path') : location.pathname === '/queue' ? query.get('materialPath') : undefined;
@@ -634,7 +646,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
         <header className="workspace-bar">
           <div className="workspace-bar__context">
             <Activity aria-hidden="true" />
-            <span>{location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
+            <span>{location.pathname.startsWith('/projects/') ? '项目工作区 · 项目问问' : location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
           </div>
           <div className="workspace-bar__actions"><div className={`workspace-bar__status${quietOverview ? ' workspace-bar__status--quiet' : ''}`} role="status" aria-label="索引运行状态" title={indexStatus}>
             <CircleDot aria-hidden="true" />
@@ -662,7 +674,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
       </section>
       {searchOpen && <GlobalSearch api={api} vault={vaultName} onClose={() => setSearchOpen(false)} />}
       {selectedPassage && !searchOpen && <button type="button" className="selection-ask" onMouseDown={event => event.preventDefault()} onClick={() => { const query = new URLSearchParams(location.search); const path = query.get('materialPath') || query.get('path'); askAssistant({ prompt: `请解释这段原文，并结合上下文说明：\n\n“${selectedPassage}”`, ...(path ? { contextPath: path } : {}) }); setSelectedPassage(''); window.getSelection()?.removeAllRanges(); }}><MessageCircle size={16} />问问这段内容</button>}
-      <AssistantPanel api={api} open={assistantOpen} onClose={closeAssistant} width={assistantWidth} onWidthChange={resizeAssistant} onRunningChange={setAssistantRunning} dataRevision={dataRevision} />
+      <AssistantPanel api={api} open={assistantOpen} onClose={closeAssistant} width={assistantWidth} onWidthChange={resizeAssistant} onRunningChange={setAssistantRunning} dataRevision={dataRevision} {...(projectRouteId ? { projectId: projectRouteId } : {})} />
     </div>
   );
 }
