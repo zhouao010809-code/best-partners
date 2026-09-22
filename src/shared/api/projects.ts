@@ -85,6 +85,9 @@ export const projectBindRequestSchema = z.strictObject({
 // Reconnect uses the same scan proof as bind. In particular, it never accepts
 // an arbitrary root path from a public caller.
 export const projectReconnectRequestSchema = projectBindRequestSchema;
+export const projectWritePlanMutationSchema = z.strictObject({
+  clientRequestId: z.uuid()
+});
 
 export const projectFileQuerySchema = z.strictObject({
   search: z.string().trim().max(200).optional(),
@@ -98,6 +101,10 @@ export const projectFileReadQuerySchema = z.strictObject({
 
 export const projectIdParamSchema = z.strictObject({
   id: z.uuid()
+});
+export const projectWritePlanParamsSchema = z.strictObject({
+  projectId: z.uuid(),
+  planId: z.uuid()
 });
 
 export const projectFileSchema = z.strictObject({
@@ -191,6 +198,7 @@ export const projectFilePageResponseSchema = successEnvelopeSchema(projectFilePa
 export const projectOperationsResponseSchema = successEnvelopeSchema(z.strictObject({
   operations: z.array(projectOperationSchema)
 }));
+export const projectWriteActionResponseSchema = successEnvelopeSchema(projectWriteActionSchema);
 
 export type ProjectAvailability = z.infer<typeof projectAvailabilitySchema>;
 export type ProjectParseStatus = z.infer<typeof projectParseStatusSchema>;

@@ -58,7 +58,7 @@ import type { SkillCatalogService } from './services/skill-catalog.js';
 import { createSkillMatcherService } from './services/skill-matcher.js';
 import type { CompanyRuntimeMode } from '../shared/company/workspace.js';
 import { createCompanyRuntime, type CompanyRuntime } from './company/company-runtime.js';
-import type { ProjectService } from '../shared/api/projects.js';
+import type { ProjectService, ProjectWritePlanService } from '../shared/api/projects.js';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -167,6 +167,7 @@ export interface BuildServerOptions {
   readonly readApi?: ReadApiDependencies;
   readonly skillCatalog?: SkillCatalogService;
   readonly projectService?: ProjectService;
+  readonly projectWritePlans?: ProjectWritePlanService;
   readonly onClose?: () => void | Promise<void>;
 }
 
@@ -357,7 +358,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     trash: options.trashService ? () => options.trashService!.list() : undefined,
     intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined });
   registerIndexJobRoutes(app, indexJobs);
-  if (runtimeMode === 'personal') registerProjectRoutes(app, options.projectService);
+  if (runtimeMode === 'personal') registerProjectRoutes(app, options.projectService, options.projectWritePlans);
   if (companyRuntime !== undefined) {
     registerCompanyAuthRoutes(app, {
       auth: companyRuntime.auth,

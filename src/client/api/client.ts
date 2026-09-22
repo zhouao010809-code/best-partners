@@ -52,11 +52,13 @@ import {
   projectOperationsResponseSchema,
   projectScanPreviewResponseSchema,
   projectSummaryResponseSchema,
+  projectWriteActionResponseSchema,
   type ProjectFileDetail,
   type ProjectFilePage,
   type ProjectOperation,
   type ProjectScanPreview,
-  type ProjectSummary
+  type ProjectSummary,
+  type ProjectWriteAction
 } from '../../shared/api/projects.js';
 import {
   skillResponseSchema,
@@ -158,8 +160,8 @@ export interface ReadConsoleApi {
     files(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }, signal?: AbortSignal): Promise<ApiClientResult<ProjectFilePage>>;
     file(id: string, relativePath: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectFileDetail>>;
     operations(id: string, signal?: AbortSignal): Promise<ApiClientResult<{ operations: ProjectOperation[] }>>;
-    confirmWritePlan(projectId: string, planId: string, clientRequestId: string): Promise<ApiClientResult<AssistantConversation>>;
-    cancelWritePlan(projectId: string, planId: string, clientRequestId: string): Promise<ApiClientResult<AssistantConversation>>;
+    confirmWritePlan(projectId: string, planId: string, clientRequestId: string): Promise<ApiClientResult<ProjectWriteAction>>;
+    cancelWritePlan(projectId: string, planId: string, clientRequestId: string): Promise<ApiClientResult<ProjectWriteAction>>;
   };
   readonly assistant?: {
     providers(signal?: AbortSignal): Promise<ApiClientResult<{ providers: AssistantProvider[] }>>;
@@ -477,13 +479,13 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
       operations: (id, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(id)}/operations`, projectOperationsResponseSchema, getInit(signal)),
       confirmWritePlan: (projectId, planId, clientRequestId) => postWithCsrf(
         `/api/v1/projects/${encodeURIComponent(projectId)}/write-plans/${encodeURIComponent(planId)}/confirm`,
-        assistantConversationResponseSchema,
+        projectWriteActionResponseSchema,
         { clientRequestId },
         clientRequestId
       ),
       cancelWritePlan: (projectId, planId, clientRequestId) => postWithCsrf(
         `/api/v1/projects/${encodeURIComponent(projectId)}/write-plans/${encodeURIComponent(planId)}/cancel`,
-        assistantConversationResponseSchema,
+        projectWriteActionResponseSchema,
         { clientRequestId },
         clientRequestId
       )

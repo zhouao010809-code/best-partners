@@ -7,13 +7,18 @@ import {
   projectFileQuerySchema,
   projectFileReadQuerySchema,
   projectFileResponseSchema,
+  projectOperationsResponseSchema,
   projectIdParamSchema,
   projectListResponseSchema,
   projectReconnectRequestSchema,
   projectScanPreviewResponseSchema,
   projectScanRequestSchema,
   projectSummaryResponseSchema,
-  type ProjectService
+  projectWriteActionResponseSchema,
+  projectWritePlanParamsSchema,
+  projectWritePlanMutationSchema,
+  type ProjectService,
+  type ProjectWritePlanService
 } from '../../../shared/api/projects.js';
 import { parseApiInput, parseApiOutput } from '../route-validation.js';
 
@@ -21,6 +26,10 @@ function requiredService(service: ProjectService | undefined): ProjectService {
   if (service === undefined) {
     throw new PublicApiError('PROJECTS_UNAVAILABLE', 'Project service is unavailable', 503);
   }
+  return service;
+}
+function requiredWriteService(service: ProjectWritePlanService | undefined): ProjectWritePlanService {
+  if (service === undefined) throw new PublicApiError('PROJECTS_UNAVAILABLE', 'Project service is unavailable', 503);
   return service;
 }
 
@@ -44,7 +53,7 @@ async function safely<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-export function registerProjectRoutes(app: FastifyInstance, service?: ProjectService): void {
+export function registerProjectRoutes(app: FastifyInstance, service?: ProjectService, writePlans?: ProjectWritePlanService): void {
   app.post('/api/v1/projects/scan', async (request, reply) => {
     reply.header('cache-control', 'no-store');
     const body = parseApiInput(projectScanRequestSchema, request.body);
@@ -111,6 +120,44 @@ export function registerProjectRoutes(app: FastifyInstance, service?: ProjectSer
     const { path } = parseApiInput(projectFileReadQuerySchema, request.query);
     const result = await safely(() => requiredService(service).readFile(id, path));
     return parseApiOutput(projectFileResponseSchema, { data: result, version: API_VERSION });
+  });
+
+  app.get('/api/v1/projects/:id/operations', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { id } = parseApiInput(projectIdParamSchema, request.params);
+    const result = await safely(() => requiredWriteService(writePlans).operations(id));
+    return parseApiOutput(projectOperationsResponseSchema, { data: { operations: result }, version: API_VERSION });
+  });
+
+  // The browser sends only the idempotency token. Conversation ownership is
+  // resolved server-side by the assistant route/service; these endpoints are
+  // retained as thin adapters while that identity is loaded from the plan.
+  app.post('/api/v1/projects/:projectId/write-plans/:planId/confirm', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const params = parseApiInput(projectWritePlanParamsSchema, request.params);
+    const projectId = params.projectId;
+    const planId = params.planId;
+    const body = parseApiInput(projectWritePlanMutationSchema, request.body);
+    const plan = requiredWriteService(writePlans).project(planId);
+    if (plan === undefined) throw new PublicApiError('PROJECT_WRITE_PLAN_NOT_FOUND', 'Project write plan not found', 404);
+    if (plan.projectId !== projectId) throw new PublicApiError('PROJECT_WRITE_PLAN_PROJECT_MISMATCH', 'Project write plan does not belong to this project', 409);
+    // The service accepts the conversation owner as a server argument. Routes
+    // do not accept it from the request body; a plan projection is sufficient
+    // to resolve the private owner in the service implementation.
+    const result = await safely(() => requiredWriteService(writePlans).confirm(planId, plan.projectId, body.clientRequestId));
+    return parseApiOutput(projectWriteActionResponseSchema, { data: result, version: API_VERSION });
+  });
+  app.post('/api/v1/projects/:projectId/write-plans/:planId/cancel', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const params = parseApiInput(projectWritePlanParamsSchema, request.params);
+    const projectId = params.projectId;
+    const planId = params.planId;
+    const body = parseApiInput(projectWritePlanMutationSchema, request.body);
+    const plan = requiredWriteService(writePlans).project(planId);
+    if (plan === undefined) throw new PublicApiError('PROJECT_WRITE_PLAN_NOT_FOUND', 'Project write plan not found', 404);
+    if (plan.projectId !== projectId) throw new PublicApiError('PROJECT_WRITE_PLAN_PROJECT_MISMATCH', 'Project write plan does not belong to this project', 409);
+    const result = requiredWriteService(writePlans).cancel(planId, plan.projectId, body.clientRequestId);
+    return parseApiOutput(projectWriteActionResponseSchema, { data: result, version: API_VERSION });
   });
 
 }
