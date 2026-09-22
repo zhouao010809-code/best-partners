@@ -236,6 +236,8 @@ export interface ProjectWritePlanService {
   }): Promise<ProjectWriteAction>;
   confirm(planId: string, conversationId: string, clientRequestId: string): Promise<ProjectWriteAction>;
   cancel(planId: string, conversationId: string, clientRequestId: string): ProjectWriteAction;
+  confirmForProject(planId: string, projectId: string, clientRequestId: string): Promise<ProjectWriteAction>;
+  cancelForProject(planId: string, projectId: string, clientRequestId: string): ProjectWriteAction;
   project(planId: string, conversationId?: string): ProjectWriteAction | undefined;
   operations(projectId: string): Promise<readonly ProjectOperation[]>;
 }

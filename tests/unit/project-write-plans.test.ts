@@ -28,6 +28,7 @@ describe('project write plans', () => {
     const action = await f.plans.proposeDraft({ projectId: f.project.id, conversationId: 'conversation-1', messageId: 'message-1', category: '周计划', title: '下周获客内容', summary: '保存周计划草稿', content: '# 下周获客内容', expectedRevision: 1 });
     expect(action.status).toBe('pending'); expect(action.targetPath).toMatch(/^AI工作区\/周计划\//u); expect(action).not.toHaveProperty('content');
     await expect(readFile(join(f.projectRoot, action.targetPath))).rejects.toThrow();
+    await expect(f.plans.confirm(action.id, f.project.id, '2c0ce1ae-511b-4bf4-9a9d-444444444448')).rejects.toMatchObject({ code: 'PROJECT_WRITE_PLAN_NOT_FOUND' });
     const completed = await f.plans.confirm(action.id, 'conversation-1', '2c0ce1ae-511b-4bf4-9a9d-444444444444');
     expect(completed.status).toBe('completed'); expect(await readFile(join(f.projectRoot, completed.resultPath!), 'utf8')).toContain('下周获客内容');
     expect((await f.plans.operations(f.project.id))[0]).toMatchObject({ targetPath: completed.targetPath, status: 'completed' });

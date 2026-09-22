@@ -144,7 +144,7 @@ export function registerProjectRoutes(app: FastifyInstance, service?: ProjectSer
     // The service accepts the conversation owner as a server argument. Routes
     // do not accept it from the request body; a plan projection is sufficient
     // to resolve the private owner in the service implementation.
-    const result = await safely(() => requiredWriteService(writePlans).confirm(planId, plan.projectId, body.clientRequestId));
+    const result = await safely(() => requiredWriteService(writePlans).confirmForProject(planId, projectId, body.clientRequestId));
     return parseApiOutput(projectWriteActionResponseSchema, { data: result, version: API_VERSION });
   });
   app.post('/api/v1/projects/:projectId/write-plans/:planId/cancel', async (request, reply) => {
@@ -156,7 +156,7 @@ export function registerProjectRoutes(app: FastifyInstance, service?: ProjectSer
     const plan = requiredWriteService(writePlans).project(planId);
     if (plan === undefined) throw new PublicApiError('PROJECT_WRITE_PLAN_NOT_FOUND', 'Project write plan not found', 404);
     if (plan.projectId !== projectId) throw new PublicApiError('PROJECT_WRITE_PLAN_PROJECT_MISMATCH', 'Project write plan does not belong to this project', 409);
-    const result = requiredWriteService(writePlans).cancel(planId, plan.projectId, body.clientRequestId);
+    const result = requiredWriteService(writePlans).cancelForProject(planId, projectId, body.clientRequestId);
     return parseApiOutput(projectWriteActionResponseSchema, { data: result, version: API_VERSION });
   });
 

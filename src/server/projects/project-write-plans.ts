@@ -36,7 +36,7 @@ function rowOrThrow(database: Database.Database, id: string): ProjectRow {
 }
 function planRow(database: Database.Database, id: string, conversationId?: string): PlanRow {
   const row = database.prepare('SELECT * FROM personal_project_write_plans WHERE id = ?').get(id) as PlanRow | undefined;
-  if (!row || (conversationId !== undefined && row.conversation_id !== conversationId && row.project_id !== conversationId)) throw coded('PROJECT_WRITE_PLAN_NOT_FOUND', 'Project write plan not found');
+  if (!row || (conversationId !== undefined && row.conversation_id !== conversationId)) throw coded('PROJECT_WRITE_PLAN_NOT_FOUND', 'Project write plan not found');
   return row;
 }
 function ensureRelativeTarget(value: string): void {
@@ -161,11 +161,21 @@ export function createProjectWritePlanService(input: {
     if (plan.status !== 'pending') throw coded('PROJECT_WRITE_PLAN_RESOLVED', 'Project write plan already resolved');
     return mark(plan.id, 'cancelled', clientRequestId);
   }
+  async function confirmForProject(planId: string, projectId: string, clientRequestId: string): Promise<ProjectWriteAction> {
+    const plan = planRow(database, planId);
+    if (plan.project_id !== projectId) throw coded('PROJECT_WRITE_PLAN_PROJECT_MISMATCH', 'Project write plan does not belong to this project');
+    return confirm(planId, plan.conversation_id, clientRequestId);
+  }
+  function cancelForProject(planId: string, projectId: string, clientRequestId: string): ProjectWriteAction {
+    const plan = planRow(database, planId);
+    if (plan.project_id !== projectId) throw coded('PROJECT_WRITE_PLAN_PROJECT_MISMATCH', 'Project write plan does not belong to this project');
+    return cancel(planId, plan.conversation_id, clientRequestId);
+  }
   function project(planId: string, conversationId?: string): ProjectWriteAction | undefined { try { return publicAction(database, planRow(database, planId, conversationId)); } catch (error) { if (error instanceof Error && 'code' in error && String((error as CodedError).code) === 'PROJECT_WRITE_PLAN_NOT_FOUND') return undefined; throw error; } }
   async function operations(projectId: string): Promise<readonly ProjectOperation[]> {
     rowOrThrow(database, projectId);
     const rows = database.prepare('SELECT id,project_id,event_type,target_path,old_sha256,new_sha256,created_at,payload_json FROM personal_project_operations WHERE project_id = ? ORDER BY created_at DESC, rowid DESC').all(projectId) as Array<{ id: string; project_id: string; event_type: string; target_path: string; old_sha256: string | null; new_sha256: string | null; created_at: string; payload_json: string }>;
     return rows.map(row => { let status: ProjectOperation['status'] = 'completed'; try { const parsed = JSON.parse(row.payload_json) as { status?: string }; if (parsed.status === 'failed' || parsed.status === 'stale') status = parsed.status; } catch { status = 'failed'; } return projectOperationSchema.parse({ id: row.id, projectId: row.project_id, eventType: row.event_type, targetPath: row.target_path, ...(row.old_sha256 === null ? {} : { oldSha256: row.old_sha256 }), ...(row.new_sha256 === null ? {} : { newSha256: row.new_sha256 }), createdAt: row.created_at, status }); });
   }
-  return { proposeDraft, confirm, cancel, project, operations };
+  return { proposeDraft, confirm, cancel, confirmForProject, cancelForProject, project, operations };
 }
