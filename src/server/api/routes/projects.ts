@@ -39,6 +39,9 @@ function projectError(error: unknown): never {
   if (code === 'PROJECT_NOT_FOUND' || code === 'PROJECT_SCAN_NOT_FOUND' || code === 'PROJECT_FILE_NOT_FOUND') {
     throw new PublicApiError(code, 'Project resource not found', 404);
   }
+  if (code === 'PROJECT_WRITE_PLAN_RESOLVED' || code === 'PROJECT_WRITE_PLAN_PROJECT_MISMATCH' || code === 'PROJECT_OUTPUT_EXISTS') {
+    throw new PublicApiError(code, 'Project write plan cannot be applied', 409);
+  }
   if (code !== undefined && (code.startsWith('PROJECT_') || code.startsWith('FILE_'))) {
     throw new PublicApiError(code, 'Project request could not be completed', 400);
   }
@@ -156,7 +159,7 @@ export function registerProjectRoutes(app: FastifyInstance, service?: ProjectSer
     const plan = requiredWriteService(writePlans).project(planId);
     if (plan === undefined) throw new PublicApiError('PROJECT_WRITE_PLAN_NOT_FOUND', 'Project write plan not found', 404);
     if (plan.projectId !== projectId) throw new PublicApiError('PROJECT_WRITE_PLAN_PROJECT_MISMATCH', 'Project write plan does not belong to this project', 409);
-    const result = requiredWriteService(writePlans).cancelForProject(planId, projectId, body.clientRequestId);
+    const result = await safely(async () => requiredWriteService(writePlans).cancelForProject(planId, projectId, body.clientRequestId));
     return parseApiOutput(projectWriteActionResponseSchema, { data: result, version: API_VERSION });
   });
 

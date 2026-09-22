@@ -99,6 +99,8 @@ describe('personal project API', () => {
     const cancelAction = await f.plans.proposeDraft({ projectId, conversationId: 'conversation-1', messageId: 'message-2', category: '工作日志', title: '取消日志', summary: '日志', content: '待取消', expectedRevision: 1 });
     const cancelled = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/write-plans/${cancelAction.id}/cancel`, headers: f.authHeaders, payload: { clientRequestId: '2c0ce1ae-511b-4bf4-9a9d-444444444452' } });
     expect(cancelled.statusCode).toBe(200); expect(cancelled.json().data.status).toBe('cancelled');
+    const repeatedCancel = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${projectId}/write-plans/${cancelAction.id}/cancel`, headers: f.authHeaders, payload: { clientRequestId: '2c0ce1ae-511b-4bf4-9a9d-444444444453' } });
+    expect(repeatedCancel.statusCode).toBe(409);
     expect((await f.app.inject({ url: `/api/v1/projects/${projectId}/operations`, headers: f.authHeaders })).json().data.operations[0].targetPath).toContain('AI工作区/周计划');
   });
 });
