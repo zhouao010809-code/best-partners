@@ -108,13 +108,14 @@ export function createProjectWritePlanService(input: {
   const database = input.database; const now = input.now ?? (() => new Date()); const makeId = input.idFactory ?? randomUUID; const ttl = input.ttlMs ?? TTL_MS;
   async function proposeDraft(value: { projectId: string; conversationId: string; messageId: string; category: ProjectCategory; title: string; summary: string; content: string; expectedRevision: number }): Promise<ProjectWriteAction> {
     const category = projectCategorySchema.safeParse(value.category); if (!category.success) throw coded('PROJECT_CATEGORY_INVALID', 'Project output category is invalid');
+    const title = value.title.trim(); if (title.length === 0) throw coded('PROJECT_TITLE_INVALID', 'Project output title is required');
     if (Buffer.byteLength(value.content, 'utf8') > MAX_CONTENT_BYTES) throw coded('PROJECT_OUTPUT_TOO_LARGE', 'Project output is too large');
     const project = rowOrThrow(database, value.projectId);
     if (project.availability !== 'ready') throw coded('PROJECT_UNAVAILABLE', 'Project is unavailable');
     if (project.source_revision !== value.expectedRevision) throw coded('PROJECT_SOURCE_STALE', 'Project source has changed');
     const created = now(); const createdAt = iso(created); const expiresAt = iso(new Date(created.getTime() + ttl));
-    const targetPath = `AI工作区/${category.data}/${createdAt.slice(0, 10)}-${safeSlug(value.title)}.md`;
-    const row: PlanRow = { id: makeId(), project_id: value.projectId, conversation_id: value.conversationId, message_id: value.messageId, category: category.data, title: value.title.trim().slice(0, 255), summary: value.summary.slice(0, 2000), content: value.content, content_sha256: sha256(value.content), source_revision: value.expectedRevision, target_path: targetPath, status: 'pending', created_at: createdAt, expires_at: expiresAt, updated_at: createdAt, confirm_request_id: null, result_path: null, problem: null };
+    const targetPath = `AI工作区/${category.data}/${createdAt.slice(0, 10)}-${safeSlug(title)}.md`;
+    const row: PlanRow = { id: makeId(), project_id: value.projectId, conversation_id: value.conversationId, message_id: value.messageId, category: category.data, title: title.slice(0, 255), summary: value.summary.slice(0, 2000), content: value.content, content_sha256: sha256(value.content), source_revision: value.expectedRevision, target_path: targetPath, status: 'pending', created_at: createdAt, expires_at: expiresAt, updated_at: createdAt, confirm_request_id: null, result_path: null, problem: null };
     database.prepare(`INSERT INTO personal_project_write_plans
       (id, project_id, conversation_id, message_id, category, title, summary, content, content_sha256, source_revision, target_path, status, created_at, expires_at, updated_at, confirm_request_id, result_path, problem)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`).run(row.id, row.project_id, row.conversation_id, row.message_id, row.category, row.title, row.summary, row.content, row.content_sha256, row.source_revision, row.target_path, row.status, row.created_at, row.expires_at, row.updated_at);
