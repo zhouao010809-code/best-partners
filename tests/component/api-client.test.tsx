@@ -426,6 +426,49 @@ describe('read console API facade', () => {
     expect(result).toMatchObject({ ok: false, state: { status: 'validation-error' } });
   });
 
+  it('exposes typed project methods with encoded ids, paths, queries and CSRF mutations', async () => {
+    const projectId = '11111111-1111-4111-8111-111111111111';
+    const scanId = '22222222-2222-4222-8222-222222222222';
+    const project = {
+      id: projectId, displayName: '客户项目', sourceRevision: 1, availability: 'ready' as const,
+      outputRoot: 'AI工作区' as const, fileCount: 1, readableFileCount: 1, issueCount: 0,
+      createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z'
+    };
+    const preview = {
+      scanId, displayName: '客户项目', sourceSha256: SHA, fileCount: 1, readableFileCount: 1,
+      unsupportedCount: 0, ignoredCount: 0, issueCount: 0, guidanceFiles: [], entries: [], issues: [],
+      expiresAt: '2026-09-01T00:15:00.000Z'
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(success({ csrfToken: CSRF, runtimeMode: 'personal' }))
+      .mockResolvedValueOnce(success(preview))
+      .mockResolvedValueOnce(success(project))
+      .mockResolvedValueOnce(success({ projects: [project] }))
+      .mockResolvedValueOnce(success(project))
+      .mockResolvedValueOnce(success({ items: [{ relativePath: 'brief file.md', kind: 'file', origin: 'source' }], total: 1, revision: 1 }))
+      .mockResolvedValueOnce(success({ relativePath: 'brief file.md', kind: 'file', origin: 'source', content: '内容', totalCharacters: 2, truncated: false }))
+      .mockResolvedValueOnce(success({ operations: [] }))
+      .mockResolvedValueOnce(success(project));
+    const api = createBrowserReadConsoleApi(fetchMock);
+
+    expect((await api.projects!.scan('/tmp/客户项目')).ok).toBe(true);
+    expect((await api.projects!.bind({ scanId, sourceSha256: SHA, displayName: '客户项目' })).ok).toBe(true);
+    expect((await api.projects!.list()).ok).toBe(true);
+    expect((await api.projects!.get(projectId)).ok).toBe(true);
+    const filesResult = await api.projects!.files(projectId, { search: '文件 名', origin: 'source', limit: 5 });
+    expect(filesResult).toEqual({ ok: true, value: { items: [{ relativePath: 'brief file.md', kind: 'file', origin: 'source' }], total: 1, revision: 1 } });
+    expect((await api.projects!.file(projectId, '目录/brief file.md')).ok).toBe(true);
+    expect((await api.projects!.operations(projectId)).ok).toBe(true);
+    expect((await api.projects!.refresh(projectId)).ok).toBe(true);
+    expect(fetchMock.mock.calls.map(call => String(call[0]))).toEqual([
+      '/api/v1/bootstrap', '/api/v1/projects/scan', '/api/v1/projects', '/api/v1/projects', `/api/v1/projects/${projectId}`,
+      `/api/v1/projects/${projectId}/files?search=%E6%96%87%E4%BB%B6+%E5%90%8D&origin=source&limit=5`,
+      `/api/v1/projects/${projectId}/file?path=%E7%9B%AE%E5%BD%95%2Fbrief+file.md`,
+      `/api/v1/projects/${projectId}/operations`, `/api/v1/projects/${projectId}/refresh`
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: 'POST', headers: expect.objectContaining({ 'x-csrf-token': CSRF }) });
+  });
+
   it.each([
     ['READ_API_UNAVAILABLE', 'recovery-required'],
     ['VALIDATION_ERROR', 'validation-error'],

@@ -53,10 +53,12 @@ import { registerCompanyAuthRoutes } from './api/routes/company-auth.js';
 import { registerCompanyProjectRoutes } from './api/routes/company-projects.js';
 import { registerCompanySkillRoutes } from './api/routes/company-skills.js';
 import { registerCompanyMetricRoutes } from './api/routes/company-metrics.js';
+import { registerProjectRoutes } from './api/routes/projects.js';
 import type { SkillCatalogService } from './services/skill-catalog.js';
 import { createSkillMatcherService } from './services/skill-matcher.js';
 import type { CompanyRuntimeMode } from '../shared/company/workspace.js';
 import { createCompanyRuntime, type CompanyRuntime } from './company/company-runtime.js';
+import type { ProjectService } from '../shared/api/projects.js';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -164,6 +166,7 @@ export interface BuildServerOptions {
   readonly operationIdFactory?: () => string;
   readonly readApi?: ReadApiDependencies;
   readonly skillCatalog?: SkillCatalogService;
+  readonly projectService?: ProjectService;
   readonly onClose?: () => void | Promise<void>;
 }
 
@@ -354,6 +357,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     trash: options.trashService ? () => options.trashService!.list() : undefined,
     intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined });
   registerIndexJobRoutes(app, indexJobs);
+  if (runtimeMode === 'personal') registerProjectRoutes(app, options.projectService);
   if (companyRuntime !== undefined) {
     registerCompanyAuthRoutes(app, {
       auth: companyRuntime.auth,

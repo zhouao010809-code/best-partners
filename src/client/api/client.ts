@@ -46,6 +46,19 @@ import { trashPreviewResponseSchema, trashDeletePreviewResponseSchema, trashEntr
 import { intakeTrashPreviewResponseSchema, intakeTrashDeletePreviewResponseSchema, intakeTrashEntryResponseSchema, intakeTrashListResponseSchema,
   type IntakeTrashPreview, type IntakeTrashDeletePreview, type IntakeTrashEntry, type IntakeTrashList } from '../../shared/api/intake-trash.js';
 import {
+  projectFilePageResponseSchema,
+  projectFileResponseSchema,
+  projectListResponseSchema,
+  projectOperationsResponseSchema,
+  projectScanPreviewResponseSchema,
+  projectSummaryResponseSchema,
+  type ProjectFileDetail,
+  type ProjectFilePage,
+  type ProjectOperation,
+  type ProjectScanPreview,
+  type ProjectSummary
+} from '../../shared/api/projects.js';
+import {
   skillResponseSchema,
   skillsResponseSchema,
   skillFolderResponseSchema,
@@ -134,6 +147,17 @@ export interface ReadConsoleApi {
     list(projectId?: string, signal?: AbortSignal): Promise<ApiClientResult<AssistantDraftList>>;
     save(id: string, input: AssistantDraftSave): Promise<ApiClientResult<{ draft: AssistantDraft }>>;
     delete(id: string, revision: number): Promise<ApiClientResult<{ deleted: true }>>;
+  };
+  readonly projects?: {
+    scan(rootPath: string): Promise<ApiClientResult<ProjectScanPreview>>;
+    bind(input: { scanId: string; sourceSha256: string; displayName?: string }): Promise<ApiClientResult<ProjectSummary>>;
+    reconnect(id: string, input: { scanId: string; sourceSha256: string; displayName?: string }): Promise<ApiClientResult<ProjectSummary>>;
+    list(signal?: AbortSignal): Promise<ApiClientResult<{ projects: ProjectSummary[] }>>;
+    get(id: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectSummary>>;
+    refresh(id: string): Promise<ApiClientResult<ProjectSummary>>;
+    files(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }, signal?: AbortSignal): Promise<ApiClientResult<ProjectFilePage>>;
+    file(id: string, relativePath: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectFileDetail>>;
+    operations(id: string, signal?: AbortSignal): Promise<ApiClientResult<{ operations: ProjectOperation[] }>>;
   };
   readonly assistant?: {
     providers(signal?: AbortSignal): Promise<ApiClientResult<{ providers: AssistantProvider[] }>>;
@@ -296,7 +320,7 @@ async function requestApi<T>(options: ApiRequestOptions<T>): Promise<ApiClientRe
       ok: false,
       state: { status: failureStatus(code), message },
       operationId,
-      ...(options.path.startsWith('/api/v1/assistant/') || options.path.startsWith('/api/v1/ingestion/') || options.path.startsWith('/api/v1/trash') || options.path.startsWith('/api/v1/intake-trash') || options.path.startsWith('/api/v1/skills') || options.path.startsWith('/api/v1/knowledge/') && ['KNOWLEDGE_IN_TRASH', 'KNOWLEDGE_DELETED'].includes(code) || ['SESSION_REQUIRED', 'CSRF_INVALID'].includes(code) ? { code } : {})
+      ...(options.path.startsWith('/api/v1/assistant/') || options.path.startsWith('/api/v1/ingestion/') || options.path.startsWith('/api/v1/trash') || options.path.startsWith('/api/v1/intake-trash') || options.path.startsWith('/api/v1/skills') || options.path.startsWith('/api/v1/projects') || options.path.startsWith('/api/v1/knowledge/') && ['KNOWLEDGE_IN_TRASH', 'KNOWLEDGE_DELETED'].includes(code) || ['SESSION_REQUIRED', 'CSRF_INVALID'].includes(code) ? { code } : {})
     };
   }
 
@@ -432,6 +456,23 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
       pages: (id, startPage, endPage, signal) => requestData(fetcher, withQuery(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/pages`, parameters => { appendQuery(parameters, 'startPage', startPage); appendQuery(parameters, 'endPage', endPage); }), attachmentPagesResponseSchema, getInit(signal)),
       retry: id => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/retry`, attachmentResponseSchema, {}),
       cancel: id => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/cancel`, attachmentResponseSchema, {})
+    },
+    projects: {
+      scan: rootPath => postWithCsrf('/api/v1/projects/scan', projectScanPreviewResponseSchema, { rootPath }),
+      bind: input => postWithCsrf('/api/v1/projects', projectSummaryResponseSchema, input),
+      reconnect: (id, input) => postWithCsrf(`/api/v1/projects/${encodeURIComponent(id)}/reconnect`, projectSummaryResponseSchema, input),
+      list: signal => requestData(fetcher, '/api/v1/projects', projectListResponseSchema, getInit(signal)),
+      get: (id, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(id)}`, projectSummaryResponseSchema, getInit(signal)),
+      refresh: id => postWithCsrf(`/api/v1/projects/${encodeURIComponent(id)}/refresh`, projectSummaryResponseSchema, {}),
+      files: (id, query, signal) => requestData(fetcher, withQuery(`/api/v1/projects/${encodeURIComponent(id)}/files`, parameters => {
+        appendQuery(parameters, 'search', query.search);
+        appendQuery(parameters, 'origin', query.origin);
+        appendQuery(parameters, 'limit', query.limit);
+      }), projectFilePageResponseSchema, getInit(signal)),
+      file: (id, relativePath, signal) => requestData(fetcher, withQuery(`/api/v1/projects/${encodeURIComponent(id)}/file`, parameters => {
+        parameters.set('path', relativePath);
+      }), projectFileResponseSchema, getInit(signal)),
+      operations: (id, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(id)}/operations`, projectOperationsResponseSchema, getInit(signal))
     },
     assistantDrafts: {
       list: (projectId, signal) => requestData(fetcher, withQuery('/api/v1/assistant/drafts', parameters => {
