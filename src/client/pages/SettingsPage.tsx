@@ -17,7 +17,7 @@ import { PageState } from '../components/PageState.js';
 import { DocumentIssuesPanel } from '../components/DocumentIssuesPanel.js';
 import { DeepSeekSettings } from '../components/DeepSeekSettings.js';
 import type { HealthSnapshot } from '../api/client.js';
-import type { UpdateCheckResult } from '../../electron/update-check.js';
+import type { UpdateCheckResult } from '../../shared/desktop/update.js';
 import { dataFromResource } from './pageSupport.js';
 import '../styles/settings.css';
 

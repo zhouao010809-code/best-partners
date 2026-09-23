@@ -184,7 +184,7 @@ function stableVersion(snapshot: HealthSnapshot): number | undefined {
 function deckCards(materials: readonly MaterialItem[], completed: ReadonlySet<string>, queue?: DashboardQueue): readonly MaterialDeckCard[] {
   const tasks = new Map(queue?.items.map(item => [item.materialPath, item]));
   return materials.flatMap((record): MaterialDeckCard[] => (
-    (record.knowledgeStatus !== '未提炼' && !tasks.has(record.path)) || completed.has(record.path) ? [] : [{
+    record.knowledgeStatus !== '未提炼' || completed.has(record.path) ? [] : [{
       key: record.path,
       path: record.path,
       title: record.title,

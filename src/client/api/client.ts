@@ -105,6 +105,7 @@ type AssistantDraftListClient = {
 };
 
 export type MaterialPage = z.infer<typeof materialPageSchema>;
+export type BootstrapData = z.infer<typeof bootstrapResponseSchema>['data'];
 export type KnowledgePage = z.infer<typeof knowledgePageSchema>;
 export type LiveKnowledgeDetail = z.infer<typeof liveKnowledgeDetailSchema>;
 export type OperationPage = z.infer<typeof operationPageSchema>;
@@ -145,7 +146,7 @@ export interface ReadConsoleApi {
   attachments?: {
     list(signal?: AbortSignal): Promise<ApiClientResult<{ attachments: Attachment[] }>>;
     archive(id: string, fields?: Partial<IntakePreviewRequest['fields']>): Promise<ApiClientResult<{ result: AttachmentArchiveResult }>>;
-    upload(file: File, uploadId: string, groupId: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
+    upload(file: File, uploadId: string, groupId: string, signal?: AbortSignal): Promise<ApiClientResult<{ attachment: Attachment }>>;
     get(id: string, signal?: AbortSignal): Promise<ApiClientResult<{ attachment: Attachment }>>;
     pages(id: string, startPage?: number, endPage?: number, signal?: AbortSignal): Promise<ApiClientResult<AttachmentPages>>;
     retry(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
@@ -153,8 +154,8 @@ export interface ReadConsoleApi {
   };
   assistantDrafts?: {
     list: AssistantDraftListClient;
-    save(id: string, input: AssistantDraftSave): Promise<ApiClientResult<{ draft: AssistantDraft }>>;
-    delete(id: string, revision: number): Promise<ApiClientResult<{ deleted: true }>>;
+    save(id: string, input: AssistantDraftSave, signal?: AbortSignal): Promise<ApiClientResult<{ draft: AssistantDraft }>>;
+    delete(id: string, revision: number, signal?: AbortSignal): Promise<ApiClientResult<{ deleted: true }>>;
   };
   readonly projects?: {
     scan(rootPath: string): Promise<ApiClientResult<ProjectScanPreview>>;
@@ -378,18 +379,22 @@ function withQuery(path: string, build: (parameters: URLSearchParams) => void): 
   return query.length === 0 ? path : `${path}?${query}`;
 }
 
-export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): ReadConsoleApi {
+export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, initialBootstrap?: BootstrapData): ReadConsoleApi {
   const fetcher: FetchLike = (input, init) => (
     fetchImplementation === undefined
       ? globalThis.fetch(input, init)
       : fetchImplementation(input, init)
   );
-  let csrfToken: string | undefined;
+  let csrfToken: string | undefined = initialBootstrap?.csrfToken;
   let bootstrapInFlight: Promise<ApiClientResult<string>> | undefined;
 
-  function getCsrfToken(): Promise<ApiClientResult<string>> {
-    if (csrfToken !== undefined) return Promise.resolve({ ok: true, value: csrfToken });
-    if (bootstrapInFlight !== undefined) return bootstrapInFlight;
+  async function getCsrfToken(signal?: AbortSignal): Promise<ApiClientResult<string>> {
+    if (signal?.aborted) return { ok: false, cancelled: true };
+    if (csrfToken !== undefined) return { ok: true, value: csrfToken };
+    if (bootstrapInFlight !== undefined) {
+      const result = await bootstrapInFlight;
+      return signal?.aborted ? { ok: false, cancelled: true } : result;
+    }
 
     const request = requestData(
       fetcher,
@@ -405,7 +410,8 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
     void request.finally(() => {
       if (bootstrapInFlight === request) bootstrapInFlight = undefined;
     });
-    return request;
+    const result = await request;
+    return signal?.aborted ? { ok: false, cancelled: true } : result;
   }
 
   async function postWithCsrf<S extends z.ZodType<Envelope>>(
@@ -416,7 +422,7 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
     signal?: AbortSignal,
     refreshedAuthentication = false
   ): Promise<ApiClientResult<z.output<S>['data']>> {
-    const token = await getCsrfToken();
+    const token = await getCsrfToken(signal);
     if (!token.ok) return token;
     const result = await requestData(fetcher, path, schema, {
       method: 'POST',
@@ -440,12 +446,13 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
     return result;
   }
 
-  async function writeWithCsrf<S extends z.ZodType<Envelope>>(path: string, schema: S, method: 'POST' | 'PUT' | 'DELETE', body?: BodyInit, contentType = 'application/json', refreshed = false): Promise<ApiClientResult<z.output<S>['data']>> {
-    const token = await getCsrfToken(); if (!token.ok) return token;
-    const result = await requestData(fetcher, path, schema, { method, credentials: 'same-origin', headers: { ...(body === undefined ? {} : { 'content-type': contentType }), 'x-csrf-token': token.value }, ...(body === undefined ? {} : { body }) });
+  async function writeWithCsrf<S extends z.ZodType<Envelope>>(path: string, schema: S, method: 'POST' | 'PUT' | 'DELETE', body?: BodyInit, contentType = 'application/json', signal?: AbortSignal, refreshed = false): Promise<ApiClientResult<z.output<S>['data']>> {
+    const token = await getCsrfToken(signal); if (!token.ok) return token;
+    const result = await requestData(fetcher, path, schema, { method, credentials: 'same-origin', ...(signal === undefined ? {} : { signal }), headers: { ...(body === undefined ? {} : { 'content-type': contentType }), 'x-csrf-token': token.value }, ...(body === undefined ? {} : { body }) });
     if (!refreshed && !result.ok && 'code' in result && (result.code === 'SESSION_REQUIRED' || result.code === 'CSRF_INVALID')) {
       if (csrfToken === token.value) csrfToken = undefined;
-      return writeWithCsrf(path, schema, method, body, contentType, true);
+      if (signal?.aborted) return { ok: false, cancelled: true };
+      return writeWithCsrf(path, schema, method, body, contentType, signal, true);
     }
     return result;
   }
@@ -461,7 +468,7 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
     attachments: {
       list: signal => requestData(fetcher, '/api/v1/assistant/attachments', attachmentListResponseSchema, getInit(signal)),
       archive: (id, fields) => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/archive`, attachmentArchiveResponseSchema, fields ? { fields } : {}),
-      upload: (file, uploadId, groupId) => writeWithCsrf(withQuery('/api/v1/assistant/attachments', parameters => { parameters.set('name', file.name); parameters.set('uploadId', uploadId); parameters.set('groupId', groupId); }), attachmentResponseSchema, 'POST', file, 'application/octet-stream'),
+      upload: (file, uploadId, groupId, signal) => writeWithCsrf(withQuery('/api/v1/assistant/attachments', parameters => { parameters.set('name', file.name); parameters.set('uploadId', uploadId); parameters.set('groupId', groupId); }), attachmentResponseSchema, 'POST', file, 'application/octet-stream', signal),
       get: (id, signal) => requestData(fetcher, `/api/v1/assistant/attachments/${encodeURIComponent(id)}`, attachmentResponseSchema, getInit(signal)),
       pages: (id, startPage, endPage, signal) => requestData(fetcher, withQuery(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/pages`, parameters => { appendQuery(parameters, 'startPage', startPage); appendQuery(parameters, 'endPage', endPage); }), attachmentPagesResponseSchema, getInit(signal)),
       retry: id => postWithCsrf(`/api/v1/assistant/attachments/${encodeURIComponent(id)}/retry`, attachmentResponseSchema, {}),
@@ -508,8 +515,8 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike): Re
           appendQuery(parameters, 'projectId', projectId);
         }), assistantDraftListResponseSchema, getInit(signal));
       }) as AssistantDraftListClient,
-      save: (id, input) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}`, assistantDraftResponseSchema, 'PUT', JSON.stringify(input)),
-      delete: (id, revision) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}?revision=${revision}`, assistantDraftDeleteResponseSchema, 'DELETE')
+      save: (id, input, signal) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}`, assistantDraftResponseSchema, 'PUT', JSON.stringify(input), 'application/json', signal),
+      delete: (id, revision, signal) => writeWithCsrf(`/api/v1/assistant/drafts/${encodeURIComponent(id)}?revision=${revision}`, assistantDraftDeleteResponseSchema, 'DELETE', undefined, 'application/json', signal)
     },
     assistant: {
       providers: (signal) => requestData(fetcher, '/api/v1/assistant/providers', assistantProvidersResponseSchema, getInit(signal)),

@@ -254,7 +254,7 @@ test('opens and closes a selected envelope with the keyboard and restores focus'
 test('shows the failed first load and recovers through an explicit retry', async ({ page }, info) => {
   await page.setViewportSize(viewports[2]!);
   await page.goto(fixtureUrl('retry'));
-  await expect(page.getByRole('alert')).toContainText('示例连接暂时中断');
+  await expect(page.getByText('示例连接暂时中断，请重试读取收件箱。', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '收件箱是空的', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^整理 /u })).toHaveCount(0);
   await expectNoHorizontalOverflow(page);
@@ -263,7 +263,7 @@ test('shows the failed first load and recovers through an explicit retry', async
   await expect(page.getByRole('button', { name: /^整理 /u })).toHaveCount(0);
   await page.getByRole('button', { name: '打开收件箱', exact: true }).click();
   await expect(page.getByRole('button', { name: /^整理 /u })).toHaveCount(4);
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByText('示例连接暂时中断，请重试读取收件箱。', { exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => window.__intakeTrayFixture.listCalls)).toBeGreaterThanOrEqual(2);
   await expectNoArchiveActions(page);
   await expectNoHorizontalOverflow(page);

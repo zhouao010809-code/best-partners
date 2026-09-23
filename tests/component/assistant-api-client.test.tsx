@@ -18,6 +18,17 @@ it('sends assistant messages once with the existing CSRF transport and request i
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
+it('reuses bootstrap CSRF when the app already resolved its runtime mode', async () => {
+  const fetcher = vi.fn().mockResolvedValue(ok(conversation));
+  const api = createBrowserReadConsoleApi(fetcher, { csrfToken: 'a'.repeat(43), runtimeMode: 'personal' });
+  const input = { clientRequestId: '447a699b-eae1-49d5-bd52-45a57f45e997', message: '找资料', providerId: 'deepseek', model: 'deepseek-v4-pro', scope: 'brain' as const };
+
+  expect(await api.assistant!.send(input)).toEqual({ ok: true, value: conversation });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(fetcher.mock.calls[0]![0]).toBe('/api/v1/assistant/messages');
+  expect(fetcher.mock.calls[0]![1]).toMatchObject({ headers: { 'x-csrf-token': 'a'.repeat(43) } });
+});
+
 it('loads model catalogs with cancellation support and rejects malformed responses', async () => {
   const signal = new AbortController().signal; const fetcher = vi.fn().mockResolvedValueOnce(ok({ providers: [] })).mockResolvedValueOnce(ok({ providers: [{ id: 'bad' }] }));
   const service = createBrowserReadConsoleApi(fetcher).assistant!;
@@ -54,6 +65,28 @@ it('uploads a binary File with stable batch and upload ids through CSRF without 
   expect(await createBrowserReadConsoleApi(fetcher).attachments!.upload(file, id, groupId)).toEqual({ ok: true, value: { attachment } });
   const [url, init] = fetcher.mock.calls[1]!; expect(Object.fromEntries(new URL(url, 'http://localhost').searchParams)).toEqual({ name: file.name, uploadId: id, groupId });
   expect(init).toMatchObject({ method: 'POST', body: file, headers: { 'content-type': 'application/octet-stream', 'x-csrf-token': 'a'.repeat(43) } });
+});
+
+it('forwards cancellation signals through protected attachment and draft writes', async () => {
+  const signal = new AbortController().signal;
+  const attachment = { id: '73c8cd22-39f0-4574-a1b5-d2b034949543', name: '资料.pdf', mediaType: 'application/pdf', size: 3, sha256: 'a'.repeat(64), textBytes: 0, status: 'processing', createdAt: '2026-09-10', updatedAt: '2026-09-10' };
+  const draft = { id: '73c8cd22-39f0-4574-a1b5-d2b034949543', revision: 1, active: true as const, text: '', attachments: [], groupId: 'de5d2436-dd14-4f6c-9282-ea1ffde199c1', scope: 'brain' as const, updatedAt: '2026-09-10' };
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(ok({ csrfToken: 'a'.repeat(43), runtimeMode: 'personal' }))
+    .mockResolvedValueOnce(ok({ attachment }))
+    .mockResolvedValueOnce(ok({ draft }))
+    .mockResolvedValueOnce(ok({ deleted: true }));
+  const api = createBrowserReadConsoleApi(fetcher);
+  const file = new File(['pdf'], '资料.pdf', { type: 'application/pdf' });
+  const input = { expectedRevision: 1, active: true as const, text: '', attachments: [], groupId: draft.groupId, scope: 'brain' as const };
+
+  await api.attachments!.upload(file, attachment.id, draft.groupId, signal);
+  await api.assistantDrafts!.save(draft.id, input, signal);
+  await api.assistantDrafts!.delete(draft.id, draft.revision, signal);
+
+  expect(fetcher.mock.calls[1]![1]).toMatchObject({ signal });
+  expect(fetcher.mock.calls[2]![1]).toMatchObject({ signal });
+  expect(fetcher.mock.calls[3]![1]).toMatchObject({ signal });
 });
 
 it('uses revision-bearing draft writes and exposes conflict codes without discarding the current draft', async () => {

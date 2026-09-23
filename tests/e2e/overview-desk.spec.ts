@@ -20,7 +20,7 @@ test.afterEach(async ({ page }) => {
 
 async function expectMetrics(page: Page, pending: number) {
   await expect(page.getByRole('region', { name: '大脑状态摘要', exact: true })).toHaveCount(0);
-  await expect(page.getByTestId('metric-pending')).toHaveText(`${pending} 份`);
+  await expect(page.getByTestId('metric-pending')).toHaveText(`${pending}`);
   await expect(page.getByTestId('metric-knowledge')).toHaveText('已积累 6 篇知识');
   await expect(page.getByTestId('metric-knowledge')).toHaveAttribute('href', '/knowledge');
   await expect(page.getByTestId('metric-partial')).toHaveCount(0);
@@ -34,7 +34,7 @@ for (const width of [1440, 1024, 390]) {
     await expectMetrics(page, 2);
     const dashboard = page.locator('.dashboard-reading-desk');
     await expect(dashboard).toBeVisible();
-    await expect(page.getByRole('region', { name: '待提炼材料 2 份', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: '待提炼材料牌堆', exact: true })).toBeVisible();
     const deck = page.getByRole('region', { name: '待提炼材料牌堆', exact: true });
     await expect(deck).toHaveAttribute('data-deck-appearance', 'showcase');
     const cards = page.locator('[data-material-card-trigger]');
@@ -138,7 +138,7 @@ test('the primary action navigates to the existing extraction preparation withou
 
 test('the knowledge library remains accessible from the sidebar', async ({ page }) => {
   await page.goto(fixture);
-  const link = page.getByRole('complementary', { name: '小兆大脑侧边栏' }).getByRole('link', { name: '知识库', exact: true });
+  const link = page.getByRole('complementary', { name: '最佳拍档侧边栏' }).getByRole('link', { name: '知识库', exact: true });
   await expect(link).toBeVisible();
   const href = '/knowledge';
   await expect(link).toHaveAttribute('href', href);

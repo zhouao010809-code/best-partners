@@ -1,4 +1,4 @@
-import type { UpdateCheckResult } from '../../electron/update-check.js';
+import type { UpdateCheckResult } from './update.js';
 
 export interface DesktopVaultSelection {
   readonly selected: boolean;

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+export type { UpdateCheckResult } from '../shared/desktop/update.js';
+import type { UpdateCheckResult } from '../shared/desktop/update.js';
 
 export const RELEASES_URL = 'https://api.github.com/repos/zhouao010809-code/best-partners/releases?per_page=20';
 export const RELEASE_PAGE_URL = 'https://github.com/zhouao010809-code/best-partners/releases';
@@ -16,11 +18,6 @@ const releaseSchema = z.object({
 const releasesSchema = z.array(releaseSchema);
 
 type ParsedVersion = { major: string; minor: string; patch: string; prerelease: string[] };
-
-export type UpdateCheckResult =
-  | { status: 'up-to-date'; currentVersion: string; checkedAt: string }
-  | { status: 'available'; currentVersion: string; version: string; releaseUrl: string; assetUrl: string; publishedAt?: string; notes: string }
-  | { status: 'error'; currentVersion: string; code: 'UPDATE_FEED_UNAVAILABLE' | 'UPDATE_FEED_INVALID' | 'UPDATE_VERSION_INVALID'; message: string; releaseUrl: string };
 
 export type UpdateCheckerInput = {
   currentVersion: string;
