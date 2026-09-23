@@ -97,6 +97,11 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
     return select({ ...fresh(), text, attachments });
   }
   const enterProject = useCallback(async (id: string, sourceRevision: number): Promise<boolean> => {
+    // A reconnect or confirmed output can arrive while the user is typing.
+    // Persist the current local draft before loading the server's project
+    // snapshot, otherwise the snapshot could replace text not yet covered by
+    // the debounce autosave.
+    if (!await flush()) return false;
     if (service) await load(id);
     const existing = draftsRef.current.find(item => item.projectId === id);
     const next: LocalDraft = existing
@@ -108,7 +113,7 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
       return flush();
     }
     return select(next);
-  }, [load, select, service]);
+  }, [flush, load, select, service]);
   async function forConversation(value: AssistantConversation): Promise<boolean> {
     const existing = draftsRef.current.find(item => item.conversationId === value.id);
     // An existing empty selection represents an explicit removal. Only recover

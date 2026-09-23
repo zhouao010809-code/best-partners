@@ -64,6 +64,19 @@ it('keeps edits made just before reopening the same draft instead of restoring i
   expect(view.result.current.current.text).toBe('刚刚补充的完整想法'); expect(f.records.get(saved.id)?.text).toBe('刚刚补充的完整想法');
 });
 
+it('flushes unsaved project text before a workspace revision refresh', async () => {
+  const projectId = uuid();
+  const saved: AssistantDraft = { id: uuid(), revision: 1, text: '旧项目草稿', attachments: [], groupId: uuid(), scope: 'project', projectId, projectRevision: 1, updatedAt: '2026-09-10', lastActive: '2026-09-10' };
+  const f = draftService([saved]);
+  const view = renderHook(() => useAssistantDrafts(f.service, projectId));
+  await waitFor(() => expect(view.result.current.ready).toBe(true));
+  act(() => view.result.current.update({ text: '重连前刚补充的内容' }));
+  await act(async () => { expect(await view.result.current.enterProject(projectId, 2)).toBe(true); });
+  expect(f.records.get(saved.id)?.text).toBe('重连前刚补充的内容');
+  expect(view.result.current.current.text).toBe('重连前刚补充的内容');
+  expect(view.result.current.current.projectRevision).toBe(2);
+});
+
 it('restores a persisted conversation draft with files, preserves it when creating a blank conversation, and finds it in draft history', async () => {
   const user = userEvent.setup(); const attachment = fileRecord(); const conversationId = uuid();
   const saved: AssistantDraft = { id: uuid(), revision: 2, conversationId, text: '尚未发出的追问', attachments: [{ id: attachment.id, startPage: 2, endPage: 3 }], groupId: uuid(), scope: 'current', contextPath: '01图书馆/旧资料.md', updatedAt: '2026-09-10', lastActive: '2026-09-10' };
