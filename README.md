@@ -46,6 +46,22 @@ flowchart LR
 
 每一步都保留预览、确认和恢复入口：AI 不会自动发送，知识也不会自动写入。
 
+## 开发验证
+
+Node.js 需要 `22.12+`。日常提交前运行：
+
+```sh
+npm run verify:fast
+```
+
+这会依次检查共享、客户端、服务端、Electron 和 MCP 的层边界与类型，再运行单元、集成和两套 MCP 测试。需要验证浏览器 fixture 时运行：
+
+```sh
+npm run test:e2e:fixtures
+```
+
+fixture runner 会按配置串行启动各自的 Vite 端口，避免直接运行默认 `test:e2e` 时因为缺少专用 fixture 服务而产生误报。发布前再运行 `npm run verify:release`，它会额外执行客户端组件测试和桌面运行时构建。CI 的同一组快速检查见 `.github/workflows/ci.yml`。
+
 ## 界面预览
 
 先在“待提炼材料”里浏览已归档资料，再打开单份材料查看来源、状态和下一步操作；手机宽度也会自动收拢为可滚动的材料卡片。
