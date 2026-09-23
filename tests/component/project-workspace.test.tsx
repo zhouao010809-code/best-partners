@@ -56,6 +56,9 @@ afterEach(() => { cleanup(); Reflect.deleteProperty(window, 'xiaozhaoDesktop'); 
 describe('ProjectWorkspacePage', () => {
   it('shows project context, file/output boundaries, and keeps the project id visible while reconnecting', async () => {
     const user = userEvent.setup();
+    const updates: Event[] = [];
+    const onUpdate = (event: Event) => updates.push(event);
+    window.addEventListener('xiaozhao:project-workspace-updated', onUpdate);
     renderPage();
     expect((await screen.findAllByText('项目语料：需要重新连接')).length).toBeGreaterThan(0);
     expect(screen.getByText('全局知识库：可检索')).toBeVisible();
@@ -67,9 +70,12 @@ describe('ProjectWorkspacePage', () => {
     expect(scanApi).toHaveBeenCalledWith('/tmp/A项目新位置');
     expect(reconnect).toHaveBeenCalledWith(id, { scanId: scan.scanId, sourceSha256: scan.sourceSha256, displayName: 'A项目新位置' });
     expect(await screen.findByText('项目已重新连接；旧的项目写入计划已标记为过期，需要重新确认。')).toBeVisible();
+    expect(updates).toHaveLength(1);
+    expect((updates[0] as CustomEvent).detail).toEqual({ projectId: id });
     expect(screen.getByText('A项目新位置')).toBeVisible();
     expect(screen.getByTestId('project-route')).toHaveTextContent(`/projects/${id}`);
     expect(screen.getByTestId('visible-project-conversation')).toHaveTextContent('已有项目问问会话：上次讨论仍在这里');
+    window.removeEventListener('xiaozhao:project-workspace-updated', onUpdate);
   });
 
   it('shows the connected project context when the bound folder is ready', async () => {

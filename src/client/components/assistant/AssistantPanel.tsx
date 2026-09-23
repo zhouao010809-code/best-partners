@@ -200,6 +200,22 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     return () => { disposed = true; projectRequest.current?.abort(); };
   }, [draftStore.enterProject, loadProjectSummary, projectId]);
 
+  // A workspace reconnect (or a confirmed project output) changes the
+  // server-owned project revision. Refresh the summary and rebind the current
+  // draft so an already-open panel cannot keep sending with the old revision.
+  useEffect(() => {
+    if (!projectId) return;
+    const refreshProject = (event: Event) => {
+      const detail = (event as CustomEvent<{ projectId?: string }>).detail;
+      if (detail?.projectId !== projectId) return;
+      void loadProjectSummary().then(async value => {
+        if (value !== undefined) await draftStore.enterProject(value.id, value.sourceRevision);
+      });
+    };
+    window.addEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, refreshProject);
+    return () => window.removeEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, refreshProject);
+  }, [draftStore.enterProject, loadProjectSummary, projectId]);
+
   function chooseProvider(item: AssistantProvider) {
     selectionRef.current = item.id;
     setProviderId(item.id);

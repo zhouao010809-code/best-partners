@@ -160,6 +160,10 @@ export function ProjectWorkspacePage() {
       setProject(result.value);
       setReconnectPreview(undefined);
       setStaleNotice(true);
+      // Keep an already-open project AssistantPanel on the same source
+      // revision. The panel owns the draft binding, so it must refresh its
+      // summary and re-enter the project after reconnect succeeds.
+      window.dispatchEvent(new CustomEvent(PROJECT_WORKSPACE_UPDATED_EVENT, { detail: { projectId: id } }));
       setMessage('项目已重新连接；旧的项目写入计划已标记为过期，需要重新确认。');
     } catch {
       setMessage('项目重新连接未完成，请重试。');
