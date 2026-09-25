@@ -16,7 +16,7 @@ async function makeFixture() {
   const pdfPath = join(userData, 'assistant-source.pdf');
   const pdf = createTextPdf(['AI_ARCHIVE_ACCEPTANCE']);
   await writeFile(join(vault, '.xiaozhao-read-test-vault.json'), '{"purpose":"read-test"}\n', { mode: 0o600 });
-  for (const path of ['00大脑规则', '01图书馆/来自个人', '01图书馆/小兆clipper', '02知识库', '03大讲堂']) {
+  for (const path of ['00大脑规则', '01图书馆/来自个人', '01图书馆/小兆clipper', '02知识库', '03大讲堂', '.claude/skills']) {
     await mkdir(join(vault, path), { recursive: true });
   }
   for (const path of RULE_BUNDLE_SOURCE_PATHS) {

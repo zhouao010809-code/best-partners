@@ -21,44 +21,24 @@ import {
   IndexJobService,
   type IndexSchedulerPort
 } from './services/index-job-service.js';
-import { registerMaterialRoutes } from './api/routes/materials.js';
-import { registerDocumentRoutes } from './api/routes/documents.js';
-import { registerKnowledgeRoutes } from './api/routes/knowledge.js';
-import { registerOperationRoutes } from './api/routes/operations.js';
-import { registerIndexJobRoutes } from './api/routes/index-jobs.js';
-import { registerHealthRoutes } from './api/routes/health.js';
 import { parseApiOutput } from './api/route-validation.js';
-import { registerIntakeRoutes } from './api/routes/intake.js';
 import type { IntakeService } from './services/intake-service.js';
 import type { ExtractionService } from './services/extraction-service.js';
-import { registerExtractionRoutes } from './api/routes/extractions.js';
 import type { IngestionService } from './ingestion/ingestion-service.js';
-import { registerIngestionRoutes } from './api/routes/ingestion.js';
-import { registerTrashRoutes } from './api/routes/trash.js';
 import type { TrashService } from './trash/trash-service.js';
 import type { IntakeTrashService } from './trash/intake-trash-service.js';
-import { registerIntakeTrashRoutes } from './api/routes/intake-trash.js';
-import { registerAssistantRoutes } from './api/routes/assistant.js';
 import { createAssistantService } from './assistant/service.js';
 import { createAssistantTools } from './assistant/tool-factory.js';
 import { createAssistantActionPlanService } from './assistant/action-plan-service.js';
 import { createAssistantActionPlanStore } from './assistant/action-plan-store.js';
 import type { AssistantAdapter } from './assistant/types.js';
 import type { AttachmentService } from './attachments/service.js';
-import { registerAttachmentRoutes } from './api/routes/attachments.js';
-import { createAssistantDraftService } from './assistant/draft-service.js';
-import { registerAssistantDraftRoutes } from './api/routes/assistant-drafts.js';
-import { registerSkillRoutes } from './api/routes/skills.js';
-import { registerCompanyAuthRoutes } from './api/routes/company-auth.js';
-import { registerCompanyProjectRoutes } from './api/routes/company-projects.js';
-import { registerCompanySkillRoutes } from './api/routes/company-skills.js';
-import { registerCompanyMetricRoutes } from './api/routes/company-metrics.js';
-import { registerProjectRoutes } from './api/routes/projects.js';
 import type { SkillCatalogService } from './services/skill-catalog.js';
-import { createSkillMatcherService } from './services/skill-matcher.js';
 import type { CompanyRuntimeMode } from '../shared/company/workspace.js';
 import { createCompanyRuntime, type CompanyRuntime } from './company/company-runtime.js';
 import type { ProjectService, ProjectWritePlanService } from '../shared/api/projects.js';
+import { applyRuntimeCapabilities, type RuntimeCapabilities } from './runtime/capabilities.js';
+import { registerApplicationRoutes } from './api/register-routes.js';
 
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -151,6 +131,7 @@ export interface ReadApiDependencies {
 }
 
 export interface BuildServerOptions {
+  readonly capabilities?: RuntimeCapabilities;
   readonly runtimeMode?: CompanyRuntimeMode;
   readonly companyRuntime?: CompanyRuntime;
   readonly companyBootstrapToken?: string;
@@ -168,6 +149,11 @@ export interface BuildServerOptions {
   readonly skillCatalog?: SkillCatalogService;
   readonly projectService?: ProjectService;
   readonly projectWritePlans?: ProjectWritePlanService;
+  /**
+   * Embedded composition owns service shutdown when this is false. Standalone
+   * callers keep the historical app-owned lifecycle by default.
+   */
+  readonly manageServiceLifecycles?: boolean;
   readonly onClose?: () => void | Promise<void>;
 }
 
@@ -190,6 +176,7 @@ function createSafeOperationId(factory: () => string): () => string {
 }
 
 export function buildServer(options: BuildServerOptions = {}) {
+  options = applyRuntimeCapabilities(options);
   const app = Fastify({ logger: false, bodyLimit: MAX_JSON_BODY_BYTES });
   const nodeEnv = process.env.NODE_ENV;
   const runtimeMode = options.runtimeMode
@@ -332,54 +319,17 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
   });
 
-  registerHealthRoutes(app, healthService);
-  registerAssistantRoutes(app, assistant);
-  registerAttachmentRoutes(app, options.attachmentService);
-  registerAssistantDraftRoutes(app, { ...(options.readApi ? {
-    assistantDrafts: createAssistantDraftService({
-      database: options.readApi.database,
-      projectExists: projectId => options.readApi!.database.prepare('SELECT 1 AS present FROM personal_projects WHERE id = ?').get(projectId) !== undefined
-    })
-  } : {}) });
-  registerMaterialRoutes(app, readService);
-  registerDocumentRoutes(app, readService);
-  registerIntakeRoutes(app, options.intakeService);
-  registerIntakeTrashRoutes(app, options.intakeTrashService);
-  registerExtractionRoutes(app, options.extractionService, () => options.readApi?.indexScheduler.snapshot().state);
-  registerIngestionRoutes(app, options.ingestionService);
-  registerTrashRoutes(app, options.trashService);
-  registerKnowledgeRoutes(app, {
-    ...(readService === undefined ? {} : { service: readService }),
+  registerApplicationRoutes({
+    app,
+    options,
+    runtimeMode,
+    ...(companyRuntime === undefined ? {} : { companyRuntime }),
+    healthService,
+    ...(assistant === undefined ? {} : { assistant }),
+    ...(readService === undefined ? {} : { readService }),
+    ...(indexJobs === undefined ? {} : { indexJobs }),
     operationId
   });
-  registerSkillRoutes(
-    app,
-    options.skillCatalog,
-    options.skillCatalog === undefined ? undefined : createSkillMatcherService({ catalog: options.skillCatalog })
-  );
-  registerOperationRoutes(app, { database: options.readApi?.database,
-    intakeHistory: options.intakeService?.history,
-    trash: options.trashService ? () => options.trashService!.list() : undefined,
-    intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined,
-    projectOperations: options.projectWritePlans ? async () => {
-      const projects = options.readApi?.database.prepare('SELECT id FROM personal_projects').all() as Array<{ id: string }> | undefined;
-      if (!projects) return [];
-      const rows = await Promise.all(projects.map(project => options.projectWritePlans!.operations(project.id)));
-      return rows.flat();
-    } : undefined });
-  registerIndexJobRoutes(app, indexJobs);
-  if (runtimeMode === 'personal') registerProjectRoutes(app, options.projectService, options.projectWritePlans);
-  if (companyRuntime !== undefined) {
-    registerCompanyAuthRoutes(app, {
-      auth: companyRuntime.auth,
-      ...(options.companyBootstrapToken === undefined
-        ? {}
-        : { bootstrapToken: options.companyBootstrapToken })
-    });
-    registerCompanyProjectRoutes(app, { ...companyRuntime, runtime: companyRuntime });
-    registerCompanySkillRoutes(app, companyRuntime);
-    registerCompanyMetricRoutes(app, companyRuntime);
-  }
   app.get('/api/v1/bootstrap', async (request, reply) => {
     let sessionId = sessions.read(request.headers.cookie);
     if (sessionId === undefined) {
@@ -397,14 +347,18 @@ export function buildServer(options: BuildServerOptions = {}) {
   if (assistant !== undefined || indexJobs !== undefined || options.onClose !== undefined || options.attachmentService !== undefined || options.extractionService !== undefined || options.ingestionService !== undefined || options.trashService !== undefined || options.intakeTrashService !== undefined) {
     app.addHook('onClose', async () => {
       try { await assistant?.close(); } finally {
-        try { try { await options.attachmentService?.close(); } finally { await options.extractionService?.close(); } } finally {
-          try { await options.ingestionService?.close(); } finally {
-            try { await options.trashService?.close(); } finally {
-              try { await options.intakeTrashService?.close(); } finally {
-                try { await indexJobs?.close(); } finally { await options.onClose?.(); }
+        if (options.manageServiceLifecycles !== false) {
+          try { try { await options.attachmentService?.close(); } finally { await options.extractionService?.close(); } } finally {
+            try { await options.ingestionService?.close(); } finally {
+              try { await options.trashService?.close(); } finally {
+                try { await options.intakeTrashService?.close(); } finally {
+                  try { await indexJobs?.close(); } finally { await options.onClose?.(); }
+                }
               }
             }
           }
+        } else {
+          try { await indexJobs?.close(); } finally { await options.onClose?.(); }
         }
       }
     });

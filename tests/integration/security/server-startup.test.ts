@@ -16,7 +16,7 @@ const startup = vi.hoisted(() => ({
     workspace: { id: 'company' },
     metrics: { start: vi.fn(() => ({ stop: vi.fn() })) }
   },
-  companyApp: { listen: vi.fn() },
+  companyApp: { listen: vi.fn(), close: vi.fn(async () => {}) },
   companyKernel: { mode: 'normal', db: { fixture: 'company-db' }, close: vi.fn() },
   companyServerLock: { path: '/tmp/company-server.lock.json', release: vi.fn() },
   gateway: { fixture: 'legacy-gateway' },
@@ -142,6 +142,32 @@ describe('legacy CLI startup adapter', () => {
     expect(startup.ensureCompanyWorkspace).not.toHaveBeenCalled();
     expect(startup.openStateKernel).not.toHaveBeenCalled();
     expect(startup.buildServer).not.toHaveBeenCalled();
+  });
+
+  it('retains a company startup error and releases the lock when app and database cleanup fail', async () => {
+    vi.stubEnv('RUNTIME_MODE', 'company');
+    vi.stubEnv('COMPANY_HOST', '127.0.0.1');
+    vi.stubEnv('COMPANY_PORT', '4399');
+    vi.stubEnv('COMPANY_BOOTSTRAP_TOKEN', 'b'.repeat(43));
+    vi.stubEnv('COMPANY_WORKSPACE_ROOT', '/srv/company-workspace');
+    vi.stubEnv('COMPANY_DATA_DIR', '/srv/company-state');
+    const failure = new Error('ASSETS_FAILED');
+    const appFailure = new Error('APP_CLOSE_FAILED'), databaseFailure = new Error('DATABASE_CLOSE_FAILED');
+    const stop = vi.fn(async () => {});
+    startup.companyRuntime.metrics.start.mockReturnValueOnce({ stop });
+    startup.registerClientAssets.mockRejectedValueOnce(failure);
+    startup.companyApp.close.mockRejectedValueOnce(appFailure);
+    startup.companyKernel.close.mockImplementationOnce(() => { throw databaseFailure; });
+
+    await expect(importEntrypoint()).rejects.toMatchObject({
+      cause: failure,
+      errors: [failure, expect.objectContaining({ errors: [appFailure, expect.objectContaining({ errors: [databaseFailure] })] })]
+    });
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(startup.companyApp.close).toHaveBeenCalledOnce();
+    expect(startup.companyKernel.close).toHaveBeenCalledOnce();
+    expect(startup.companyServerLock.release).toHaveBeenCalledOnce();
   });
 
   it('rejects company startup without explicit absolute storage roots', async () => {

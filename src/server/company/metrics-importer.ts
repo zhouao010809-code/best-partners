@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import XLSX from 'xlsx';
+import { Worker } from 'node:worker_threads';
 import type {
   CompanyMetricName,
   CompanyMetricValues,
@@ -273,10 +273,15 @@ function businessDateFromDate(value: Date): string | undefined {
 function normalizeDate(value: RawCell, allowExcelSerial: boolean, date1904: boolean): string | undefined {
   if (value instanceof Date) return businessDateFromDate(value);
   if (typeof value === 'number') {
-    if (!allowExcelSerial || !Number.isFinite(value) || value < 1 || value > 3_000_000) return undefined;
-    const parsed = XLSX.SSF.parse_date_code(value, { date1904 });
-    if (!parsed) return undefined;
-    return formatDateParts(parsed.y, parsed.m, parsed.d);
+    if (!allowExcelSerial || !Number.isFinite(value) || value < (date1904 ? 0 : 1) || value > 3_000_000) return undefined;
+    const wholeDays = Math.floor(value);
+    // Excel's 1900 calendar contains the historic fictitious 1900-02-29.
+    // Reject that day instead of silently mapping it onto February 28.
+    if (!date1904 && wholeDays === 60) return undefined;
+    const excelEpoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 31);
+    const adjustedDays = date1904 || wholeDays < 60 ? wholeDays : wholeDays - 1;
+    const parsed = new Date(excelEpoch + adjustedDays * 86_400_000);
+    return formatDateParts(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate());
   }
   const text = asDisplayString(value);
   if (!text) return undefined;
@@ -427,56 +432,63 @@ function decodeDelimitedBytes(bytes: Uint8Array): string {
   }
 }
 
-function formatWorkbookDate1904(workbook: XLSX.WorkBook): boolean {
-  return Boolean(workbook.Workbook?.WBProps?.date1904);
+interface ParsedWorkbook {
+  readonly rows: RawTable;
+  readonly sheetName: string;
+  readonly date1904: boolean;
+  readonly startRow: number;
 }
 
-function parseWorkbook(bytes: Uint8Array, maxRows: number, maxCells: number, maxSheets: number): { rows: RawTable; sheetName: string; date1904: boolean } {
-  let workbook: XLSX.WorkBook;
-  try {
-    // Keep Excel dates as serials.  SheetJS converts a midnight Date to a
-    // JavaScript value one millisecond before midnight in some timezone
-    // combinations; serials let us use the workbook's calendar date without
-    // depending on the host timezone.
-    workbook = XLSX.read(bytes, { type: 'buffer', cellDates: false, dense: true, WTF: false });
-  } catch (error) {
-    throw new MetricsImportError('COMPANY_METRICS_FILE_UNSUPPORTED', 'Excel 文件无法读取', { cause: error });
-  }
-  if (workbook.SheetNames.length === 0) throw new MetricsImportError('COMPANY_METRICS_HEADER_NOT_FOUND', 'Excel 文件没有工作表');
-  if (workbook.SheetNames.length > maxSheets) throw new MetricsImportError('COMPANY_METRICS_TOO_LARGE', `工作表数量超过 ${maxSheets}`);
+interface WorkerErrorMessage {
+  readonly kind: 'error';
+  readonly code: MetricsImportErrorCode;
+  readonly message: string;
+}
 
-  // Check declared ranges before materializing cells.  This limits a small
-  // zip file that expands into a very large sparse worksheet.
-  let declaredCells = 0;
-  for (const name of workbook.SheetNames) {
-    const sheet = workbook.Sheets[name];
-    if (!sheet) continue;
-    const ref = sheet['!ref'];
-    if (!ref) continue;
-    try {
-      const range = XLSX.utils.decode_range(ref);
-      const rows = range.e.r - range.s.r + 1;
-      const cols = range.e.c - range.s.c + 1;
-      if (rows > maxRows || rows * cols > maxCells) throw new MetricsImportError('COMPANY_METRICS_TOO_LARGE', `工作表 ${name} 超过行列上限`);
-      declaredCells += rows * cols;
-      if (declaredCells > maxCells) throw new MetricsImportError('COMPANY_METRICS_TOO_LARGE', `Excel 单元格数量超过 ${maxCells}`);
-    } catch (error) {
-      if (error instanceof MetricsImportError) throw error;
-      throw new MetricsImportError('COMPANY_METRICS_FILE_UNSUPPORTED', `工作表 ${name} 的范围无法读取`, { cause: error });
-    }
-  }
+interface WorkerResultMessage {
+  readonly kind: 'result';
+  readonly rows: RawCell[][];
+  readonly sheetName: string;
+  readonly date1904: boolean;
+  readonly startRow: number;
+}
 
-  const sheetName = workbook.SheetNames[0]!;
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet) throw new MetricsImportError('COMPANY_METRICS_HEADER_NOT_FOUND', 'Excel 首个工作表为空');
-  const rows = XLSX.utils.sheet_to_json<RawCell[]>(sheet, { header: 1, raw: true, defval: '' });
-  if (rows.length > maxRows) throw new MetricsImportError('COMPANY_METRICS_TOO_LARGE', `Excel 行数超过 ${maxRows}`);
-  let actualCells = 0;
-  for (const row of rows) {
-    actualCells += row.length;
-    if (actualCells > maxCells) throw new MetricsImportError('COMPANY_METRICS_TOO_LARGE', `Excel 单元格数量超过 ${maxCells}`);
-  }
-  return { rows, sheetName, date1904: formatWorkbookDate1904(workbook) };
+type WorkerMessage = WorkerErrorMessage | WorkerResultMessage;
+
+const XLSX_WORKER_TIMEOUT_MS = 15_000;
+
+/**
+ * Keep synchronous workbook parsing off the API event loop and terminate slow
+ * parses. V8 heap limits bound worker heap usage, not total process memory
+ * (including external buffers); this is not an OS process sandbox.
+ */
+function parseWorkbook(bytes: Uint8Array, maxRows: number, maxCells: number, maxSheets: number): Promise<ParsedWorkbook> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./xlsx-worker.mjs', import.meta.url), {
+      workerData: { bytes, maxRows, maxCells, maxSheets },
+      resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 32 }
+    });
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      void worker.terminate();
+      callback();
+    };
+    const timeout = setTimeout(() => finish(() => reject(new MetricsImportError('COMPANY_METRICS_FILE_UNSUPPORTED', 'Excel 文件解析超时'))), XLSX_WORKER_TIMEOUT_MS);
+    worker.once('message', (message: WorkerMessage) => finish(() => {
+      if (message.kind === 'error') {
+        reject(new MetricsImportError(message.code, message.message));
+        return;
+      }
+      resolve({ rows: message.rows, sheetName: message.sheetName, date1904: message.date1904, startRow: message.startRow });
+    }));
+    worker.once('error', (error) => finish(() => reject(new MetricsImportError('COMPANY_METRICS_FILE_UNSUPPORTED', 'Excel 文件无法读取', { cause: error }))));
+    worker.once('exit', () => {
+      finish(() => reject(new MetricsImportError('COMPANY_METRICS_FILE_UNSUPPORTED', 'Excel 解析器未返回结果即退出')));
+    });
+  });
 }
 
 function parseMetricValue(value: RawCell): number | undefined | MetricsImportError {
@@ -493,7 +505,10 @@ function parseMetricValue(value: RawCell): number | undefined | MetricsImportErr
   return result;
 }
 
-function normalizeContentId(value: RawCell): string | undefined {
+function normalizeContentId(value: RawCell): string | undefined | MetricsImportError {
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) {
+    return new MetricsImportError('COMPANY_METRICS_VALUE_INVALID', '数字内容 ID 无法保证精确，请将该列导出为文本后重试');
+  }
   const text = asDisplayString(value);
   return text.length > 0 ? text : undefined;
 }
@@ -573,15 +588,17 @@ export async function parsePlatformExport(input: PlatformExportParseInput): Prom
   let table: RawTable;
   let sheetName: string;
   let date1904 = false;
+  let startRow = 0;
   if (format === 'csv') {
     const text = decodeDelimitedBytes(input.bytes);
     table = parseCsv(text, limits.maxRows, limits.maxCells);
     sheetName = 'CSV';
   } else {
-    const workbook = parseWorkbook(input.bytes, limits.maxRows, limits.maxCells, limits.maxSheets);
+    const workbook = await parseWorkbook(input.bytes, limits.maxRows, limits.maxCells, limits.maxSheets);
     table = workbook.rows;
     sheetName = workbook.sheetName;
     date1904 = workbook.date1904;
+    startRow = workbook.startRow;
   }
   if (table.length === 0) throw new MetricsImportError('COMPANY_METRICS_HEADER_NOT_FOUND', '文件没有可用表格行');
 
@@ -592,7 +609,7 @@ export async function parsePlatformExport(input: PlatformExportParseInput): Prom
     if (error instanceof MetricsImportError) throw error;
     throw new MetricsImportError('COMPANY_METRICS_HEADER_NOT_FOUND', '没有识别到表头');
   }
-  const headerRow = header.index + 1;
+  const headerRow = startRow + header.index + 1;
   const headerContract: PlatformExportHeader = {
     headerRow,
     sheetName,
@@ -607,7 +624,7 @@ export async function parsePlatformExport(input: PlatformExportParseInput): Prom
     const raw = table[index]!;
     if (isBlankRow(raw)) continue;
     dataRowCount += 1;
-    const sourceRow = index + 1;
+    const sourceRow = startRow + index + 1;
     const rowIssues: PlatformExportIssue[] = [];
     const dateIndex = header.mapping.columns.metricDate;
     const metricDate = dateIndex === undefined ? undefined : normalizeDate(raw[dateIndex], format !== 'csv', date1904);
@@ -617,8 +634,13 @@ export async function parsePlatformExport(input: PlatformExportParseInput): Prom
     if (canonical.problem) rowIssues.push(canonical.problem);
 
     const contentIndex = header.mapping.columns.contentId;
-    const contentId = contentIndex === undefined ? undefined : normalizeContentId(raw[contentIndex]);
-    if (!contentId) rowIssues.push(issue('COMPANY_METRICS_CONTENT_ID_MISSING', '缺少稳定的内容 ID，行已隔离', sourceRow, header.mapping.labels.contentId));
+    const parsedContentId = contentIndex === undefined ? undefined : normalizeContentId(raw[contentIndex]);
+    const contentId = parsedContentId instanceof MetricsImportError ? undefined : parsedContentId;
+    if (parsedContentId instanceof MetricsImportError) {
+      rowIssues.push(issue(parsedContentId.code, parsedContentId.message, sourceRow, header.mapping.labels.contentId));
+    } else if (!contentId) {
+      rowIssues.push(issue('COMPANY_METRICS_CONTENT_ID_MISSING', '缺少稳定的内容 ID，行已隔离', sourceRow, header.mapping.labels.contentId));
+    }
 
     if (rowIssues.length > 0) {
       issues.push(...rowIssues);

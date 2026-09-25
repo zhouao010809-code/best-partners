@@ -16,7 +16,10 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
   const currentRef = useRef(current); currentRef.current = current;
   const [drafts, setDrafts] = useState<AssistantDraft[]>([]);
   const draftsRef = useRef(drafts); draftsRef.current = drafts;
-  const [ready, setReady] = useState(!service);
+  const [loadedContext, setLoadedContext] = useState<{ service: ReadConsoleApi['assistantDrafts']; projectId: string | undefined }>();
+  // A bootstrap client or project switch must not expose the previous
+  // context's ready flag while its replacement request is still pending.
+  const ready = !service || Boolean(loadedContext?.service === service && loadedContext.projectId === projectId);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [conflict, setConflict] = useState(false);
@@ -29,7 +32,8 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
   const replace = useCallback((draft: LocalDraft) => { currentRef.current = draft; setCurrent(draft); }, []);
   const update = useCallback((patch: Partial<AssistantDraftFields>) => { replace({ ...currentRef.current, ...patch }); }, [replace]);
   const load = useCallback(async (requestedProjectId = projectId) => {
-    if (!service) { setReady(true); return; }
+    setLoadedContext(undefined);
+    if (!service) return;
     const sequence = ++loadSequence.current; setError('');
     try {
       const result = await service.list(undefined, requestedProjectId === undefined ? undefined : { projectId: requestedProjectId }); if (!mounted.current || sequence !== loadSequence.current) return;
@@ -42,7 +46,7 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
         replace(requestedProjectId === undefined ? blank : { ...blank, scope: 'project', projectId: requestedProjectId });
         acknowledged.current = fingerprint(currentRef.current);
       }
-      setReady(true);
+      setLoadedContext({ service, projectId: requestedProjectId });
     } catch { if (mounted.current && sequence === loadSequence.current) setError('未能恢复本机草稿，请重新连接后重试。'); }
   }, [projectId, service, replace]);
   useEffect(() => { mounted.current = true; void load(); return () => { mounted.current = false; loadSequence.current += 1; }; }, [load]);

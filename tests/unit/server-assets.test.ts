@@ -54,6 +54,9 @@ describe('server migration assets', () => {
     const worker = await readFile(resolve('src/server/attachments/pdf-worker.mjs'), 'utf8');
     await mkdir(join(root, 'src/server/attachments'), { recursive: true });
     await writeFile(join(root, 'src/server/attachments/pdf-worker.mjs'), worker, 'utf8');
+    const xlsxWorker = await readFile(resolve('src/server/company/xlsx-worker.mjs'), 'utf8');
+    await mkdir(join(root, 'src/server/company'), { recursive: true });
+    await writeFile(join(root, 'src/server/company/xlsx-worker.mjs'), xlsxWorker, 'utf8');
 
     await execFileAsync(
       resolve('node_modules/.bin/tsx'),
@@ -66,5 +69,6 @@ describe('server migration assets', () => {
     await expect(readFile(join(root, 'dist/server/db/migrations/002_read_api_jobs.sql'), 'utf8'))
       .resolves.toBe('SELECT 2;\n');
     await expect(readFile(join(root, 'dist/server/pdf-worker.mjs'), 'utf8')).resolves.toBe(worker);
+    await expect(readFile(join(root, 'dist/server/xlsx-worker.mjs'), 'utf8')).resolves.toBe(xlsxWorker);
   });
 });

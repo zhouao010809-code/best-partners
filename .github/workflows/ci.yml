@@ -20,17 +20,34 @@ jobs:
           node-version: 22.12.x
           cache: npm
       - run: npm ci
-      - run: npm run check:architecture
-      - run: npm run typecheck
-      - run: npm run test:unit
-      - run: npm run test:integration
-      - run: npm run test:mcp
-      - run: npm run test:company-mcp
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run verify:fast
       - run: npm run build
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ci-diagnostics
+          path: |
+            test-results
+            coverage
+          if-no-files-found: ignore
+
+  verify-full:
+    # The native archive/read helpers require macOS arm64 and xcrun.
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.x
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:full
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-full-diagnostics
           path: |
             test-results
             coverage

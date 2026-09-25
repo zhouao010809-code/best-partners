@@ -12,16 +12,16 @@
 
 1. 依赖方向稳定：`shared` 只依赖第三方纯数据库，不依赖 `client`、`server`、`electron`；`client` 只通过 `shared` 契约和客户端端口访问运行时；`electron` 只通过启动端口和桌面桥接装配服务，不把服务实现反向带入共享类型。
 2. 运行时装配可读：个人和公司模式使用显式的 composition/capability 对象；`app.ts` 只负责 HTTP 层，资源生命周期由统一的 runtime disposer 管理。
-3. 能力缺失可预测：未启用的可选服务通过统一的 `CAPABILITY_UNAVAILABLE` 公共错误和健康快照暴露，不在每个路由文件中重复定义隐式 `service?` 分支。
+3. 能力缺失可预测：组合根集中列出可选服务；缺失时继续使用各域已有的公共错误码和健康快照，保持客户端合同兼容。
 4. 质量门禁可复现：增加架构边界检查、MCP 类型检查、完整验证入口和 CI；默认命令名称不会把“仅单元测试”误导成全量测试。
-5. 供应链风险可见：`xlsx` 暂无上游修复时，CI 明确记录并限制风险范围；导入器继续使用已存在的输入上限和解析失败记录，不把审计结果伪装成“已修复”。
+5. 供应链风险可见：从官方发布源升级受影响依赖，锁定完整性哈希并执行审计；导入器保留输入上限、解析失败记录和兼容性回归。
 
 ## 非目标
 
 - 不在本阶段重写个人/公司领域服务，不移动 SQLite 表，不修改 Markdown/YAML 目录与状态枚举。
 - 不新增远程基础设施、账号系统、遥测服务或公网部署方案。
 - 不把 Electron 主进程改成浏览器可访问的通用 Node 容器。
-- 不自动升级或替换 `xlsx`，除非后续单独验证兼容替代方案。
+- 不替换导入业务合同；依赖升级须覆盖 XLS/XLSX、中文字段和日期兼容性。
 
 ## 方案比较
 
@@ -55,6 +55,8 @@ scripts          构建与验证入口（只能依赖 src 的公开端口）
 
 `start-server.ts` 保留网络监听和启动顺序，但不再直接持有所有具体资源；资源关闭按注册顺序的逆序执行，错误聚合后仍保证剩余资源释放。Electron 只消费 `StartedServer`、桌面桥接接口和少量跨运行时类型。
 
+当前组合边界已先落地为兼容适配层：`runtime/personal-composition.ts` 负责个人跨域协调，`runtime/index-composition.ts` 和 `runtime/archive-composition.ts` 分别负责索引、归档与回收服务，`start-server.ts` 只负责校验、HTTP、静态资源和监听，`buildServer` 在入口处将能力映射到旧的 `BuildServerOptions`。旧调用方无需迁移，后续可以按域删除具体 options，而不需要一次性重写 HTTP 路由。
+
 ### 能力模型
 
 能力不是布尔开关，而是带公共行为的可选端口：
@@ -73,7 +75,7 @@ export interface RuntimeDisposer {
 }
 ```
 
-路由在能力不存在时调用统一的 `requireCapability()`，抛出 `PublicApiError('CAPABILITY_UNAVAILABLE', ...)`。健康接口继续区分“恢复模式”“未配置”和“能力未启用”，不以 500 代替可解释状态。
+当前路由通过兼容适配器接收能力，保留已有各域错误（如 `SKILL_CATALOG_UNAVAILABLE`）。健康接口继续区分“恢复模式”“未配置”和“能力未启用”，不以 500 代替可解释状态。统一 requireCapability 或重命名公共错误属于后续合同迁移，不是当前已实现功能。
 
 ### 共享契约迁移
 
@@ -81,7 +83,7 @@ export interface RuntimeDisposer {
 
 ### HTTP 与路由装配
 
-保留现有 Fastify 路由文件和 URL。新增按运行模式组织的注册表：个人注册个人能力路由，公司注册公司能力路由，公共 bootstrap/health 单独注册。注册表只接收能力接口，避免 `app.ts` 继续知道每个具体服务的创建方式。
+保留现有 Fastify 路由文件和 URL。`api/register-routes.ts` 集中注册现有路由，保留个人/公司条件；`app.ts` 负责 HTTP 安全、会话和 HTTP 层服务生命周期。注册表仍接收兼容 options，避免一次性改变路由构造与错误合同。
 
 ## 工程基建
 
@@ -89,17 +91,22 @@ export interface RuntimeDisposer {
 
 - `npm run check:architecture`：扫描受保护目录的相对导入边，发现共享反向依赖、client 直接依赖 server/electron、server 依赖 client 时失败。
 - `npm run typecheck`：增加 `tsconfig.mcp.json`，覆盖个人 MCP 和公司 MCP。
-- `npm test`：明确改名为 `test:unit` 的别名，新增 `test:all` 聚合 unit、integration、component、archive、native、MCP、company-MCP、security 和 contract。
-- `npm run verify`：保留本地可运行的快速门禁，包含 typecheck、architecture、unit、integration、component、build。
-- `npm run verify:release`：在完整环境中追加 archive/native/MCP/contract、E2E、Electron、company 构建、桌面包内容检查；原生和浏览器不可用时明确失败，不降级成绿灯。
+- `npm test`：现在明确指向 `test:unit`；`test:all` 聚合 unit、integration、component、archive、native、MCP、company-MCP 和 security。需要真实 Obsidian、凭证和外部状态的合同探针单独使用 `npm run test:contract:all`，避免缺少外部环境时产生误导性的绿灯。
+- `npm run verify`：完整本地门禁的兼容别名，等价于 `verify:full`；日常快速检查使用 `verify:fast`。
+- `npm run verify:full`：在完整本地环境中执行 architecture、typecheck、`test:all` 和 desktop runtime build。
+- `npm run verify:release`：在 `verify:full` 之后追加 E2E fixture、当前源码的 macOS 打包、Electron 开发/打包验收及 company MCP/operations 构建（server 已由 full 构建）；原生和浏览器不可用时明确失败，不降级成绿灯。真实 Obsidian 合同仍由 `test:contract:all` 单独执行。
 
 ### CI
 
-新增 GitHub Actions 工作流：安装 Node 22.12+、`npm ci`、架构检查、类型检查、快速测试和生产构建；macOS arm64 job 运行原生合同与 Electron smoke。CI 不执行真实大脑、真实 DeepSeek、真实账号授权或外部写入。
+GitHub Actions 现在分为 `verify-fast` 和 `verify-full` 两个 job：都安装 Node 22.12+ 并执行 `npm ci`，快速 job 在 Ubuntu 运行快速门禁和生产构建，完整 job 在 macOS arm64 运行 `verify:full`，匹配原生模块的编译要求（[GitHub runner 说明](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)）。CI 不执行真实大脑、真实 DeepSeek、真实账号授权或外部写入；真实 Obsidian 合同仍需在具备外部环境的机器上显式运行。
+
+### 客户端包体
+
+生产路由通过独立的 route page loader 生成按页 chunk，测试配置使用 eager loader 保持现有组件测试的同步装配。`npm run build` 会执行 `check:client-bundle`，当前入口预算为 900 KiB；超过预算时构建失败，避免页面和图标依赖重新全部回流到首包。
 
 ### 依赖风险
 
-保留 `xlsx` 的当前功能，但把 `npm audit --omit=dev --audit-level=high` 作为报告步骤而非盲目 `--audit-level=high` 阻断；另加导入输入大小、工作表/行数、解析超时和失败审计的架构合同，确保高风险解析库不会扩大到任意文件执行或无限资源消耗。替换依赖另开设计，不混入本阶段。
+SheetJS 使用官方 CDN 的 `0.20.3`，package-lock 固定 tarball 完整性，`npm audit --omit=dev` 无已知生产漏洞。导入器在 Worker 中解析 Excel，保留 20 MiB、20 工作表、100,000 行、1,000,000 单元格上限及 15 秒超时；V8 heap 上限不等同进程内存沙箱。合成 XLS/XLSX、中文、1900/1904 日历和范围限制已纳入回归，真实平台导出样本仍是外部验收项。开发期 `esbuild` 临时固定到 `0.28.2`；上游 tsup 支持修复版本后可移除 override。
 
 ## 错误与关闭策略
 
@@ -123,11 +130,11 @@ export interface RuntimeDisposer {
 
 ### Phase 2：运行时组合
 
-引入 `RuntimeCapabilities`、`RuntimeDisposer` 和个人/公司 composition，保持现有 `buildServer` 作为兼容适配层；补充装配集成测试。
+引入 `RuntimeCapabilities`、`RuntimeDisposer` 和个人 composition；公司启动沿用既有 company-runtime 并接入统一 disposer，保持 `buildServer` 兼容适配层；补充装配与启动失败测试。
 
 ### Phase 3：路由能力注册
 
-按个人、公司、公共三组注册表拆分 `app.ts`，移除路由层的隐式可选服务分支；保持 HTTP URL 和响应合同不变。
+抽出集中路由注册入口，保留模式条件与可选服务行为；保持 HTTP URL 和响应合同不变。
 
 ### Phase 4：按域迁移
 
@@ -138,5 +145,4 @@ export interface RuntimeDisposer {
 - 契约迁移风险：只移动类型并保留运行时实现，先跑 typecheck、component 和 Electron update tests。
 - 组合根风险：先以适配器包裹现有 `start-server.ts`，新旧入口可并行比较，出现回归时可回退到旧组合函数。
 - CI 时间风险：把快速门禁和 release 门禁分开，避免开发迭代必须等待 Electron 打包。
-- `xlsx` 风险：不在本阶段替换库；输入约束和审计失败时保留原始文件，不写入错误数据。
-
+- `xlsx` 风险：升级使用官方 tarball 和锁文件；输入限制、超时及错误记录降低解析风险，真实样本兼容性需要另行验收。

@@ -187,6 +187,10 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     setHistory([]); setHistoryResults([]); setHistoryNextCursor(undefined);
     setError(''); setProject(undefined); setProjectError(''); setProjectStale(false);
     restoredDraft.current = false;
+    setRestoringConversation(false);
+  }, [api.assistantDrafts, projectId, service]);
+
+  useEffect(() => {
     if (!projectId) {
       setProject(undefined);
       setProjectLoading(false);
@@ -293,14 +297,15 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       if (result.ok) { selectionRef.current = result.value.providerId; receive(result.value); setProviderId(result.value.providerId); setModelId(result.value.model); setEffort(result.value.effort ?? ''); }
       else setError(errorMessage(result, '未能恢复草稿所属的对话，请重试。'));
     } catch { if (epoch === interactionEpoch.current) setError('未能恢复草稿所属的对话，请重试。'); }
-    finally { setRestoringConversation(false); }
+    finally { if (epoch === interactionEpoch.current) setRestoringConversation(false); }
   }
   useEffect(() => {
-    if (!draftStore.ready || restoredDraft.current) return;
+    if (!draftStore.ready) { restoredDraft.current = false; return; }
+    if (!service || restoredDraft.current) return;
     restoredDraft.current = true;
     const id = draftStore.currentRef.current.conversationId;
     if (id) void restoreConversation(id);
-  }, [draftStore.ready]);
+  }, [draftStore.ready, service]);
 
   useEffect(() => { const timer = setTimeout(() => setHistoryTerm(historyQuery.trim()), 250); return () => clearTimeout(timer); }, [historyQuery]);
   useEffect(() => { if (open) void loadProviders(); }, [open, loadProviders]);

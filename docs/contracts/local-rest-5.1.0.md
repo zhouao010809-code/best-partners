@@ -1,8 +1,8 @@
 # Obsidian Local REST API 5.1.0 contract status
 
-Status as of 2026-08-31: **FORMAL WRITE GATE BLOCKED**.
+Status as of 2026-09-25: **FORMAL WRITE GATE BLOCKED**, with executed independent-vault evidence.
 
-No independent sentinel-marked test vault was available when this harness was implemented. The executable write, external-mutation, cleanup, and restart probes have not been run. OpenAPI declarations are design inputs only and do not count as passed capability evidence.
+Read, guarded write, external-mutation observation, and restart probes have now run against an independent sentinel-marked vault using Local REST API 5.1.0 and Obsidian 1.13.7. The formal gate remains blocked because conditional deletion is unproven. Cleanup remains manual. See the [independent-vault acceptance record](../reviews/2026-09-25-obsidian-isolated-acceptance.md) for the executed commands and scope. OpenAPI declarations remain design inputs, not passed capability evidence.
 
 Missing contract context is a hard failure (`CONTRACT_CONTEXT_MISSING`), not a skipped or passing test. Each persisted profile and its non-secret Markdown report are immutable revision files under `APP_DATA_DIR/contract-profiles/`. An fsynced fail-closed activation marker precedes the atomic `current.json` switch; loaders reject every profile while that marker exists, so an indeterminate pointer commit cannot revive an older passing gate. The runtime gate loads only the exact guarded revision named by the pointer. Reports derive each capability state from the latest executable evidence: no evidence is `UNVERIFIED`, explicit negative evidence is `FAILED`, and only passed evidence with the operation-specific primitive is `PASSED`. They include sanitized reason codes but never paths, bodies, or secrets.
 
@@ -10,15 +10,18 @@ Missing contract context is a hard failure (`CONTRACT_CONTEXT_MISSING`), not a s
 
 | Capability | Status | Current evidence |
 |---|---|---|
-| safeRead | UNVERIFIED in an independent test vault | A separate read-only smoke against the formal vault observed the plugin fingerprint and response shapes listed below. It did not establish test-fixture byte fidelity. |
-| safeReplace | UNVERIFIED | PATCH declares an optional `If-Match`; no executable independent-vault probe has run. |
-| safeCreate | UNVERIFIED | PUT with `Reject-If-Content-Preexists` and COPY with `Allow-Overwrite:false` are probed separately for create, collision, and raw reread behavior. Neither declaration is assumed atomic. |
-| safeRestore | UNVERIFIED | Requires a successful conditional replace, exact raw reread, and conditional restore probe. |
-| safeDelete | UNVERIFIED | DELETE declares no conditional token. A pre-read followed by unconditional DELETE is not accepted as safe. |
-| rereadVerified | UNVERIFIED | Every successful mutation must be followed by an exact raw-byte/hash reread. |
-| externalMutationObservation | UNVERIFIED | Create, modify, rename, and delete observation must pass inside one guarded run sandbox. |
-| restartPersistence | UNVERIFIED | The prepare/restart/verify sequence has not run. |
-| formalWriteGate | **BLOCKED** | All rows above must pass for the exact fingerprint/OpenAPI profile key. |
+| safeRead | PASSED | Independent fixture preserved the exact BOM/CRLF bytes and Chinese/special-character filename. |
+| safeReplace | PASSED | PATCH rejected a stale token with 412; two concurrent requests using one token returned 200 and 412, followed by exact reread. |
+| safeCreate | PASSED via COPY only | COPY returned 204 then 409 on collision and preserved the destination. PUT with `Reject-If-Content-Preexists` returned 204 twice and failed its non-overwrite probe; PUT is not a verified creation primitive. |
+| safeRestore | PASSED | Conditional restore returned 200 and the exact original bytes were reread. |
+| safeDelete | FAILED / unproven | The harness records `SAFE_DELETE_CAS_UNPROVEN`; it did not execute DELETE. A pre-read followed by unconditional DELETE is not accepted as safe. |
+| rereadVerified | PASSED | Every successful probe mutation was followed by an exact raw-byte/hash reread. |
+| externalMutationObservation | PASSED | Create, modify, rename, and delete observation passed inside one guarded run sandbox. |
+| restartPersistence | PASSED | Prepare, confirmed process exit/relaunch, and verify completed; raw hash and version persisted. |
+| cleanup | UNVERIFIED / manual | Test sandboxes and the restart locator remain as evidence; no safe cleanup primitive has been proven. |
+| formalWriteGate | **BLOCKED** | `gate:write-capability` exited 1 with `BLOCKED safeDelete formalWriteGate`; the gate was not weakened. |
+
+These results belong to profile key `25f91c858f1cf7fead011d48e557794d136e0241c7c5a2885710761d1d35d881`, with OpenAPI SHA-256 `73e3f12252068c493a1748b3bd25abf5c07079d8b7c5c03cf7a1998c5d7e1664`. Current personal desktop archive, ingestion, and trash operations use the filesystem/native composition and do not depend on this legacy REST gate.
 
 Unsupported behavior is a valid probe result. The probe persists `failed` evidence and may finish successfully while the formal write gate remains blocked. Assertions must not be weakened to force a passing profile.
 

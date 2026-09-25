@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as databaseModule from '../../src/server/db/database.js';
 import * as archiveModule from '../../src/server/archive/sandbox-native.js';
 import * as ingestionModule from '../../src/server/ingestion/ingestion-service.js';
+import * as clientAssetsModule from '../../src/server/client-assets.js';
 import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js';
 import { startServer, type StartedServer } from '../../src/server/start-server.js';
 import { FakeVaultGateway } from '../../src/server/vault/FakeVaultGateway.js';
@@ -133,6 +134,9 @@ describe('embedded runtime with its real allocated listener', () => {
     finishClosing(); await closing;
     expect(f.order.lastIndexOf('ingestion-finished')).toBeLessThan(f.order.indexOf('ingestion-port'));
     expect(f.order.indexOf('ingestion-port')).toBeLessThan(f.order.indexOf('archive-port'));
+    expect(f.service.close).toHaveBeenCalledOnce();
+    expect(f.ingestionPort.close).toHaveBeenCalledOnce();
+    expect(f.archive.close).toHaveBeenCalledOnce();
     const kernel = f.kernel.mock.results[0]!.value as databaseModule.StateKernel;
     expect(kernel.mode === 'normal' && kernel.db.open).toBe(false);
   });
@@ -150,6 +154,22 @@ describe('embedded runtime with its real allocated listener', () => {
     expect(response.status).toBe(409);
     expect((await response.json()).error.message).toBe('收件箱回收状态暂时无法核验，请重新打开 App 后再归档。');
     expect(f.archive.move).not.toHaveBeenCalled();
+  });
+
+  it('preserves startup failure while draining native and database resources after service cleanup fails', async () => {
+    const f = await ingestionFixture();
+    const failure = new Error('ASSET_REGISTRATION_FAILED');
+    const cleanupFailure = new Error('INGESTION_CLOSE_FAILED');
+    vi.spyOn(clientAssetsModule, 'registerClientAssets').mockRejectedValue(failure);
+    f.service.close.mockRejectedValue(cleanupFailure);
+
+    await expect(startServer(f.config)).rejects.toMatchObject({ cause: failure });
+
+    expect(f.service.close).toHaveBeenCalledOnce();
+    expect(f.ingestionPort.close).toHaveBeenCalledOnce();
+    expect(f.archive.close).toHaveBeenCalledOnce();
+    const kernel = f.kernel.mock.results[0]!.value as databaseModule.StateKernel;
+    expect(kernel.mode === 'normal' && kernel.db.open).toBe(false);
   });
 
   it.each(['open', 'recover'])('keeps reading and intake available when ingestion %s fails', async (failure) => {

@@ -17,7 +17,7 @@ async function resize(instance: ElectronApplication, page: Page, width: number) 
   }, width);
   await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth
-    && [...document.querySelectorAll<HTMLElement>('.material-trash-dialog,.material-trash-view')].every((element) => element.scrollWidth <= element.clientWidth + 1))).toBe(true);
+    && [...document.querySelectorAll<HTMLElement>('.material-trash-dialog,.recycle-workspace')].every((element) => element.scrollWidth <= element.clientWidth + 1))).toBe(true);
 }
 
 for (const mode of ['development', 'packaged'] as const) {
@@ -48,7 +48,7 @@ for (const mode of ['development', 'packaged'] as const) {
     }
     try {
       await writeFile(join(vault, '.xiaozhao-read-test-vault.json'), marker, { mode: 0o600, flag: 'wx' });
-      for (const directory of ['00大脑规则', sourceFolder, `${sourceFolder}/附件`, '02知识库/09学习', '03大讲堂']) await mkdir(join(vault, directory), { recursive: true });
+      for (const directory of ['00大脑规则', '01图书馆/小兆clipper', sourceFolder, `${sourceFolder}/附件`, '02知识库/09学习', '03大讲堂']) await mkdir(join(vault, directory), { recursive: true });
       for (const path of RULE_BUNDLE_SOURCE_PATHS) await writeFile(join(vault, path), '# 隔离测试规则\n只有明确确认才彻底删除单条回收文件；附件、知识和历史保持不变。\n');
       const source = Buffer.from('\uFEFF' + (await readFile(resolve('tests/fixtures/library-valid.md'), 'utf8'))
         .replace('一份可提炼的资料', title).replace('处理状态: 未归档', '处理状态: 已归档').replace('来源平台: B站', '来源平台: 个人')
@@ -59,15 +59,20 @@ for (const mode of ['development', 'packaged'] as const) {
       const sourceIdentity = await stat(join(vault, sourcePath), { bigint: true });
       const first = await launch(); const firstPage = first.page;
       await expect(firstPage.getByTestId('metric-pending')).toContainText('1');
-      await firstPage.getByRole('link', { name: '原始资料', exact: true }).click();
+      await firstPage.getByRole('link', { name: '档案库', exact: true }).click();
+      await firstPage.getByRole('button', { name: '打开档案柜', exact: true }).click();
+      await expect(firstPage.getByRole('region', { name: '档案柜', exact: true })).toHaveAttribute('data-state', 'open');
       await firstPage.getByLabel('入库状态', { exact: true }).selectOption('未提炼');
       await firstPage.getByLabel('资料标题', { exact: true }).fill(title);
+      await firstPage.getByRole('button', { name: '搜索档案', exact: true }).click();
+      await expect(firstPage.getByRole('region', { name: '档案柜', exact: true })).toHaveAttribute('data-state', 'open');
       await firstPage.getByRole('button', { name: `移入回收站：${title}`, exact: true }).click();
       const moveResponse = firstPage.waitForResponse((response) => new URL(response.url()).pathname === '/api/v1/trash/commit');
       await firstPage.getByRole('button', { name: '确认移入回收站', exact: true }).click();
       const movedResponse = await moveResponse; expect(movedResponse.ok()).toBe(true);
       const moved = trashEntrySchema.parse((await movedResponse.json()).data); expect(moved.status).toBe('trashed');
       await firstPage.getByRole('link', { name: '查看回收站', exact: true }).click();
+      await firstPage.getByRole('button', { name: `选择：${title}`, exact: true }).click();
       const caches = await readdir(join(userData, 'vaults')); expect(caches).toHaveLength(1);
       const slot = join(userData, 'vaults', caches[0]!, 'personal-trash-v1', `${moved.id}.md`);
       expect(await readFile(slot)).toEqual(source); expect((await stat(slot, { bigint: true })).ino).toBe(sourceIdentity.ino);
@@ -104,11 +109,13 @@ for (const mode of ['development', 'packaged'] as const) {
       await first.instance.close(); instance = undefined;
 
       const second = await launch(); const secondPage = second.page;
-      await secondPage.getByRole('link', { name: '原始资料', exact: true }).click(); await secondPage.getByRole('link', { name: '回收站', exact: true }).click();
+      await secondPage.getByRole('link', { name: '回收站', exact: true }).click();
       await expect(secondPage.getByText('回收站为空', { exact: true })).toBeVisible();
-      const summary = secondPage.getByText('已删除记录 · 1', { exact: true }); await expect(summary).toBeVisible();
-      await expect(secondPage.locator('.material-trash-deleted')).not.toHaveAttribute('open'); await summary.click();
-      await expect(secondPage.locator('.material-trash-deleted')).toContainText(title); await expect(secondPage.locator('.material-trash-deleted')).toContainText('已彻底删除');
+      const summary = secondPage.getByText('操作记录 · 1', { exact: true }); await expect(summary).toBeVisible();
+      const history = secondPage.locator('details').filter({ has: summary });
+      await expect(history).not.toHaveAttribute('open'); await summary.click();
+      await expect(history.getByRole('listitem')).toContainText(title); await expect(history.getByRole('listitem')).toContainText('已彻底删除');
+      await expect(history.getByRole('listitem')).toContainText(sourcePath);
       await expect(secondPage.getByRole('button', { name: `恢复：${title}`, exact: true })).toHaveCount(0);
       await expect(secondPage.getByRole('button', { name: `彻底删除：${title}`, exact: true })).toHaveCount(0);
       const persisted = await secondPage.evaluate(async (id) => (await (await fetch(`/api/v1/trash/${id}`)).json()).data, moved.id);

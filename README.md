@@ -46,6 +46,8 @@ flowchart LR
 
 每一步都保留预览、确认和恢复入口：AI 不会自动发送，知识也不会自动写入。
 
+本轮架构改造及验证边界见 [2026-09-25 架构与基建验收](docs/reviews/2026-09-25-architecture-foundation-acceptance.md)。
+
 ## 开发验证
 
 Node.js 需要 `22.12+`。日常提交前运行：
@@ -60,7 +62,23 @@ npm run verify:fast
 npm run test:e2e:fixtures
 ```
 
-fixture runner 会按配置串行启动各自的 Vite 端口，避免直接运行默认 `test:e2e` 时因为缺少专用 fixture 服务而产生误报。发布前再运行 `npm run verify:release`，它会额外执行客户端组件测试和桌面运行时构建。CI 的同一组快速检查见 `.github/workflows/ci.yml`。
+fixture runner 会按配置串行启动各自的 Vite 端口，避免直接运行默认 `test:e2e` 时因为缺少专用 fixture 服务而产生误报。发布前运行 `npm run verify:release`；CI 的快速和完整门禁见 `.github/workflows/ci.yml`。
+
+完整本地门禁运行：
+
+```sh
+npm run verify:full
+```
+
+它会加入组件、安全、原生、归档、公司 MCP 和桌面运行时构建检查，需要 macOS arm64 与 Xcode 命令行工具。`npm run verify:release` 还会执行 E2E fixture、重新打包当前源码、Electron 开发版/打包版验收，以及公司 MCP/运维工具构建；真实 Obsidian 合同探针需要单独配置外部环境后运行 `npm run test:contract:all`。只读扫描正式大脑的元数据时，使用：
+
+```sh
+VAULT_ROOT=/absolute/path/to/vault npm run vault:lint
+```
+
+该命令只读取 `01图书馆` 和 `02知识库`，把严格通过、历史兼容和硬错误分开统计，不会改写笔记。存在硬错误时退出码为 `2`。
+
+生产构建会执行客户端入口预算检查。当前首屏入口预算为 900 KiB，个人和公司页面在生产环境按路由懒加载；组件测试通过专用 eager route map 保持同步测试语义。
 
 ## 界面预览
 

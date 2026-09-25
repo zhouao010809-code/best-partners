@@ -6,7 +6,7 @@ process.env.QUEUE_DRAWER_ORIGIN = fixtureOrigin;
 process.env.QUEUE_VISIBILITY_ORIGIN = fixtureOrigin;
 
 export default defineConfig({
-  testDir: '.', testMatch: ['queue-drawer.spec.ts', 'queue-visibility.spec.ts', 'candidate-review.spec.ts'], fullyParallel: false,
+  testDir: '.', testMatch: ['queue-drawer.spec.ts', 'queue-visibility.spec.ts', 'candidate-review.spec.ts'], fullyParallel: false, workers: 1,
   timeout: 30_000, expect: { timeout: 8_000 },
   outputDir: '../../test-results/queue-drawer-fixture',
   use: { browserName: 'chromium', channel: 'chrome', colorScheme: 'dark', trace: 'retain-on-failure' },

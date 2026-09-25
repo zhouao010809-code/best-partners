@@ -31,6 +31,50 @@ function draftService(initial: AssistantDraft[] = []) {
 }
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+it('waits for the current draft service before exposing restored state', async () => {
+  const first = draftService();
+  const next = draftService();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const nextList = next.service.list.getMockImplementation()!;
+  next.service.list.mockImplementationOnce(async () => { await gate; return nextList(); });
+  const view = renderHook(({ service }) => useAssistantDrafts(service), { initialProps: { service: first.service } });
+  await waitFor(() => expect(view.result.current.ready).toBe(true));
+  view.rerender({ service: next.service });
+  expect(view.result.current.ready).toBe(false);
+  await act(async () => { release(); });
+  await waitFor(() => expect(view.result.current.ready).toBe(true));
+});
+
+it.each(['absent', 'restoring', 'restored'] as const)('restores the active conversation after bootstrap replaces a %s API client', async phase => {
+  const conversationId = uuid();
+  const saved: AssistantDraft = { id: uuid(), revision: 2, conversationId, text: '保留的追问', attachments: [], groupId: uuid(), scope: 'brain', updatedAt: '2026-09-10', lastActive: '2026-09-10' };
+  const conversation: AssistantConversation = { id: conversationId, title: '已归档讨论', createdAt: '2026-09-10', updatedAt: '2026-09-10', status: 'idle', providerId: 'test', model: 'model', scope: 'brain', messages: [{ id: 'a', role: 'assistant', text: '归档后保留的回答', sources: [], actions: [] }] };
+  let releaseFirst!: () => void;
+  const firstResponse = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const makeApi = () => ({
+    assistantDrafts: draftService([saved]).service,
+    assistant: {
+      providers: vi.fn(async () => ok({ providers: [{ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'model', name: 'Model', reasoningEfforts: [] }] }] })),
+      history: vi.fn(async () => ok({ conversations: [conversation] })),
+      get: vi.fn(async () => ok(conversation)), send: vi.fn()
+    }
+  });
+  const first = makeApi(); const next = makeApi();
+  if (phase === 'restoring') first.assistant.get.mockImplementationOnce(async () => { await firstResponse; return ok(conversation); });
+  const panel = (api: ReadConsoleApi) => <MemoryRouter><AssistantPanel api={api} open onClose={() => {}} width={430} onWidthChange={() => {}} onRunningChange={() => {}} /></MemoryRouter>;
+  const view = render(panel((phase === 'absent' ? {} : first) as unknown as ReadConsoleApi));
+  if (phase === 'restoring') await waitFor(() => expect(first.assistant.get).toHaveBeenCalledTimes(1));
+  if (phase === 'restored') await screen.findByText('归档后保留的回答');
+  view.rerender(panel(next as unknown as ReadConsoleApi));
+  await act(async () => { releaseFirst(); });
+  expect(await screen.findByText('归档后保留的回答')).toBeVisible();
+  expect(screen.getByLabelText('发送给问问的消息')).toHaveValue(saved.text);
+  expect(next.assistant.get).toHaveBeenCalledWith(conversationId);
+  expect(first.assistant.send).not.toHaveBeenCalled(); expect(next.assistant.send).not.toHaveBeenCalled();
+  expect(next.assistantDrafts.save).not.toHaveBeenCalled();
+});
+
 it('serializes saving so a late response cannot overwrite newer typing, then restores the final text on remount', async () => {
   const f = draftService(); const realSave = f.service.save.getMockImplementation()!;
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });

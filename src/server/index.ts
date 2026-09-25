@@ -17,6 +17,7 @@ import { ensurePrivateDirectory } from './db/permissions.js';
 import { acquireCompanyServerLock } from './company/company-operations.js';
 import { installCompanySignalHandlers } from './company/graceful-shutdown.js';
 import { resolveCompanyMetricsPollInterval } from './company/company-metrics-service.js';
+import { createRuntimeDisposer, disposeAfterStartupFailure } from './runtime/runtime-disposer.js';
 
 if (process.env.RUNTIME_MODE === 'company') {
   const listenOptions = resolveCompanyListenOptions(process.env);
@@ -43,17 +44,10 @@ if (process.env.RUNTIME_MODE === 'company') {
     serverLock.release();
     throw new Error('COMPANY_DATABASE_UNAVAILABLE');
   }
-  let closed = false;
-  let stopCompanyMetrics: (() => Promise<void>) | undefined;
-  const closeCompanyResources = async () => {
-    if (closed) return;
-    closed = true;
-    try {
-      await stopCompanyMetrics?.();
-    } finally {
-      try { kernel.close(); } finally { serverLock.release(); }
-    }
-  };
+  const disposer = createRuntimeDisposer();
+  disposer.add(() => serverLock.release());
+  disposer.add(() => kernel.close());
+  let app: ReturnType<typeof buildServer> | undefined;
   try {
     const metricsPollIntervalMs = resolveCompanyMetricsPollInterval(process.env.COMPANY_METRICS_POLL_MS);
     const companyRuntime = createCompanyRuntime({
@@ -61,22 +55,27 @@ if (process.env.RUNTIME_MODE === 'company') {
       database: kernel.db,
       ...(metricsPollIntervalMs === undefined ? {} : { metricsPollIntervalMs })
     });
-    stopCompanyMetrics = companyRuntime.metrics.start().stop;
-    const app = buildServer({
+    const stopCompanyMetrics = companyRuntime.metrics.start().stop;
+    disposer.add(() => stopCompanyMetrics());
+    app = buildServer({
       runtimeMode: 'company',
       companyRuntime,
       companyBootstrapToken,
       httpPolicy: createCompanyHttpPolicy(listenOptions),
-      onClose: closeCompanyResources
+      onClose: () => disposer.dispose()
     });
     // The company runtime is a browser-accessible LAN application as well as
     // an API. Keep its static client registration at the composition boundary
     // so the company server still never loads the personal vault client setup.
     await registerClientAssets(app, process.env.COMPANY_CLIENT_ROOT ?? resolve('dist/client'));
     await app.listen({ host: listenOptions.host, port: listenOptions.port });
-    installCompanySignalHandlers(() => app.close());
+    const signalController = installCompanySignalHandlers(() => app!.close());
+    disposer.add(() => signalController.dispose());
   } catch (error) {
-    await closeCompanyResources();
+    const rollback = createRuntimeDisposer();
+    rollback.add(() => disposer.dispose());
+    rollback.add(() => app?.close());
+    await disposeAfterStartupFailure(rollback, error);
     throw error;
   }
 } else {

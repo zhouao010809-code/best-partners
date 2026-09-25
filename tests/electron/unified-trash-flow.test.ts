@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js';
 
-const mode = process.env.UNIFIED_TRASH_PACKAGED === '1' ? 'packaged' : 'development';
+const modes = process.env.UNIFIED_TRASH_PACKAGED === '1' ? ['packaged'] as const : ['development', 'packaged'] as const;
 type Origin = 'intake' | 'library' | 'queue' | 'knowledge';
 type Entry = { id: string; title: string; status: string; origin?: Origin };
-const labels: Record<Origin, string> = { intake: '收件箱', library: '原始资料', queue: '提炼队列', knowledge: '知识库' };
+const labels: Record<Origin, string> = { intake: '收件箱', library: '档案库', queue: '提炼队列', knowledge: '知识库' };
 
-test(`${mode}: one bin preserves four origins and supports restart, byte-exact restore and permanent deletion`, async ({}, info) => {
+for (const mode of modes) test(`${mode}: one bin preserves four origins and supports restart, byte-exact restore and permanent deletion`, async ({}, info) => {
   test.setTimeout(240_000);
   const temporary = await realpath(tmpdir());
   const vault = await mkdtemp(join(temporary, 'xiaozhao-vault-'));

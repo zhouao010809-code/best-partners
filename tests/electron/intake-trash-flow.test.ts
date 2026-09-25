@@ -14,7 +14,7 @@ const archiveFolder = `20260907｜个人｜${archiveTitle}`;
 const archiveTarget = `01图书馆/来自个人/2026-09/${archiveFolder}`;
 const intakePath = '01图书馆/小兆clipper';
 const trashApi = '/api/v1/intake-trash';
-const mode = process.env.INTAKE_TRASH_PACKAGED === '1' ? 'packaged' : 'development';
+const modes = process.env.INTAKE_TRASH_PACKAGED === '1' ? ['packaged'] as const : ['development', 'packaged'] as const;
 
 function responseAt(path: string) {
   return (response: Response) => new URL(response.url()).pathname === path;
@@ -33,7 +33,7 @@ async function resize(instance: ElectronApplication, page: Page, width: number) 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 }
 
-test(`${mode}: intake packet recycle survives restart, restores every byte, and remains archivable after another cycle`, async ({}, info) => {
+for (const mode of modes) test(`${mode}: intake packet recycle survives restart, restores every byte, and remains archivable after another cycle`, async ({}, info) => {
   test.setTimeout(180_000);
   const temporary = await realpath(tmpdir());
   const vault = await mkdtemp(join(temporary, 'xiaozhao-vault-'));
@@ -73,9 +73,13 @@ test(`${mode}: intake packet recycle survives restart, restores every byte, and 
     });
     // This fixture exercises only local filesystem work and cannot call a model.
     await instance.evaluate(() => { globalThis.fetch = async () => { throw new Error('ISOLATED_INTAKE_TRASH_NO_MODEL_NETWORK'); }; });
+    await openIntake(page);
+    return page;
+  }
+  async function openIntake(page: Page) {
     await page.getByRole('link', { name: '收件箱', exact: true }).click();
     await expect(page.getByRole('button', { name: '刷新收件箱', exact: true })).toBeEnabled();
-    return page;
+    await page.getByRole('button', { name: '打开收件箱', exact: true }).click();
   }
   async function closeApp() { const current = instance; instance = undefined; await current?.close(); }
   async function verifyOriginal() {
@@ -109,10 +113,18 @@ test(`${mode}: intake packet recycle survives restart, restores every byte, and 
   }
   async function openTrash(page: Page) {
     const response = page.waitForResponse(responseAt(trashApi));
-    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await page.getByRole('link', { name: '回收站', exact: true }).click();
     const list = intakeTrashListSchema.parse(await dataOf(await response));
-    await expect(page.getByRole('region', { name: '收件箱回收站', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: '统一回收站', exact: true })).toBeVisible();
     return list;
+  }
+  async function selectTrashedPacket(page: Page) {
+    await page.getByRole('button', { name: `选择：${packetName}`, exact: true }).click();
+    const detail = page.getByRole('complementary', { name: '所选资料详情', exact: true });
+    await expect(detail).toContainText(`整个资料包与自带附件 · ${members.length} 个文件`);
+    const restore = detail.getByRole('button', { name: `恢复：${packetName}`, exact: true });
+    await expect(restore).toBeEnabled();
+    return restore;
   }
   async function closeReceipt(page: Page) {
     await page.getByRole('button', { name: '关闭回收操作', exact: true }).click();
@@ -161,7 +173,7 @@ test(`${mode}: intake packet recycle survives restart, restores every byte, and 
     await expect(page.getByText('收件箱是空的', { exact: true })).toBeVisible();
     const firstList = await openTrash(page);
     expect(firstList.items).toHaveLength(1); expect(firstList.items[0]).toMatchObject({ id: first.id, status: 'trashed' });
-    await expect(page.getByRole('button', { name: `恢复到收件箱：${packetName}`, exact: true })).toBeVisible();
+    await selectTrashedPacket(page);
     await page.screenshot({ path: info.outputPath('intake-trash-before-restart.png'), fullPage: true });
     await closeApp();
 
@@ -170,8 +182,9 @@ test(`${mode}: intake packet recycle survives restart, restores every byte, and 
     await expect(stat(source)).rejects.toMatchObject({ code: 'ENOENT' });
     const restarted = await openTrash(page);
     expect(restarted.items).toHaveLength(1); expect(restarted.items[0]).toMatchObject({ id: first.id, status: 'trashed' });
+    const restore = await selectTrashedPacket(page);
     const restoreResponse = page.waitForResponse(responseAt(`${trashApi}/${first.id}/restore`));
-    await page.getByRole('button', { name: `恢复到收件箱：${packetName}`, exact: true }).click();
+    await restore.click();
     expect(intakeTrashEntrySchema.parse(await dataOf(await restoreResponse))).toMatchObject({ id: first.id, name: packetName, status: 'restored' });
     await expect(page.getByRole('heading', { name: '已恢复到收件箱', exact: true })).toBeVisible();
     await verifyOriginal();
@@ -179,7 +192,7 @@ test(`${mode}: intake packet recycle survives restart, restores every byte, and 
     expect([restoredIdentity.dev, restoredIdentity.ino]).toEqual([identity.dev, identity.ino]);
     await closeReceipt(page);
     await expect(page.getByText('回收站为空', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '返回收件箱', exact: true }).click();
+    await openIntake(page);
     await expect(page.getByRole('button', { name: `整理 ${packetName}`, exact: true })).toBeVisible();
 
     const second = await commitMove(page);

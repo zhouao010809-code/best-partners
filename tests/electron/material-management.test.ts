@@ -22,10 +22,20 @@ async function forbidModel(instance: ElectronApplication) {
   await instance.evaluate(() => { globalThis.fetch = async () => { throw new Error('ISOLATED_MATERIAL_MANAGEMENT_NO_NETWORK'); }; });
 }
 
-async function openUnextracted(window: Page) {
-  await window.getByRole('link', { name: '原始资料', exact: true }).click();
+async function openUnextracted(window: Page, expectedCount = 1) {
+  await window.getByRole('link', { name: '档案库', exact: true }).click();
+  const cabinet = window.getByRole('region', { name: '档案柜', exact: true });
+  await expect(cabinet).toBeVisible();
+  // Returning from the recycle bin restores this catalog's remembered state.
+  if (await cabinet.getAttribute('data-state') === 'closed') {
+    await window.getByRole('button', { name: '打开档案柜', exact: true }).click();
+  }
+  await expect(cabinet).toHaveAttribute('data-state', 'open');
   await window.getByLabel('入库状态', { exact: true }).selectOption('未提炼');
   await window.getByLabel('资料标题', { exact: true }).fill(title);
+  await window.getByRole('button', { name: '搜索档案', exact: true }).click();
+  await expect(window.getByRole('region', { name: '档案柜', exact: true })).toHaveAttribute('data-state', 'open');
+  await expect(window.getByText(`共 ${expectedCount} 份资料`, { exact: true })).toBeVisible();
 }
 
 for (const mode of ['development', 'packaged'] as const) {
@@ -46,7 +56,7 @@ for (const mode of ['development', 'packaged'] as const) {
     }
     try {
       await writeFile(join(vault, '.xiaozhao-read-test-vault.json'), '{"purpose":"read-test"}\n', { mode: 0o600 });
-      for (const directory of ['00大脑规则', sourceFolder, `${sourceFolder}/附件`, '02知识库/09学习', '03大讲堂']) await mkdir(join(vault, directory), { recursive: true });
+      for (const directory of ['00大脑规则', '01图书馆/小兆clipper', sourceFolder, `${sourceFolder}/附件`, '02知识库/09学习', '03大讲堂']) await mkdir(join(vault, directory), { recursive: true });
       for (const path of RULE_BUNDLE_SOURCE_PATHS) await writeFile(join(vault, path), '# 隔离测试规则\n只手动回收选中的 Markdown，恢复不覆盖现有文件；附件和知识保留。\n');
       const source = Buffer.from('\uFEFF' + (await readFile(resolve('tests/fixtures/library-valid.md'), 'utf8'))
         .replace('一份可提炼的资料', title).replace('处理状态: 未归档', '处理状态: 已归档').replace('来源平台: B站', '来源平台: 个人')
@@ -81,9 +91,10 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(stat(join(vault, sourcePath))).rejects.toMatchObject({ code: 'ENOENT' });
       expect(await readFile(join(vault, knowledgePath))).toEqual(knowledge); expect(await readFile(join(vault, sourceFolder, '附件/证据.bin'))).toEqual(attachment);
       await window.getByRole('link', { name: '查看回收站', exact: true }).click();
+      await window.getByRole('button', { name: `选择：${title}`, exact: true }).click();
       await expect(window.getByRole('button', { name: `恢复：${title}`, exact: true })).toBeVisible();
       await window.screenshot({ path: info.outputPath('trash-list-390.png') });
-      await openUnextracted(window); await expect(window.getByRole('button', { name: `查看 ${title} 原文`, exact: true })).toHaveCount(0);
+      await openUnextracted(window, 0); await expect(window.getByRole('button', { name: `查看 ${title} 原文`, exact: true })).toHaveCount(0);
       await window.getByRole('link', { name: '提炼队列', exact: true }).click();
       await window.getByRole('button', { name: '展开待提炼抽屉', exact: true }).click();
       await expect(window.getByRole('button', { name: `打开 ${title}`, exact: true })).toHaveCount(0);
@@ -92,7 +103,8 @@ for (const mode of ['development', 'packaged'] as const) {
       await instance.close(); instance = undefined;
 
       instance = await electron.launch({ ...launchOptions, env }); window = await instance.firstWindow(); watch(window); await forbidModel(instance);
-      await window.getByRole('link', { name: '原始资料', exact: true }).click(); await window.getByRole('link', { name: '回收站', exact: true }).click();
+      await window.getByRole('link', { name: '回收站', exact: true }).click();
+      await window.getByRole('button', { name: `选择：${title}`, exact: true }).click();
       await expect(window.getByRole('button', { name: `恢复：${title}`, exact: true })).toBeVisible();
       const restoreResponse = window.waitForResponse((response) => new URL(response.url()).pathname === `/api/v1/trash/${moved.id}/restore`);
       await window.getByRole('button', { name: `恢复：${title}`, exact: true }).click();
@@ -104,7 +116,11 @@ for (const mode of ['development', 'packaged'] as const) {
       expect(await readFile(join(vault, knowledgePath))).toEqual(knowledge); expect(await readFile(join(vault, sourceFolder, '附件/证据.bin'))).toEqual(attachment);
       await window.getByRole('button', { name: '关闭回收操作', exact: true }).click();
       await expect(window.getByText('回收站为空', { exact: true })).toBeVisible();
-      await expect(window.getByRole('heading', { name: '已恢复记录 · 1', exact: true })).toBeVisible();
+      const history = window.locator('details').filter({ has: window.getByText('操作记录 · 1', { exact: true }) });
+      await history.getByText('操作记录 · 1', { exact: true }).click();
+      await expect(history.getByRole('listitem')).toContainText(title);
+      await expect(history.getByRole('listitem')).toContainText(sourcePath);
+      await expect(history.getByRole('listitem')).toContainText('已恢复');
       for (const width of [1440, 390]) { await resize(instance, window, width); await window.screenshot({ path: info.outputPath(`trash-restored-${width}.png`) }); }
       await resize(instance, window, 1440);
 

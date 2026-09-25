@@ -230,6 +230,40 @@ for (const mode of ['development', 'packaged'] as const) {
       expect(await instance.evaluate(() => (globalThis as unknown as { ingestionModelCalls: number }).ingestionModelCalls)).toBe(0);
       expect(pageErrors).toEqual([]);
       await expectNoOverflow(window);
+
+      // Completed ingestion must survive a new process without regenerating knowledge.
+      await instance.close(); instance = undefined;
+      instance = await electron.launch({ ...launchOptions, env }); window = await instance.firstWindow();
+      recordWindow(window); await installProviderFixture(instance, false);
+      await expect(window.getByTestId('metric-pending')).toContainText('0');
+      await expect(window.getByTestId('metric-knowledge')).toContainText('1');
+      await window.getByRole('link', { name: '知识库', exact: true }).click();
+      await window.getByLabel('搜索知识', { exact: true }).fill('学习目标');
+      await window.getByRole('button', { name: '搜索', exact: true }).click();
+      const persistedKnowledge = window.getByRole('button', { name: `展开 ${editedTitle} 知识纸页`, exact: true });
+      await expect(persistedKnowledge).toBeVisible();
+      await persistedKnowledge.click();
+      await expect(window.getByRole('region', { name: `${editedTitle} 阅读`, exact: true })).toBeVisible();
+      await expect(window.getByRole('region', { name: '知识正文', exact: true })).toContainText('先写下学习目标');
+      expect(new URL(window.url()).searchParams.get('path')).toBe(knowledgePath);
+
+      const persistedBatches = await window.evaluate(async (ids) => Promise.all(ids.map(async (id) => {
+        const response = await fetch(`/api/v1/ingestion/batches/${id}`);
+        return { status: response.status, body: await response.json() };
+      })), [firstBatch.id, finalBatch.id]);
+      for (const [index, expectedBatch] of [firstBatch, finalBatch].entries()) {
+        const persisted = persistedBatches[index]!;
+        expect(persisted.status).toBe(200);
+        expect(ingestionBatchSchema.parse(persisted.body.data)).toEqual(expectedBatch);
+      }
+      expect(await readFile(join(vault, knowledgePath))).toEqual(knowledgeBytes);
+      expect(await readFile(join(vault, sourcePath))).toEqual(finalSourceBytes);
+      expect(await readFile(join(vault, sourceFolder, '附件/证据.bin'))).toEqual(attachment);
+      expect(await readdir(join(vault, knowledgeDirectory))).toEqual([`${editedTitle}.md`]);
+      expect(await instance.evaluate(() => (globalThis as unknown as { ingestionModelCalls: number }).ingestionModelCalls)).toBe(0);
+      expect(pageErrors).toEqual([]);
+      await expectNoOverflow(window);
+      await window.screenshot({ path: info.outputPath('ingestion-persisted-after-final-restart.png') });
     } catch (error) {
       if (currentWindow && !currentWindow.isClosed()) {
         await info.attach('ingestion-ui-failure', { body: await currentWindow.locator('body').innerText(), contentType: 'text/plain' });

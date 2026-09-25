@@ -38,6 +38,8 @@ for (const mode of ['development', 'packaged'] as const) {
       for (const path of [finished, pending, unknown]) {
         const title = path.split('/').at(-1)!.slice(0, -3);
         const source = template.replace('一份可提炼的资料', title)
+          // Keep each body identifiable after the reader hides YAML metadata.
+          .replace('第一段原始正文。', `${title}：第一段原始正文。`)
           .replace('处理状态: 未归档', '处理状态: 已归档')
           .replace('来源平台: B站', `来源平台: ${path === unknown ? '公众号' : '个人'}`)
           .replace('知识入库状态: 未提炼', `知识入库状态: ${path === finished ? '已入库' : '未提炼'}`)
@@ -57,7 +59,8 @@ for (const mode of ['development', 'packaged'] as const) {
       page.on('response', response => { if (response.status() >= 400 && /\/api\/v1\/library/u.test(response.url())) apiErrors.push(`${response.status()} ${new URL(response.url()).pathname}`); });
       await instance.evaluate(() => { globalThis.fetch = async () => { throw new Error('LIBRARY_TEST_FORBIDS_EXTERNAL_NETWORK'); }; });
       await expect(page.getByTestId('metric-knowledge')).toContainText('1');
-      await page.getByRole('link', { name: '原始资料', exact: true }).click();
+      await page.getByRole('link', { name: '档案库', exact: true }).click();
+      await page.getByRole('button', { name: '打开档案柜', exact: true }).click();
       await expect(page.getByRole('button', { name: '打开 AI', exact: true })).toBeVisible();
       await expect(page.getByRole('button', { name: '打开 待分类', exact: true })).toBeVisible();
       await resize(instance, page, 1440);
@@ -84,7 +87,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(page.getByRole('button', { name: '查看 未提炼的工具笔记 原文', exact: true })).toBeVisible();
       for (const width of [1024, 720, 390]) {
         await resize(instance, page, width);
-        await expect(page.getByRole('link', { name: '原始资料', exact: true })).toBeVisible();
+        await expect(page.getByRole('link', { name: '档案库', exact: true })).toBeVisible();
         await page.screenshot({ path: info.outputPath(`library-files-${width}.png`) });
         if (width === 1024) {
           await page.getByRole('button', { name: '查看 未提炼的工具笔记 原文', exact: true }).click();
@@ -97,7 +100,7 @@ for (const mode of ['development', 'packaged'] as const) {
           await page.getByRole('button', { name: '关闭原文', exact: true }).click();
         }
       }
-      await page.getByRole('link', { name: '原始资料', exact: true }).click();
+      await page.getByRole('link', { name: '档案库', exact: true }).click();
       await page.getByLabel('资料标题', { exact: true }).fill('还没有主题');
       await expect(page.getByRole('button', { name: '查看 还没有主题 原文', exact: true })).toBeVisible();
       const origin = new URL(page.url()).origin;
