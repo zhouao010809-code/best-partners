@@ -14,6 +14,7 @@ import { useAssistantDrafts } from './useAssistantDrafts.js';
 import { AssistantMessageView } from './AssistantMessageView.js';
 import { SkillRecommendationCard } from './SkillRecommendationCard.js';
 import { ASSISTANT_INTENT_EVENT, ASSISTANT_REVIEW_EVENT, PROJECT_WORKSPACE_UPDATED_EVENT, type AssistantIntent } from './assistantIntent.js';
+import { MODEL_SETTINGS_UPDATED_EVENT } from '../../modelSettingsEvents.js';
 import '../../styles/assistant.css';
 import '../../styles/ai-glow.css';
 
@@ -152,6 +153,21 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const projectBlocked = Boolean(projectId && (projectLoading || projectStale || project === undefined || project.availability !== 'ready' || projectRevisionStale || projectDraftUnbound));
   const provider = providers.find(item => item.id === providerId);
   const model = provider?.models.find(item => item.id === modelId);
+  const providerNeedsRecovery = useRef(true);
+  providerNeedsRecovery.current = Boolean(providerError || provider?.status !== 'ready');
+  const providerStatus = providerLoading ? '读取中' : providerError ? '读取失败' : provider?.status === 'ready' ? '已连接' : provider?.problem ? '连接异常' : '待连接';
+  const sendDisabledReason = pending ? '正在发送…'
+    : !draftStore.ready ? '正在恢复草稿，请稍候。'
+      : restoringConversation || missingConversation ? '请先恢复草稿所属的对话。'
+        : providerLoading ? '正在检查 AI 连接，请稍候。'
+          : providerError ? 'AI 服务状态读取失败，请重新读取。'
+            : provider?.status !== 'ready' ? 'AI 连接尚未就绪，请重新检查连接或配置 DeepSeek。'
+              : !model ? '当前模型不可用，请在模型设置中选择可用模型。'
+                : projectBlocked ? projectError || (projectLoading ? '正在读取项目资料，请稍候。' : '项目资料尚未就绪，请重新读取项目。')
+                  : !attachmentsReady ? '附件尚未准备好，请等待解析完成或移除异常附件。'
+                    : skillRecommendation && skillRecommendation.status !== 'invalidated' ? '请先处理当前的 Skill 推荐。'
+                      : !draft.trim() ? '请输入问题。' : undefined;
+  const showSendDisabledReason = Boolean(sendDisabledReason && draft.trim() && !isRunning);
 
   const loadProjectSummary = useCallback(async (): Promise<ProjectSummary | undefined> => {
     projectRequest.current?.abort();
@@ -308,7 +324,27 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   }, [draftStore.ready, service]);
 
   useEffect(() => { const timer = setTimeout(() => setHistoryTerm(historyQuery.trim()), 250); return () => clearTimeout(timer); }, [historyQuery]);
-  useEffect(() => { if (open) void loadProviders(); }, [open, loadProviders]);
+  useEffect(() => {
+    if (!open) return;
+    void loadProviders();
+    // A transient keychain failure must not stay cached for the lifetime of an
+    // open panel. Retry failed connections on return; ready connections should
+    // not become blocked waiting for a background model catalog request.
+    const refreshOnReturn = () => {
+      if (!providerNeedsRecovery.current || document.visibilityState === 'hidden' || pendingRef.current || conversationRef.current?.status === 'running') return;
+      void loadProviders();
+    };
+    const refreshSettings = () => { void loadProviders(); };
+    window.addEventListener('focus', refreshOnReturn);
+    document.addEventListener('visibilitychange', refreshOnReturn);
+    window.addEventListener(MODEL_SETTINGS_UPDATED_EVENT, refreshSettings);
+    return () => {
+      window.removeEventListener('focus', refreshOnReturn);
+      document.removeEventListener('visibilitychange', refreshOnReturn);
+      window.removeEventListener(MODEL_SETTINGS_UPDATED_EVENT, refreshSettings);
+      providerEpoch.current += 1;
+    };
+  }, [open, loadProviders, projectId]);
   useEffect(() => { if (open) void loadHistory(); return () => historyRequest.current?.abort(); }, [open, loadHistory]);
   useEffect(() => { onRunningChange(Boolean(isRunning || sending)); }, [isRunning, sending, onRunningChange]);
   useEffect(() => {
@@ -428,6 +464,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   }
 
   function buildSendPayload(): AssistantSend | undefined {
+    if (sendDisabledReason) return undefined;
     if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || projectBlocked) return undefined;
     if (!draft.trim() || !provider || provider.status !== 'ready' || !model) return undefined;
     if (scope === 'project' && (draftStore.current.projectId === undefined || draftStore.current.projectRevision === undefined)) return undefined;
@@ -678,10 +715,10 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       {historyMoreError && <div className="assistant-notice" role="alert"><p>{historyMoreError}</p><button disabled={historyLoading} onClick={() => void loadHistory(historyNextCursor)}>重试加载更多</button></div>}
       {historyNextCursor && !historyMoreError && <button type="button" className="assistant-history-more" disabled={historyLoading} onClick={() => void loadHistory(historyNextCursor)}>{historyLoading ? '正在读取…' : '加载更多对话'}</button>}
     </div>}<div className="assistant-chat" hidden={showHistory}>
-      <div className="assistant-model-bar"><button type="button" className="assistant-model-summary" aria-label="模型设置" aria-expanded={showModels} onClick={() => setShowModels(value => !value)}>{model?.name || modelId || '连接 AI'}<ChevronDown size={14} /></button><span className={`assistant-provider-status${provider?.status === 'ready' ? ' is-ready' : ''}`}>{providerLoading ? '读取中' : provider?.status === 'ready' ? '已连接' : '待连接'}</span></div>
+      <div className="assistant-model-bar"><button type="button" className="assistant-model-summary" aria-label="模型设置" aria-expanded={showModels} onClick={() => setShowModels(value => !value)}>{model?.name || modelId || '连接 AI'}<ChevronDown size={14} /></button><span className={`assistant-provider-status${provider?.status === 'ready' ? ' is-ready' : ''}`}>{providerStatus}</span></div>
       <div className="assistant-models" hidden={!showModels}><div className="assistant-models__row">
         <label><span className="visually-hidden">AI 服务</span><select aria-label="AI 服务" value={providerId} disabled={locked || providerLoading} onChange={event => { const next = providers.find(item => item.id === event.target.value); if (next) chooseProvider(next); }}><option value="" disabled>选择 AI 服务</option>{providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <span className={`assistant-provider-status${provider?.status === 'ready' ? ' is-ready' : ''}`}>{providerLoading ? '读取中' : provider?.status === 'ready' ? '已连接' : provider?.status === 'unconfigured' ? '待连接' : '不可用'}</span>
+        <span className={`assistant-provider-status${provider?.status === 'ready' ? ' is-ready' : ''}`}>{providerStatus}</span>
         <button className="assistant-icon-button" aria-label="刷新 AI 服务" title="刷新 AI 服务" disabled={providerLoading || locked} onClick={() => void loadProviders()}><RefreshCw className={providerLoading ? 'assistant-spin' : ''} /></button>
       </div><div className="assistant-models__selection"><label><span className="visually-hidden">模型</span><select aria-label="模型" value={modelId} disabled={locked || !provider?.models.length} onChange={event => { const next = provider?.models.find(item => item.id === event.target.value); setModelId(event.target.value); setEffort(next?.reasoningEfforts.includes(provider?.defaultEffort ?? '') ? provider!.defaultEffort! : next?.reasoningEfforts.at(-1) ?? ''); }}><option value="" disabled>暂无可用模型</option>{provider?.models.map(item => <option key={item.id} value={item.id}>{item.name}{item.recommended ? ' · 推荐' : ''}</option>)}{modelId && !model && <option value={modelId}>{modelId} · 当前不可用</option>}</select></label>
         {Boolean(model?.reasoningEfforts.length) && <label><span className="visually-hidden">思考强度</span><select aria-label="思考强度" value={effort} disabled={locked} onChange={event => setEffort(event.target.value)}>{model?.reasoningEfforts.map(item => <option key={item} value={item}>{effortName(item)}</option>)}</select></label>}
@@ -690,7 +727,6 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       {!service && <div className="assistant-notice" role="alert"><p>当前本地服务尚未启用问问。</p></div>}
       {providerError && <div className="assistant-notice" role="alert"><p>{providerError}</p><button onClick={() => void loadProviders()}>重新读取 AI 服务</button></div>}
       {provider?.status === 'ready' && provider.problem && <div className="assistant-notice" role="status"><p>{provider.problem}</p><button disabled={providerLoading || locked} onClick={() => void loadProviders()}>刷新模型列表</button></div>}
-      {provider && provider.status !== 'ready' && <div className="assistant-notice"><p>{provider.problem || '连接模型后，开始和你的大脑对话。'}</p>{provider.id === 'deepseek' ? <Link to="/settings">配置 DeepSeek <ArrowRight /></Link> : <Link to="/settings">打开设置 <ArrowRight /></Link>}</div>}
       {login && <div className="assistant-notice" role="status"><p>{login.message}</p>{safeAuthUrl && (window.xiaozhaoDesktop?.openAssistantLogin ? <button onClick={() => { void window.xiaozhaoDesktop!.openAssistantLogin!(safeAuthUrl).catch(() => setError('未能打开登录页，请重试。')); }}>继续登录 <ArrowRight /></button> : <a href={safeAuthUrl} target="_blank" rel="noopener noreferrer">继续登录 <ArrowRight /></a>)}<button onClick={() => void loadProviders()} disabled={providerLoading}>我已完成登录，刷新状态</button></div>}
 
       <div ref={timeline} className="assistant-timeline" onScroll={event => { const el = event.currentTarget; savedScroll.current = el.scrollTop; followOutput.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; if (followOutput.current) setHasNewContent(false); }}>
@@ -732,9 +768,11 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
         <div className="assistant-scope"><BookOpen />{projectId ? <span className="assistant-project-scope-label">项目模式 · {project?.displayName ?? projectId}</span> : <><select aria-label="资料范围" value={scope} disabled={locked} onChange={event => setScope(event.target.value as 'brain' | 'current' | 'project')}><option value="brain">整个大脑</option><option value="current" disabled={!contextPath && !draftStore.current.attachments.length}>{!contextPath && draftStore.current.attachments.length ? '仅本轮附件' : `当前资料${!contextPath ? ' · 请先打开一篇' : ''}`}</option><option value="project" disabled={!draftStore.current.projectId || draftStore.current.projectRevision === undefined}>我的项目{!draftStore.current.projectId ? ' · 请先选择项目' : ''}</option></select>{scope === 'project' && draftStore.current.projectId && <span>项目范围：{draftStore.current.projectId}</span>}{contextPath && scope !== 'project' && <span title={contextPath}>{hasPinnedContext ? '固定：' : '当前：'}{titleFromPath(contextPath)}</span>}{contextPath && scope !== 'project' && <button type="button" className="assistant-icon-button" aria-label={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} title={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} disabled={locked} aria-pressed={hasPinnedContext} onClick={() => setPinnedPath(hasPinnedContext ? undefined : contextPath)}><Pin size={13} /></button>}</>}</div>
         {hasPinnedContext && pinnedPath && currentPath && pinnedPath !== currentPath && <p className="assistant-context-change">已切换页面，本轮仍使用《{titleFromPath(pinnedPath)}》。<button type="button" disabled={locked} onClick={() => setPinnedPath(currentPath)}>改用当前页</button></p>}
         {scope === 'current' && conversation?.messages.length ? <p className="assistant-context-note">{contextPath ? `本轮仅检索这份资料${draftStore.current.attachments.length ? '及已选文件' : ''}` : '本轮仅检索已选文件'}；对话仍保留之前的消息。</p> : null}
+        {provider && provider.status !== 'ready' && <div className="assistant-notice" role="status"><p>{provider.problem || '连接模型后，开始和你的大脑对话。'}</p><button type="button" disabled={providerLoading || locked} onClick={() => void loadProviders()}>{providerLoading ? '正在检查连接…' : '重新检查连接'}</button>{provider.id === 'deepseek' ? <Link to="/settings#ai-model-settings">配置 DeepSeek <ArrowRight /></Link> : <Link to="/settings">打开设置 <ArrowRight /></Link>}</div>}
         <AttachmentPicker key={draftStore.current.id} api={api} value={draftStore.current.attachments} groupId={draftStore.current.groupId} refreshKey={attachmentRefreshKey} disabled={locked} onAttachmentsChange={setAttachmentRecords} onChange={async attachments => { draftStore.update({ attachments }); if (!await draftStore.flush()) throw new Error('draft not saved'); }}>
         {!attachmentsReady && draftStore.current.attachments.length > 0 && <p className="assistant-context-note">附件可阅读后再发送；无法读取的文件可移除或在收件箱归档原件。</p>}
-        <form className="assistant-composer" onSubmit={event => { event.preventDefault(); void send(); }}><textarea ref={textArea} aria-label="发送给问问的消息" placeholder={provider?.status === 'ready' ? '问问你的大脑…' : '连接 AI 后，问问你的大脑…'} value={draft} disabled={pending || !draftStore.ready || restoringConversation} maxLength={16000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} /><div className="assistant-composer__footer"><span>{isRunning ? '关闭面板后仍会继续' : 'Enter 发送 · Shift Enter 换行'}</span><ContextUsage conversation={conversation} model={model} draftChanged={Boolean(draft.trim())} attachmentCount={draftStore.current.attachments.length} disabled={locked} onContinue={() => setShowContinuation(true)} />{isRunning ? <button type="button" className="assistant-send" aria-label="停止回答" title="停止回答" disabled={pending} onClick={() => void stop()}><Square /></button> : <button type="submit" className="assistant-send ai-glow-control" aria-label={pending ? '正在发送' : '发送消息'} title="发送消息" disabled={pending || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || !draft.trim() || provider?.status !== 'ready' || !model || Boolean(providerError) || projectBlocked || Boolean(skillRecommendation && skillRecommendation.status !== 'invalidated')}>{pending ? <LoaderCircle className="assistant-spin" /> : <ArrowUp />}</button>}</div></form></AttachmentPicker>
+        <form className="assistant-composer" onSubmit={event => { event.preventDefault(); void send(); }}><textarea ref={textArea} aria-label="发送给问问的消息" placeholder={provider?.status === 'ready' ? '问问你的大脑…' : '连接 AI 后，问问你的大脑…'} value={draft} disabled={pending || !draftStore.ready || restoringConversation} maxLength={16000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} /><div className="assistant-composer__footer"><span>{isRunning ? '关闭面板后仍会继续' : 'Enter 发送 · Shift Enter 换行'}</span><ContextUsage conversation={conversation} model={model} draftChanged={Boolean(draft.trim())} attachmentCount={draftStore.current.attachments.length} disabled={locked} onContinue={() => setShowContinuation(true)} />{isRunning ? <button type="button" className="assistant-send" aria-label="停止回答" title="停止回答" disabled={pending} onClick={() => void stop()}><Square /></button> : <button type="submit" className="assistant-send ai-glow-control" aria-label={pending ? '正在发送' : '发送消息'} title={sendDisabledReason ?? "发送消息"} aria-describedby={showSendDisabledReason ? "assistant-send-blocked" : undefined} disabled={Boolean(sendDisabledReason)}>{pending ? <LoaderCircle className="assistant-spin" /> : <ArrowUp />}</button>}</div></form></AttachmentPicker>
+        {showSendDisabledReason && <p id="assistant-send-blocked" className="assistant-send-blocked" role="status">{sendDisabledReason}</p>}
         {api.assistantDrafts && <p className="assistant-draft-status" role="status">{draftStore.notice || (!draftStore.ready ? '正在恢复本机草稿…' : draftStore.saving || draftStore.dirty && !draftStore.error ? '正在保存到本机…' : draftStore.error ? '当前草稿尚未保存' : '草稿已保留在本机 · 新对话会保留旧记录')}</p>}
         <p className="assistant-disclosure">仅按问题读取所需资料，整理结果由你确认保存。</p>
       </div>

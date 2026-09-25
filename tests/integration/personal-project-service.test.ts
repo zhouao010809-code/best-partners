@@ -1,10 +1,14 @@
 import Database from 'better-sqlite3';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyMigrations } from '../../src/server/db/migrate.js';
+import { createAssistantService } from '../../src/server/assistant/service.js';
+import type { AssistantRunInput } from '../../src/server/assistant/types.js';
 import { createProjectService } from '../../src/server/projects/project-service.js';
+import { createProjectWritePlanService } from '../../src/server/projects/project-write-plans.js';
 import { scanProjectFolder, type ProjectScanResult } from '../../src/server/projects/project-scanner.js';
 
 const databases: Database.Database[] = [];
@@ -73,6 +77,73 @@ describe('personal project registry and index', () => {
     expect(row).toEqual({ count: 3, revision: 2 });
   });
 
+  it('keeps unchanged source revisions across first, expired and explicit freshness checks', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    expect((await f.service.ensureFresh(summary.id)).sourceRevision).toBe(summary.sourceRevision);
+    f.advance(1_001);
+    const checked = await f.service.ensureFresh(summary.id);
+    expect(checked.sourceRevision).toBe(summary.sourceRevision);
+    expect(checked.lastScannedAt).not.toBe(summary.lastScannedAt);
+    expect((await f.service.refresh(summary.id)).sourceRevision).toBe(summary.sourceRevision);
+    expect((await f.service.listFiles(summary.id, {})).revision).toBe(summary.sourceRevision);
+  });
+
+  it('advances the source revision once for changed content and preserves it on later checks', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    await writeFile(join(f.projectRoot, 'brief.txt'), '真正变化后的项目目标\n');
+    f.advance(1_001);
+    const changed = await f.service.ensureFresh(summary.id);
+    expect(changed.sourceRevision).toBe(summary.sourceRevision + 1);
+    expect((await f.service.listFiles(summary.id, { search: '真正变化' })).total).toBe(1);
+    f.advance(1_001);
+    expect((await f.service.ensureFresh(summary.id)).sourceRevision).toBe(changed.sourceRevision);
+  });
+
+  it('accepts the first project question after the freshness TTL and still rejects real source changes', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const run = vi.fn(async (input: AssistantRunInput) => { input.emit({ type: 'text', text: '这是隔离项目的回答。' }); });
+    const assistant = createAssistantService({
+      database: f.database,
+      adapters: [{ id: 'test', describe: async () => ({ id: 'test', name: 'Test', status: 'ready', models: [{ id: 'pro', name: 'Pro', reasoningEfforts: [] }] }), run }],
+      createTools: () => [], projectService: f.service,
+      projectWritePlans: createProjectWritePlanService({ database: f.database })
+    });
+    const question = { message: '项目目标是什么？', providerId: 'test', model: 'pro', scope: 'project' as const, projectId: summary.id, projectRevision: summary.sourceRevision };
+    try {
+      f.advance(1_001);
+      const conversation = await assistant.send({ ...question, clientRequestId: randomUUID() });
+      await vi.waitFor(() => expect(assistant.get(conversation.id).status).toBe('idle'));
+      expect(run).toHaveBeenCalledTimes(1);
+      await writeFile(join(f.projectRoot, 'brief.txt'), '外部改变了项目目标\n');
+      f.advance(1_001);
+      await expect(assistant.send({ ...question, clientRequestId: randomUUID() })).rejects.toMatchObject({ code: 'PROJECT_REVISION_STALE' });
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally { await assistant.close(); }
+  });
+
+  it('keeps a pending write plan confirmable after an unchanged freshness check', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const conversationId = randomUUID();
+    f.database.prepare('INSERT INTO assistant_conversations (id, updated_at, payload) VALUES (?, ?, ?)').run(conversationId, new Date().toISOString(), '{}');
+    const plans = createProjectWritePlanService({ database: f.database });
+    const plan = await plans.proposeDraft({ projectId: summary.id, conversationId, messageId: randomUUID(), category: '内容草稿',
+      title: '确认草稿', summary: '隔离测试草稿', content: '# 保留确认后的草稿', expectedRevision: summary.sourceRevision });
+    f.advance(1_001);
+    await f.service.ensureFresh(summary.id);
+    const confirmed = await plans.confirm(plan.id, conversationId, randomUUID());
+    expect(confirmed.status).toBe('completed');
+    expect(await readFile(join(f.projectRoot, confirmed.resultPath!), 'utf8')).toBe('# 保留确认后的草稿');
+    expect(await readFile(join(f.projectRoot, 'README.md'), 'utf8')).toBe('# 项目说明\n客户需要获客内容\n');
+  });
+
   it('rejects stale, duplicate and overlapping bindings and supports reconnect', async () => {
     const f = await fixture();
     const first = await f.service.scan(f.projectRoot);
@@ -100,6 +171,24 @@ describe('personal project registry and index', () => {
     expect((await f.service.ensureFresh(summary.id)).availability).toBe('reconnect-required');
     const count = f.database.prepare('SELECT COUNT(*) AS count FROM personal_project_operations WHERE project_id = ?').get(summary.id) as { count: number };
     expect(count.count).toBe(1);
+  });
+
+  it('restores availability after a temporary scan failure without changing unchanged source revisions', async () => {
+    const f = await fixture();
+    const preview = await f.service.scan(f.projectRoot);
+    const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    let fails = true;
+    const recovering = createProjectService({
+      database: f.database, vaultRoot: f.vaultRoot, stateRoot: f.stateRoot,
+      scan: async (root, options) => {
+        if (fails) throw new Error('Temporary scanner failure');
+        return scanProjectFolder(root, options);
+      }
+    });
+    expect(await recovering.refresh(summary.id)).toMatchObject({ availability: 'unavailable', sourceRevision: summary.sourceRevision });
+    fails = false;
+    expect(await recovering.refresh(summary.id)).toMatchObject({ availability: 'ready', sourceRevision: summary.sourceRevision });
+    expect((await recovering.listFiles(summary.id, { search: '获客' })).total).toBe(1);
   });
 
   it('rejects protected roots and expired or mismatched scan confirmations', async () => {
@@ -165,10 +254,11 @@ describe('personal project registry and index', () => {
     ]);
     expect(new Set(bound.map((item) => item.id)).size).toBe(2);
     expect(bound.every((item) => item.sourceRevision === 1)).toBe(true);
+    await writeFile(join(f.projectRoot, 'brief.txt'), '并发刷新同一次外部编辑\n');
     const refreshed = await Promise.all([f.service.refresh(bound[0]!.id), f.service.refresh(bound[0]!.id)]);
-    expect(refreshed.map((item) => item.sourceRevision)).toEqual([2, 3]);
+    expect(refreshed.map((item) => item.sourceRevision)).toEqual([2, 2]);
     const rows = f.database.prepare('SELECT DISTINCT indexed_revision AS revision FROM personal_project_files WHERE project_id = ?').all(bound[0]!.id) as Array<{ revision: number }>;
-    expect(rows).toEqual([{ revision: 3 }]);
+    expect(rows).toEqual([{ revision: 2 }]);
   });
 
   it('keeps unreadable files searchable by metadata while indexing readable siblings', async () => {

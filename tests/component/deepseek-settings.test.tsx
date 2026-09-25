@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render as renderComponent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { DeepSeekSettings } from '../../src/client/components/DeepSeekSettings.js';
 
@@ -8,16 +9,22 @@ const ok = <T,>(value: T) => ({ ok: true as const, value });
 const settings = { available: true, configured: true, providerHost: 'api.deepseek.com', model: 'deepseek-v4-flash' } as const;
 const deepSeek = { get: vi.fn(), setKey: vi.fn(), clearKey: vi.fn(), verifyConnection: vi.fn() };
 const refreshHealth = vi.fn();
+const modelSettingsUpdated = vi.fn();
+const settingsUpdatedEvent = 'xiaozhao:model-settings-updated';
+const render = (component: Parameters<typeof renderComponent>[0], initialEntry = '/settings') => renderComponent(
+  <MemoryRouter initialEntries={[initialEntry]}>{component}</MemoryRouter>
+);
 vi.mock('../../src/client/app/ConsoleRuntime.js', () => ({ useConsoleRuntime: () => ({ api: { deepSeek }, refreshHealth }) }));
 
 beforeEach(() => {
+  window.addEventListener(settingsUpdatedEvent, modelSettingsUpdated);
   deepSeek.get.mockResolvedValue(ok(settings));
   deepSeek.setKey.mockResolvedValue(ok(settings));
   deepSeek.clearKey.mockResolvedValue(ok({ ...settings, configured: false }));
   deepSeek.verifyConnection.mockResolvedValue(ok({ ...settings, verification: { status: 'verified', checkedAt: '2026-09-09T02:00:00Z', message: 'DeepSeek 已响应测试消息。' } }));
   refreshHealth.mockResolvedValue(undefined);
 });
-afterEach(() => { cleanup(); vi.resetAllMocks(); });
+afterEach(() => { cleanup(); window.removeEventListener(settingsUpdatedEvent, modelSettingsUpdated); vi.resetAllMocks(); });
 
 it.each(['rejected', 'cancelled', 'failed'] as const)('recovers from a %s settings read through an explicit retry', async (failure) => {
   if (failure === 'rejected') deepSeek.get.mockRejectedValueOnce(new TypeError('offline'));
@@ -30,11 +37,45 @@ it.each(['rejected', 'cancelled', 'failed'] as const)('recovers from a %s settin
   expect(screen.queryByText('未配置')).not.toBeInTheDocument();
   expect(screen.queryByText('正在读取模型设置…')).not.toBeInTheDocument();
   expect(deepSeek.get).toHaveBeenCalledTimes(1);
+  expect(modelSettingsUpdated).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button', { name: '重新读取模型设置' }));
   expect(await screen.findByLabelText('DeepSeek API Key')).toBeVisible();
   expect(screen.getByText('待验证')).toBeVisible();
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(deepSeek.get).toHaveBeenCalledTimes(2);
+  expect(modelSettingsUpdated).toHaveBeenCalledTimes(1);
+  expect(modelSettingsUpdated.mock.calls[0]?.[0]).not.toHaveProperty('detail');
+});
+
+it('provides a model-settings destination for both asking and extraction without broadcasting the initial read', async () => {
+  render(<DeepSeekSettings />);
+  await screen.findByLabelText('DeepSeek API Key');
+  expect(screen.getByRole('region', { name: 'DeepSeek 设置' })).toHaveAttribute('id', 'ai-model-settings');
+  expect(screen.getByText('用于问问、资料提炼与知识候选生成')).toBeVisible();
+  expect(modelSettingsUpdated).not.toHaveBeenCalled();
+});
+
+it.each(['/settings#ai-model-settings', '/settings', '/settings#browser-clipper'] as const)('only scrolls model settings into view after loading when targeted at %s', async (destination) => {
+  let resolveRead!: (value: unknown) => void;
+  deepSeek.get.mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }));
+  render(<DeepSeekSettings />, destination);
+  const section = screen.getByRole('region', { name: 'DeepSeek 设置' });
+  const scrollIntoView = vi.fn();
+  section.scrollIntoView = scrollIntoView;
+  expect(scrollIntoView).not.toHaveBeenCalled();
+  await act(async () => { resolveRead(ok(settings)); });
+  if (destination === '/settings#ai-model-settings') expect(scrollIntoView).toHaveBeenCalledExactlyOnceWith({ block: 'start' });
+  else expect(scrollIntoView).not.toHaveBeenCalled();
+});
+
+it('does not announce model recovery when an explicit reload still cannot read credentials', async () => {
+  deepSeek.get.mockResolvedValue(ok({ ...settings, configured: false, problem: '已保存的密钥无法读取，请重新保存或移除。' }));
+  const user = userEvent.setup();
+  render(<DeepSeekSettings />);
+  await user.click(await screen.findByRole('button', { name: '重新读取模型设置' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('已保存的密钥无法读取');
+  expect(deepSeek.get).toHaveBeenCalledTimes(2);
+  expect(modelSettingsUpdated).not.toHaveBeenCalled();
 });
 
 it('labels unavailable storage accurately and offers a reload without enabling key changes', async () => {
@@ -70,6 +111,8 @@ it('masks the current input during save and clears it only after a successful tr
   expect(await screen.findByText(/已保存在本机.*尚未验证连接/u)).toBeVisible();
   expect(screen.getByRole('button', { name: '显示本次输入的密钥' })).toBeDisabled();
   expect(deepSeek.verifyConnection).not.toHaveBeenCalled();
+  expect(modelSettingsUpdated).toHaveBeenCalledTimes(1);
+  expect(modelSettingsUpdated.mock.calls[0]?.[0]).not.toHaveProperty('detail');
 });
 
 it('preserves a failed save for retry without exposing it or automatically testing the connection', async () => {
@@ -83,6 +126,7 @@ it('preserves a failed save for retry without exposing it or automatically testi
   expect(await screen.findByRole('alert')).toHaveTextContent('未能保存');
   expect(input).toHaveValue('sk-unsaved-retry');
   expect(input).toHaveAttribute('type', 'password');
+  expect(modelSettingsUpdated).not.toHaveBeenCalled();
   await user.click(screen.getByRole('button', { name: '保存密钥' }));
   await waitFor(() => expect(input).toHaveValue(''));
   expect(deepSeek.setKey).toHaveBeenCalledTimes(2);
@@ -171,6 +215,31 @@ it('keeps removal deliberate and identifies removal, rather than saving, while i
   expect(await screen.findByText('密钥已从本机移除。已保存的候选不会删除。')).toBeVisible();
   expect(screen.getByText('未配置')).toBeVisible();
   expect(deepSeek.clearKey).toHaveBeenCalledTimes(1);
+  expect(modelSettingsUpdated).toHaveBeenCalledTimes(1);
+  expect(modelSettingsUpdated.mock.calls[0]?.[0]).not.toHaveProperty('detail');
+});
+
+it.each(['saving', 'removing'] as const)('still announces completed %s after leaving settings', async (action) => {
+  let resolveUpdate!: (value: unknown) => void;
+  const method = action === 'saving' ? deepSeek.setKey : deepSeek.clearKey;
+  method.mockImplementationOnce(() => new Promise((resolve) => { resolveUpdate = resolve; }));
+  const user = userEvent.setup();
+  const view = render(<DeepSeekSettings />);
+  const input = await screen.findByLabelText('DeepSeek API Key');
+  if (action === 'saving') {
+    await user.type(input, 'sk-save-after-navigation');
+    await user.click(screen.getByRole('button', { name: '保存密钥' }));
+  } else {
+    await user.click(screen.getByRole('button', { name: '移除密钥' }));
+    expect(screen.getByText('移除后将暂停新的问问与提炼，已有候选仍保留。')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: '确认移除密钥' }));
+  }
+  view.unmount();
+  expect(modelSettingsUpdated).not.toHaveBeenCalled();
+  await act(async () => { resolveUpdate(ok({ ...settings, configured: action === 'saving' })); });
+  expect(modelSettingsUpdated).toHaveBeenCalledTimes(1);
+  expect(modelSettingsUpdated.mock.calls[0]?.[0]).not.toHaveProperty('detail');
+  expect(deepSeek.verifyConnection).not.toHaveBeenCalled();
 });
 
 it('aborts the read when the settings component unmounts', async () => {

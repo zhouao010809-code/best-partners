@@ -1,11 +1,15 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Eye, EyeOff, LockKeyhole } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
+import { MODEL_SETTINGS_UPDATED_EVENT } from '../modelSettingsEvents.js';
 import type { DeepSeekSettings as Settings } from '../../shared/api/extraction.js';
 
 export function DeepSeekSettings() {
   const { api, refreshHealth } = useConsoleRuntime();
+  const { hash } = useLocation();
   const service = api.deepSeek;
+  const section = useRef<HTMLElement>(null);
   const keyInputId = useId();
   const [settings, setSettings] = useState<Settings>();
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -17,6 +21,10 @@ export function DeepSeekSettings() {
   const [revision, setRevision] = useState(0);
   const lifetime = useRef<AbortController | undefined>(undefined);
   const pending = useRef(false);
+
+  useEffect(() => {
+    if (hash === '#ai-model-settings' && loadState !== 'loading') section.current?.scrollIntoView?.({ block: 'start' });
+  }, [hash, loadState]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -33,6 +41,9 @@ export function DeepSeekSettings() {
         if (result.ok) {
           setSettings(result.value);
           setLoadState('ready');
+          if (revision > 0 && result.value.available && !result.value.problem) {
+            window.dispatchEvent(new Event(MODEL_SETTINGS_UPDATED_EVENT));
+          }
         } else {
           setLoadState('error');
           setFeedback({ tone: 'error', message: 'state' in result
@@ -61,6 +72,8 @@ export function DeepSeekSettings() {
     const failureMessage = clear ? '密钥未能移除，请重试。' : '密钥设置未能保存，请重试。';
     try {
       const result = await (clear ? service.clearKey() : service.setKey(enteredKey));
+      // The mutation outlives this page; mounted consumers must still refresh.
+      if (result.ok) window.dispatchEvent(new Event(MODEL_SETTINGS_UPDATED_EVENT));
       if (signal?.aborted) return;
       if (result.ok) {
         setSettings(result.value);
@@ -126,9 +139,9 @@ export function DeepSeekSettings() {
   const canVerify = Boolean(service?.verifyConnection && settings?.available && settings.configured && !credentialProblem && key === '' && busy === null);
 
   return (
-    <section className="deepseek-settings settings-section settings-card" aria-label="DeepSeek 设置">
+    <section ref={section} id="ai-model-settings" className="deepseek-settings settings-section settings-card" aria-label="DeepSeek 设置">
       <header className="settings-section__heading">
-        <div><h2>AI 模型</h2><p>用于资料提炼与知识候选生成</p></div>
+        <div><h2>AI 模型</h2><p>用于问问、资料提炼与知识候选生成</p></div>
         <span className={`settings-chip settings-chip--${statusColor}`}>{status}</span>
       </header>
       <div className="settings-section__body">
@@ -170,7 +183,7 @@ export function DeepSeekSettings() {
               </form>
               <p className="settings-key-note"><LockKeyhole aria-hidden="true" /><span>密钥加密保存在本机。保存密钥不会发送测试消息或提炼资料。</span></p>
               {confirmClear && <div className="settings-key-confirm">
-                <p>移除后将暂停新的提炼，已有候选仍保留。</p>
+                <p>移除后将暂停新的问问与提炼，已有候选仍保留。</p>
                 <div className="settings-key-actions">
                   <button className="settings-button" type="button" disabled={busy !== null} onClick={() => void update(true)}>{busy === 'clearing' ? '正在移除…' : '确认移除密钥'}</button>
                   <button className="settings-button" type="button" disabled={busy !== null} onClick={() => setConfirmClear(false)}>保留密钥</button>

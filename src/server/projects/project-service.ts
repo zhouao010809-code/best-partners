@@ -407,7 +407,10 @@ export function createProjectService(input: {
       }
       return setRefreshFailure(row, 'unavailable', error);
     }
-    const revision = row.source_revision + 1;
+    // A freshness check must not invalidate the question that triggered it.
+    // Revisions track changed source snapshots; availability and scan times
+    // still refresh when the same snapshot becomes readable again.
+    const revision = row.source_revision + (result.sourceSha256 === row.source_sha256 ? 0 : 1);
     const timestamp = dateText(now());
     try {
       const transaction = database.transaction(() => {

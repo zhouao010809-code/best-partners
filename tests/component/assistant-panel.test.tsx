@@ -75,6 +75,61 @@ it('binds the single panel to a project, sends its source revision, and scopes h
   await waitFor(() => expect(service.history).toHaveBeenLastCalledWith(expect.any(AbortSignal), expect.objectContaining({ projectId })));
 });
 
+it.each(['focus', 'xiaozhao:model-settings-updated'])(
+  'recovers a transient credential failure on %s without losing the project question or sending it automatically', async event => {
+    service.providers.mockResolvedValueOnce(ok({ providers: [{ ...provider, status: 'unconfigured', problem: '无法安全保存或读取 API Key，请重新配置。' }] }));
+    const user = userEvent.setup(); render(<ProjectHarness />);
+    await screen.findByText('无法安全保存或读取 API Key，请重新配置。');
+    await user.type(screen.getByLabelText('发送给问问的消息'), '项目问题仍在这里');
+    expect(screen.getByRole('button', { name: '发送消息' })).toBeDisabled();
+    await act(async () => { window.dispatchEvent(new Event(event)); });
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送消息' })).toBeEnabled());
+    expect(screen.getByLabelText('发送给问问的消息')).toHaveValue('项目问题仍在这里');
+    expect(service.send).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: '发送消息' }));
+    await waitFor(() => expect(service.send).toHaveBeenCalledTimes(1));
+    expect(service.send.mock.calls[0]![0]).toMatchObject({ scope: 'project', projectId, projectRevision: 7, message: '项目问题仍在这里' });
+  }
+);
+
+it('shows a credential retry beside the composer without expanding model settings', async () => {
+  service.providers.mockResolvedValueOnce(ok({ providers: [{ ...provider, status: 'unconfigured', problem: '无法安全保存或读取 API Key，请重新配置。' }] }));
+  const user = userEvent.setup(); render(<ProjectHarness />);
+  await screen.findByText('无法安全保存或读取 API Key，请重新配置。');
+  await user.type(screen.getByLabelText('发送给问问的消息'), '先保留这个问题');
+  expect(screen.getByRole('button', { name: '发送消息' })).toHaveAccessibleDescription('AI 连接尚未就绪，请重新检查连接或配置 DeepSeek。');
+  expect(screen.getByRole('link', { name: '配置 DeepSeek' })).toHaveAttribute('href', '/settings#ai-model-settings');
+  await user.click(screen.getByRole('button', { name: '重新检查连接' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: '发送消息' })).toBeEnabled());
+  expect(screen.getByRole('button', { name: '模型设置' })).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.getByLabelText('发送给问问的消息')).toHaveValue('先保留这个问题');
+  expect(service.send).not.toHaveBeenCalled();
+});
+
+it('keeps a chosen model when settings refresh and blocks sending when the key is removed', async () => {
+  const user = userEvent.setup(); render(<Harness />);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  await user.selectOptions(screen.getByLabelText('模型'), 'deepseek-v4-flash');
+  await user.type(screen.getByLabelText('发送给问问的消息'), '还没发送');
+  service.providers.mockResolvedValue(ok({ providers: [{ ...provider, status: 'unconfigured' }] }));
+  await act(async () => { window.dispatchEvent(new Event('xiaozhao:model-settings-updated')); });
+  await waitFor(() => expect(screen.getByRole('button', { name: '发送消息' })).toBeDisabled());
+  expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-flash');
+  await user.keyboard('{Enter}');
+  expect(service.send).not.toHaveBeenCalled();
+});
+
+it('keeps a ready connection sendable when returning to the app instead of waiting for a model catalog refresh', async () => {
+  const user = userEvent.setup(); render(<ProjectHarness />);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  await user.type(screen.getByLabelText('发送给问问的消息'), '已经准备好的问题');
+  const checks = service.providers.mock.calls.length;
+  service.providers.mockImplementation(() => new Promise(() => {}));
+  await act(async () => { window.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('visibilitychange')); });
+  expect(service.providers).toHaveBeenCalledTimes(checks);
+  expect(screen.getByRole('button', { name: '发送消息' })).toBeEnabled();
+});
+
 it('confirms an archive plan through the panel and retains it when the API fails', async () => {
   const plan = {
     id: '6f9c3b4e-9c3f-4d7a-8c5f-1a8e0e5f2f66', type: 'plan' as const, kind: 'archive' as const, label: '准备归档', status: 'pending' as const,

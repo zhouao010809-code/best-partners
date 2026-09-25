@@ -25,7 +25,7 @@ function fixture() {
 
 it('preserves a damaged credential store as an actionable problem, not a never-configured state', () => {
   const f = fixture(); f.corrupt();
-  expect(f.service.settings()).toMatchObject({ available: true, configured: false, problem: '无法安全保存或读取 API Key，请重新配置。' });
+  expect(f.service.settings()).toMatchObject({ available: true, configured: false, problem: '暂时无法安全保存或读取 API Key，请重试；若仍失败，请重新配置。' });
 });
 
 it('verifies only on explicit invocation without vault reads, extraction runs or key mutations', async () => {

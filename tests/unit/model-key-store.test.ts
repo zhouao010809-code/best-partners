@@ -94,7 +94,7 @@ describe('encrypted private model credentials', () => {
     const store = createModelKeyStore({ directory, safeStorage }); store.setKey(key);
     const revision = store.status().revision;
     safeStorage.encryptString = () => { throw new Error(`RAW ${key}`); };
-    expect(() => store.setKey('sk-new')).toThrow('无法安全保存或读取 API Key，请重新配置。');
+    expect(() => store.setKey('sk-new')).toThrow('暂时无法安全保存或读取 API Key，请重试；若仍失败，请重新配置。');
     expect(store.getKey()).toBe(key);
     expect(store.status().revision).toBe(revision);
     expect(readdirSync(directory)).toHaveLength(1);
@@ -104,15 +104,15 @@ describe('encrypted private model credentials', () => {
     const directory = join(root(), 'credentials'); const safeStorage = encryptedStorage();
     const store = createModelKeyStore({ directory, safeStorage }); store.setKey(key);
     writeFileSync(join(directory, readdirSync(directory)[0]!), 'corrupted ciphertext');
-    expect(store.status()).toMatchObject({ configured: false, problem: '无法安全保存或读取 API Key，请重新配置。' });
-    expect(() => store.getKey()).toThrow('无法安全保存或读取 API Key，请重新配置。');
+    expect(store.status()).toMatchObject({ configured: false, problem: '暂时无法安全保存或读取 API Key，请重试；若仍失败，请重新配置。' });
+    expect(() => store.getKey()).toThrow('暂时无法安全保存或读取 API Key，请重试；若仍失败，请重新配置。');
   });
 
   it('rejects symlink directories without changing their target permissions or content', () => {
     const parent = root(); const outside = root(); const directory = join(parent, 'credentials');
     chmodSync(outside, 0o755); symlinkSync(outside, directory);
     const store = createModelKeyStore({ directory, safeStorage: encryptedStorage() });
-    expect(() => store.setKey(key)).toThrow('无法安全保存或读取 API Key，请重新配置。');
+    expect(() => store.setKey(key)).toThrow('暂时无法安全保存或读取 API Key，请重试；若仍失败，请重新配置。');
     expect(readdirSync(outside)).toEqual([]);
     expect(statSync(outside).mode & 0o777).toBe(0o755);
   });
@@ -124,7 +124,7 @@ describe('encrypted private model credentials', () => {
     writeFileSync(target, 'untouched', { mode: 0o644 }); rmSync(path);
     if (kind === 'symlink') symlinkSync(target, path); else linkSync(target, path);
     expect(store.status()).toMatchObject({ configured: false, problem: expect.any(String) });
-    expect(() => store.setKey('sk-new')).toThrow('无法安全保存或读取 API Key，请重新配置。');
+    expect(() => store.setKey('sk-new')).toThrow('暂时无法安全保存或读取 API Key，请重试；若仍失败，请重新配置。');
     expect(readFileSync(target, 'utf8')).toBe('untouched');
     expect(statSync(target).mode & 0o777).toBe(0o644);
   });

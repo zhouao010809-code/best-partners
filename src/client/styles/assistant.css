@@ -255,3 +255,5 @@
 .assistant-project-write__dialog code { display: block; margin: 12px 0; overflow-wrap: anywhere; }
 .assistant-project-write__dialog > div { justify-content: flex-end; }
 .assistant-project-write__dialog svg { width: 14px; }
+
+.assistant-send-blocked { margin: 7px 0 0; color: #cfc4ac; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }

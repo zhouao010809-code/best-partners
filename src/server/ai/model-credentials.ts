@@ -16,7 +16,7 @@ const credentialMessages = {
   UNAVAILABLE: '系统加密不可用，无法保存或读取 API Key。',
   NOT_CONFIGURED: '尚未配置 DeepSeek API Key。',
   INVALID_KEY: 'API Key 格式不正确。',
-  STORAGE_FAILED: '无法安全保存或读取 API Key，请重新配置。'
+  STORAGE_FAILED: '暂时无法安全保存或读取 API Key，请重试；若仍失败，请重新配置。'
 } as const;
 
 export class ModelCredentialsError extends Error {
