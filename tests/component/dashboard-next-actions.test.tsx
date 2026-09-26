@@ -36,14 +36,11 @@ function fixture(options: { modern?: boolean; modelConfigured?: boolean; empty?:
 function Location() { const location = useLocation(); return <output aria-label="location">{location.pathname}{location.search}</output>; }
 function show() { render(<MemoryRouter><DashboardPage /><Location /></MemoryRouter>); }
 
-it('uses queue stages for counts and routes each existing task to its actual next action', async () => {
+it('keeps material actions available without a duplicate continue-work section', async () => {
   const f = fixture(); const user = userEvent.setup(); show();
-  expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
-  expect(screen.getByRole('link', { name: /待确认 1/u })).toHaveAttribute('href', '/queue?view=ready&reviewState=pending');
-  expect(screen.getByRole('link', { name: /未完成 1/u })).toHaveAttribute('href', '/queue?view=unfinished');
-  expect(screen.getByRole('link', { name: /整理新收件/u })).toHaveAttribute('href', '/intake');
-  expect(screen.getByText(/把收藏的资料变成可复用的知识/u)).toBeVisible();
-  expect(screen.getByText(/待提炼.*还没有生成知识候选/u)).toBeVisible();
+  expect(await screen.findByTestId('metric-materials')).toHaveTextContent('4');
+  expect(screen.queryByRole('navigation', { name: '继续工作' })).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: '提炼队列' })).toHaveAttribute('href', '/queue');
   expect(screen.getByRole('link', { name: /开始提炼前需要配置 DeepSeek 密钥/u })).toHaveAttribute('href', '/settings');
   expect(screen.getByRole('heading', { name: /待处理资料/u })).toBeVisible();
   await user.click(screen.getByRole('button', { name: 'ready:resume' }));
@@ -60,12 +57,12 @@ it('uses queue stages for counts and routes each existing task to its actual nex
 
 it('only surfaces the model setup prompt when pending work still needs it', async () => {
   fixture({ modelConfigured: true }); show();
-  await screen.findByTestId('metric-pending');
+  await screen.findByTestId('metric-materials');
   expect(screen.queryByRole('link', { name: /开始提炼前需要配置 DeepSeek 密钥/u })).not.toBeInTheDocument();
 
   cleanup();
   fixture({ empty: true }); show();
-  await screen.findByTestId('metric-pending');
+  await screen.findByTestId('metric-materials');
   expect(screen.queryByRole('link', { name: /开始提炼前需要配置 DeepSeek 密钥/u })).not.toBeInTheDocument();
 });
 
@@ -77,16 +74,16 @@ it('gives an empty first-run desk a direct route to bring in new material', asyn
 
 it('retains the material-list dashboard on adapters without queue capabilities', async () => {
   fixture({ modern: false }); show();
-  expect(await screen.findByTestId('metric-pending')).toHaveTextContent('4');
+  expect(await screen.findByTestId('metric-materials')).toHaveTextContent('4');
   expect(screen.getByRole('button', { name: 'ready:start' })).toBeVisible();
   expect(screen.queryByRole('navigation', { name: '继续工作' })).not.toBeInTheDocument();
 });
 
-it('does not publish stage counts assembled from changing queue snapshots', async () => {
+it('does not publish material actions assembled from changing queue snapshots', async () => {
   const f = fixture();
   f.list.mockImplementation(async query => ok({ items: [], counts: { ...f.counts, pending: query.view === 'generating' ? 2 : 1 } }));
   show();
   await waitFor(() => expect(f.list.mock.calls.filter(([query]) => query.view === 'generating' && query.visibility !== 'removed')).toHaveLength(2));
-  expect(screen.queryByTestId('metric-pending')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('metric-materials')).not.toBeInTheDocument();
   expect(await screen.findByText('任务阶段仍在变化，等待稳定快照')).toBeVisible();
 });

@@ -116,10 +116,10 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await openPage(page, '/');
 
-    await expect(page.getByTestId('metric-pending').locator('strong')).toHaveText('2');
-    await expect(page.getByTestId('metric-partial').locator('strong')).toHaveText('1');
-    await expect(page.getByTestId('metric-knowledge').locator('strong')).toHaveText('4');
-    await expect(page.getByTestId('metric-upgradeable').locator('strong')).toHaveText('2');
+    await expect(page.getByTestId('metric-materials')).toHaveText('2 份');
+    await expect(page.getByTestId('metric-partial')).toHaveCount(0);
+    await expect(page.getByTestId('metric-knowledge')).toHaveText('已积累 4 篇知识');
+    await expect(page.getByTestId('metric-upgradeable')).toHaveCount(0);
     const deck = page.getByRole('region', { name: '待提炼材料牌堆' });
     await expect(deck.locator('[data-material-card-trigger]')).toHaveCount(2);
     await expect(deck.getByRole('button', { name: /部分入库：证据链/u })).toHaveCount(0);

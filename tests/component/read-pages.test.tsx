@@ -168,7 +168,7 @@ it('removes all paginated completed sources from dashboard work while keeping ch
         : query.cursor ? { items: [summary(1), summary(2, 'd'.repeat(64))], counts } : { items: [summary(0)], counts, nextCursor: 'completed-next' }));
   const api = createApi({ listMaterials: vi.fn(async () => ok({ items: records })), extractionQueue: { list, get: vi.fn(), history: vi.fn() } });
   render(<MemoryRouter initialEntries={['/']}><AppRouter api={api} /></MemoryRouter>);
-  expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+  expect(await screen.findByTestId('metric-materials')).toHaveTextContent('2 份');
   expect(screen.getByRole('heading', { name: '待处理资料 2 份' })).toBeVisible();
   const deck = screen.getByRole('region', { name: '待提炼材料牌堆' });
   expect(within(deck).queryByRole('button', { name: /零候选已完成/u })).not.toBeInTheDocument();
@@ -189,7 +189,7 @@ it('keeps removed pending and historical sources out of dashboard cards without 
     }] }));
   const api = createApi({ listMaterials: vi.fn(async () => ok({ items: records })), extractionQueue: { list, get: vi.fn(), history: vi.fn() } });
   render(<MemoryRouter initialEntries={['/']}><AppRouter api={api} /></MemoryRouter>);
-  expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+  expect(await screen.findByTestId('metric-materials')).toHaveTextContent('1');
   const deck = screen.getByRole('region', { name: '待提炼材料牌堆' });
   expect(within(deck).queryByRole('button', { name: /移出的/u })).not.toBeInTheDocument();
   expect(within(deck).getByRole('button', { name: /继续处理/u })).toBeVisible();
@@ -365,7 +365,7 @@ describe('Phase 1 read pages', () => {
 
     renderRoute('/');
 
-    expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+    expect(await screen.findByTestId('metric-materials')).toHaveTextContent('1');
     expect(screen.queryByTestId('metric-partial')).not.toBeInTheDocument();
     expect(screen.getByTestId('metric-knowledge')).toHaveTextContent('1');
     const deck = screen.getByRole('region', { name: '待提炼材料牌堆' });
@@ -435,7 +435,7 @@ describe('Phase 1 read pages', () => {
     renderRoute('/', api);
 
     expect(await screen.findByText('索引版本仍在变化，等待稳定快照')).toBeVisible();
-    expect(screen.queryByTestId('metric-pending')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('metric-materials')).not.toBeInTheDocument();
     expect(api.listMaterials).toHaveBeenCalledTimes(2);
     expect(api.listKnowledge).toHaveBeenCalledTimes(2);
   });
@@ -481,7 +481,7 @@ describe('Phase 1 read pages', () => {
       )).toBeVisible();
       expect(api.listMaterials).not.toHaveBeenCalled();
       expect(api.listKnowledge).not.toHaveBeenCalled();
-      expect(screen.queryByTestId('metric-pending')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('metric-materials')).not.toBeInTheDocument();
     }
   );
 
@@ -506,7 +506,7 @@ describe('Phase 1 read pages', () => {
     await waitFor(() => expect(api.rebuildIndex).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('link', { name: '大脑总览' }));
 
-    expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+    expect(await screen.findByTestId('metric-materials')).toHaveTextContent('1');
     expect(screen.queryByText('索引不可用，当前无法读取统计数据')).not.toBeInTheDocument();
     expect(api.listMaterials).toHaveBeenCalledTimes(1);
     expect(api.getHealth).toHaveBeenCalledTimes(4);
@@ -528,7 +528,7 @@ describe('Phase 1 read pages', () => {
     expect(api.listMaterials).toHaveBeenCalledTimes(1);
     await act(async () => pendingRebuild.resolve(ok({ ...completedJob(), indexVersion: 7 })));
 
-    expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+    expect(await screen.findByTestId('metric-materials')).toHaveTextContent('1');
     expect(api.listMaterials).toHaveBeenCalledTimes(2);
     expect(within(screen.getByRole('main')).queryByText('无法连接本地服务。')).not.toBeInTheDocument();
   });
@@ -549,12 +549,12 @@ describe('Phase 1 read pages', () => {
       rebuildIndex: vi.fn(() => pendingRebuild.promise)
     });
     renderRoute('/', api);
-    expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+    expect(await screen.findByTestId('metric-materials')).toHaveTextContent('1');
 
     act(() => window.dispatchEvent(new Event('focus')));
 
     expect(await screen.findByText('索引正在构建，完成前不会显示不完整数字')).toBeVisible();
-    expect(screen.queryByTestId('metric-pending')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('metric-materials')).not.toBeInTheDocument();
     expect(api.listMaterials).toHaveBeenCalledTimes(1);
   });
 
@@ -569,13 +569,13 @@ describe('Phase 1 read pages', () => {
       listMaterials: vi.fn(async () => ok({ items: [material()] }))
     });
     renderRoute('/', api);
-    expect(await screen.findByTestId('metric-pending')).toHaveTextContent('1');
+    expect(await screen.findByTestId('metric-materials')).toHaveTextContent('1');
 
     act(() => window.dispatchEvent(new Event('focus')));
 
     const main = screen.getByRole('main');
     expect(await within(main).findByText('无法连接本地服务。')).toBeVisible();
-    expect(within(main).getByTestId('metric-pending')).toHaveTextContent('1');
+    expect(within(main).getByTestId('metric-materials')).toHaveTextContent('1');
   });
 
   it('shows a runtime failure directly when no dashboard snapshot was published', async () => {
@@ -586,7 +586,7 @@ describe('Phase 1 read pages', () => {
 
     const main = screen.getByRole('main');
     expect(await within(main).findByText('无法连接本地服务。')).toBeVisible();
-    expect(within(main).queryByTestId('metric-pending')).not.toBeInTheDocument();
+    expect(within(main).queryByTestId('metric-materials')).not.toBeInTheDocument();
     expect(api.listMaterials).not.toHaveBeenCalled();
   });
 

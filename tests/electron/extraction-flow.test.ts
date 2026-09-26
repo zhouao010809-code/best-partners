@@ -34,7 +34,7 @@ for (const mode of ['development', 'packaged'] as const) {
       const window = await instance.firstWindow();
       const consoleErrors: string[] = [];
       window.on('pageerror', (error) => consoleErrors.push(error.message));
-      await expect(window.getByTestId('metric-pending')).toContainText('1');
+      await expect(window.getByTestId('metric-materials')).toContainText('1');
       // Replace only the provider transport in this isolated process. No production test hooks or real network calls.
       await instance.evaluate((_electron, result) => {
         const state = globalThis as unknown as { extractionTestCalls: number; extractionTestBody?: Record<string, unknown> };

@@ -11,12 +11,13 @@ import {
   Settings2,
   ShieldAlert
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { PageState } from '../components/PageState.js';
 import { DocumentIssuesPanel } from '../components/DocumentIssuesPanel.js';
 import { DeepSeekSettings } from '../components/DeepSeekSettings.js';
 import { AppUpdates } from '../components/AppUpdates.js';
+import { DistributionChecklist } from '../components/first-run/DistributionChecklist.js';
 import type { HealthSnapshot } from '../api/client.js';
 import { dataFromResource } from './pageSupport.js';
 import '../styles/settings.css';
@@ -115,6 +116,7 @@ function writeGateDiagnostic(snapshot: HealthSnapshot): Diagnostic {
 }
 
 export function SettingsPage() {
+  const { hash } = useLocation();
   const runtime = useConsoleRuntime();
   const snapshot = dataFromResource(runtime.health);
   const desktop = window.xiaozhaoDesktop;
@@ -131,10 +133,15 @@ export function SettingsPage() {
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const issuesButton = useRef<HTMLButtonElement>(null);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (hash === '#browser-clipper') document.getElementById('browser-clipper')?.scrollIntoView?.({ block: 'start' });
+  }, [hash]);
 
   useEffect(() => {
     let cancelled = false;
@@ -248,6 +255,7 @@ export function SettingsPage() {
             </div>
           </section>
           <DeepSeekSettings />
+          {desktop?.installClipperHost && <DistributionChecklist bridge={desktop} />}
           <AppUpdates />
         </div>
 

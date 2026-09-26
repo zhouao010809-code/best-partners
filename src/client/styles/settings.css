@@ -78,6 +78,7 @@
 }
 .settings-workspace .settings-primary-grid > .settings-card { min-width: 0; }
 .settings-workspace .settings-primary-grid > .settings-updates { grid-column: 1 / -1; }
+.settings-workspace .settings-primary-grid > .settings-clipper { grid-column: 1 / -1; scroll-margin-top: 24px; }
 .settings-workspace .settings-section {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -164,6 +165,9 @@
 .settings-workspace .settings-feedback--error { border-left-color: #ba966b; color: #d7bb99; background: #ba966b0a; }
 
 .settings-updates__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.settings-clipper__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.settings-clipper__note { margin: 0; color: #c2c2cc; font-size: 13px; }
+.settings-clipper__optional { margin: 12px 0 0; color: var(--settings-muted); font-size: 12px; }
 .settings-updates__result { display: grid; gap: 8px; min-width: 0; }
 .settings-updates__version { margin: 0; color: #e6e6ec; font-size: 15px; font-weight: 550; }
 .settings-updates__meta { margin: 0; color: var(--settings-muted); font-size: 12px; overflow-wrap: anywhere; }

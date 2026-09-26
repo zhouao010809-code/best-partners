@@ -58,7 +58,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await writeFile(join(vault, sourcePath), source); await writeFile(join(vault, knowledgePath), knowledge); await writeFile(join(vault, sourceFolder, '附件/原始证据.bin'), attachment);
       const sourceIdentity = await stat(join(vault, sourcePath), { bigint: true });
       const first = await launch(); const firstPage = first.page;
-      await expect(firstPage.getByTestId('metric-pending')).toContainText('1');
+      await expect(firstPage.getByTestId('metric-materials')).toContainText('1');
       await firstPage.getByRole('link', { name: '档案库', exact: true }).click();
       await firstPage.getByRole('button', { name: '打开档案柜', exact: true }).click();
       await expect(firstPage.getByRole('region', { name: '档案柜', exact: true })).toHaveAttribute('data-state', 'open');
@@ -122,7 +122,7 @@ for (const mode of ['development', 'packaged'] as const) {
       expect(trashEntrySchema.parse(persisted)).toEqual(deleted);
       for (const width of [1440, 390]) { await resize(second.instance, secondPage, width); await secondPage.screenshot({ path: info.outputPath(`permanent-delete-after-restart-${width}.png`) }); }
       await secondPage.getByRole('link', { name: '大脑总览', exact: true }).click();
-      await expect(secondPage.getByTestId('metric-pending')).toContainText('0'); await expect(secondPage.getByTestId('metric-knowledge')).toContainText('1');
+      await expect(secondPage.getByTestId('metric-materials')).toContainText('0'); await expect(secondPage.getByTestId('metric-knowledge')).toContainText('1');
       await expect(stat(slot)).rejects.toMatchObject({ code: 'ENOENT' }); await expect(stat(join(vault, sourcePath))).rejects.toMatchObject({ code: 'ENOENT' });
       expect(await readFile(join(vault, knowledgePath))).toEqual(knowledge); expect(await readFile(join(vault, sourceFolder, '附件/原始证据.bin'))).toEqual(attachment);
       expect(deletes).toHaveLength(1); expect(pageErrors).toEqual([]); expect(apiFailures).toEqual([]);

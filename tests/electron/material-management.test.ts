@@ -66,7 +66,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await writeFile(join(vault, sourcePath), source); await writeFile(join(vault, knowledgePath), knowledge); await writeFile(join(vault, sourceFolder, '附件/证据.bin'), attachment);
       const originalIdentity = await stat(join(vault, sourcePath), { bigint: true });
       instance = await electron.launch({ ...launchOptions, env }); window = await instance.firstWindow(); watch(window); await forbidModel(instance);
-      await expect(window.getByTestId('metric-pending')).toContainText('1');
+      await expect(window.getByTestId('metric-materials')).toContainText('1');
       await expect(window.getByTestId('metric-knowledge')).toContainText('1');
       await openUnextracted(window);
       const trashAction = window.getByRole('button', { name: `移入回收站：${title}`, exact: true });
@@ -99,7 +99,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '展开待提炼抽屉', exact: true }).click();
       await expect(window.getByRole('button', { name: `打开 ${title}`, exact: true })).toHaveCount(0);
       await window.getByRole('link', { name: '大脑总览', exact: true }).click();
-      await expect(window.getByTestId('metric-pending')).toContainText('0'); await expect(window.getByTestId('metric-knowledge')).toContainText('1');
+      await expect(window.getByTestId('metric-materials')).toContainText('0'); await expect(window.getByTestId('metric-knowledge')).toContainText('1');
       await instance.close(); instance = undefined;
 
       instance = await electron.launch({ ...launchOptions, env }); window = await instance.firstWindow(); watch(window); await forbidModel(instance);
@@ -144,7 +144,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(window.getByText('已重新加入队列。', { exact: true })).toBeVisible();
       await window.getByRole('button', { name: '队列中', exact: true }).click();
       await expect(window.getByRole('button', { name: `打开 ${title}`, exact: true })).toBeVisible();
-      await window.getByRole('link', { name: '大脑总览', exact: true }).click(); await expect(window.getByTestId('metric-pending')).toContainText('1');
+      await window.getByRole('link', { name: '大脑总览', exact: true }).click(); await expect(window.getByTestId('metric-materials')).toContainText('1');
       expect(await readFile(join(vault, sourcePath))).toEqual(source); expect(await readFile(join(vault, knowledgePath))).toEqual(knowledge); expect(await readFile(join(vault, sourceFolder, '附件/证据.bin'))).toEqual(attachment);
       expect(pageErrors).toEqual([]); expect(apiFailures).toEqual([]);
     } catch (error) {

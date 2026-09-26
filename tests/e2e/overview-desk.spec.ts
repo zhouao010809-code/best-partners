@@ -20,7 +20,7 @@ test.afterEach(async ({ page }) => {
 
 async function expectMetrics(page: Page, pending: number) {
   await expect(page.getByRole('region', { name: '大脑状态摘要', exact: true })).toHaveCount(0);
-  await expect(page.getByTestId('metric-pending')).toHaveText(`${pending}`);
+  await expect(page.getByTestId('metric-materials')).toHaveText(`${pending} 份`);
   await expect(page.getByTestId('metric-knowledge')).toHaveText('已积累 6 篇知识');
   await expect(page.getByTestId('metric-knowledge')).toHaveAttribute('href', '/knowledge');
   await expect(page.getByTestId('metric-partial')).toHaveCount(0);

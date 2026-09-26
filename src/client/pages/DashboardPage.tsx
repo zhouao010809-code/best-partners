@@ -24,7 +24,6 @@ import {
   type PageResource
 } from './pageSupport.js';
 import '../styles/dashboard-desk.css';
-import { DistributionChecklist } from '../components/first-run/DistributionChecklist.js';
 
 const PAGE_LIMIT = 200;
 
@@ -36,7 +35,7 @@ type DashboardSnapshot = {
   readonly completedSources: ReadonlySet<string>;
   readonly queue?: DashboardQueue;
 };
-type DashboardQueue = { items: ExtractionQueueItem[]; counts: ExtractionQueuePage['counts']; pendingReviewCount: number };
+type DashboardQueue = { items: ExtractionQueueItem[]; counts: ExtractionQueuePage['counts'] };
 
 type MaterialItem = MaterialPage['items'][number];
 type KnowledgeItem = KnowledgePage['items'][number];
@@ -169,7 +168,7 @@ async function collectActiveQueue(api: ReadConsoleApi, signal: AbortSignal): Pro
       cursor = next;
     } while (cursor !== undefined);
   }
-  return { ok: true, value: { items, counts: counts!, pendingReviewCount: items.filter(item => item.view === 'ready' && item.reviewComplete !== true).length } };
+  return { ok: true, value: { items, counts: counts! } };
 }
 
 function queueItemHref(item: ExtractionQueueItem): string {
@@ -328,9 +327,6 @@ export function DashboardPage() {
     return <PageState state={resource.state} />;
   }
   if (data === undefined) return null;
-  const review = data.queue?.items.find(item => item.view === 'ready' && item.reviewComplete !== true);
-  const unfinished = data.queue?.items.find(item => item.view === 'unfinished');
-  const generating = data.queue?.items.find(item => item.view === 'generating');
 
   return (
     <div className="dashboard-reading-desk">
@@ -343,35 +339,18 @@ export function DashboardPage() {
         <div className="dashboard-status"><PageState state={resource.state} /></div>
       )}
 
-      {data.queue && <nav className="dashboard-next" aria-label="继续工作">
-        <header><h2>继续工作</h2><span>从上次停下的地方继续</span></header>
-        <p className="dashboard-next__explanation">把收藏的资料变成可复用的知识；“待提炼”表示还没有生成知识候选。</p>
-        {health?.model.status === 'unconfigured' && data.queue.counts.pending > 0 && (
-          <Link className="dashboard-preflight" to="/settings">开始提炼前需要配置 DeepSeek 密钥 · 去设置<ArrowUpRight aria-hidden="true" /></Link>
-        )}
-        <div className="dashboard-stage-links">
-          <Link to="/queue?view=pending">待提炼 <strong data-testid="metric-pending">{data.queue.counts.pending}</strong></Link>
-          <Link to="/queue?view=generating">提炼中 <strong>{data.queue.counts.generating}</strong></Link>
-          <Link to="/queue?view=ready&reviewState=pending">待确认 <strong>{data.queue.pendingReviewCount}</strong></Link>
-          <Link to="/queue?view=unfinished">未完成 <strong>{data.queue.counts.unfinished}</strong></Link>
-        </div>
-        <div className="dashboard-next-actions">
-          {review && <Link className="dashboard-next-card dashboard-next-card--primary" to={queueItemHref(review)}><span>继续审阅</span><strong>{review.title}</strong><small>候选已备好，确认后才会入库</small><ArrowUpRight aria-hidden="true" /></Link>}
-          {unfinished && <Link className="dashboard-next-card" to={queueItemHref(unfinished)}><span>处理未完成任务</span><strong>{unfinished.title}</strong><small>查看上次进展，再决定如何继续</small><ArrowUpRight aria-hidden="true" /></Link>}
-          {generating && <Link className="dashboard-next-card" to={queueItemHref(generating)}><span>查看提炼进度</span><strong>{generating.title}</strong><small>任务进行中，可查看状态或停止</small><ArrowUpRight aria-hidden="true" /></Link>}
-          {runtime.api.intake && <Link className="dashboard-next-card" to="/intake"><span>整理新收件</span><strong>把收藏放进大脑</strong><small>核对信息，预览后归档</small><ArrowUpRight aria-hidden="true" /></Link>}
-        </div>
-      </nav>}
-      {typeof window !== 'undefined' && window.xiaozhaoDesktop?.installClipperHost && <DistributionChecklist />}
       <div className="dashboard-workspace">
       <section className="dashboard-materials" aria-labelledby="materials-title">
         <header className="dashboard-section-heading">
-          <div><h2 id="materials-title">{data.queue ? '待处理资料' : '待提炼材料'} <span {...(data.queue ? {} : { 'data-testid': 'metric-pending' })}>{cards.length} 份</span></h2></div>
+          <div><h2 id="materials-title">{data.queue ? '待处理资料' : '待提炼材料'} <span data-testid="metric-materials">{cards.length} 份</span></h2></div>
           <div className="dashboard-heading-links">
             <Link to="/knowledge" className="dashboard-knowledge-total" data-testid="metric-knowledge" title="包含已标记为过时的知识笔记">已积累 {data.knowledge.length} 篇知识</Link>
             <Link to="/queue" className="dashboard-text-link">提炼队列 <ArrowUpRight aria-hidden="true" /></Link>
           </div>
         </header>
+        {health?.model.status === 'unconfigured' && (data.queue?.counts.pending ?? 0) > 0 && (
+          <Link className="dashboard-preflight" to="/settings">开始提炼前需要配置 DeepSeek 密钥 · 去设置<ArrowUpRight aria-hidden="true" /></Link>
+        )}
         <MaterialDeck
           appearance="showcase"
           cards={cards}

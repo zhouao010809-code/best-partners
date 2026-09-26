@@ -153,6 +153,7 @@ export function IntakePage() {
         <i aria-hidden="true" />{loading ? '正在连接' : listError ? '检测中断' : data?.available ? '正在接收' : '尚未连接'}
       </span>
       <span className="intake-toolbar__hint">自动识别 · 预览整理 · 确认后归档</span>
+      {window.xiaozhaoDesktop?.installClipperHost && <Link className="intake-clipper-link" to="/settings#browser-clipper">浏览器收藏设置<ArrowRight aria-hidden="true" /></Link>}
       <button ref={refreshButton} type="button" className="intake-refresh" aria-label="刷新收件箱" title="刷新收件箱" disabled={interactionBusy || refreshing} onClick={() => void load()}>
         <RefreshCw className={refreshing ? 'intake-spin' : undefined} aria-hidden="true" />
       </button>

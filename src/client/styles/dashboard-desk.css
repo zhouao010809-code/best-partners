@@ -7,29 +7,12 @@
   color: var(--desk-ink);
 }
 
-.dashboard-next { display: grid; gap: 15px; min-width: 0; }
-.dashboard-next > header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 14px; }
-.dashboard-next h2 { margin: 0; font-size: 21px; font-weight: 500; }
-.dashboard-next > header > span { color: var(--desk-muted); font-size: 13px; }
-.dashboard-next__explanation { margin: -4px 0 0; color: #b1b6bb; font-size: 13px; line-height: 1.7; }
-.dashboard-preflight { display: inline-flex; align-items: center; gap: 5px; width: fit-content; color: #d7c99b; font-size: 12px; text-decoration: none; }
+.dashboard-preflight { margin-bottom: 12px; display: inline-flex; align-items: center; gap: 5px; width: fit-content; color: #d7c99b; font-size: 12px; text-decoration: none; }
 .dashboard-preflight svg { width: 14px; height: 14px; }
 .dashboard-preflight:hover { color: #fff1bd; }
 .dashboard-empty-action { display: inline-flex; align-items: center; gap: 6px; width: fit-content; margin: 14px auto 0; color: #c6d0d5; font-size: 12px; text-decoration: none; }
 .dashboard-empty-action svg { width: 14px; height: 14px; }
 .dashboard-empty-action:hover { color: #fff; }
-.dashboard-stage-links { display: flex; flex-wrap: wrap; gap: 9px; }
-.dashboard-stage-links a { display: inline-flex; align-items: center; gap: 12px; padding: 8px 13px; border: 1px solid #ffffff24; border-radius: 7px; color: #c2c8cb; font-size: 13px; text-decoration: none; }
-.dashboard-stage-links strong { color: #eef0f1; font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.dashboard-next-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; }
-.dashboard-next-card { position: relative; display: grid; align-content: start; gap: 9px; min-width: 0; padding: 19px 42px 19px 18px; border: 1px solid #ffffff26; border-radius: 10px; color: #c4cbd0; background: linear-gradient(140deg, #25292c, #171a1c); text-decoration: none; }
-.dashboard-next-card--primary { border-color: #d5e3ee67; background: linear-gradient(140deg, #333b40, #1d252a); }
-.dashboard-next-card > span { font-size: 13px; }
-.dashboard-next-card > strong { color: #eef1f3; font-size: 16px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
-.dashboard-next-card > small { color: #a9b3ba; font-size: 12px; line-height: 1.6; }
-.dashboard-next-card > svg { position: absolute; right: 15px; top: 20px; width: 18px; height: 18px; }
-.dashboard-next a:hover { border-color: #cbd7df83; color: #fff; }
-.dashboard-next a:focus-visible { outline: 2px solid #e6eff5; outline-offset: 3px; }
 
 .dashboard-sr-only {
   position: absolute;

@@ -53,13 +53,13 @@ test(`${mode}: independent read-only desktop, isolated renderer and automatic re
       process: typeof (globalThis as unknown as { process?: unknown }).process,
       require: typeof (globalThis as unknown as { require?: unknown }).require,
       bridge: Object.keys((window as unknown as { xiaozhaoDesktop: object }).xiaozhaoDesktop).sort()
-    }))).toEqual({ process: 'undefined', require: 'undefined', bridge: ['checkForUpdates', 'chooseProjectDirectory', 'chooseVaultDirectory', 'getAppVersion', 'getClipperStatus', 'getVaultInfo', 'installClipperHost', 'openAssistantLogin', 'openClipperInstall', 'openUpdateDownload', 'openVaultDirectory', 'revealDocument', 'revealSkill'] });
-    await expect(window.getByTestId('metric-pending')).toContainText('1');
+    }))).toEqual({ process: 'undefined', require: 'undefined', bridge: ['cancelUpdate', 'checkForUpdates', 'chooseProjectDirectory', 'chooseVaultDirectory', 'downloadUpdate', 'getAppVersion', 'getClipperStatus', 'getUpdateState', 'getVaultInfo', 'installClipperHost', 'installUpdate', 'onUpdateState', 'openAssistantLogin', 'openClipperInstall', 'openUpdateDownload', 'openVaultDirectory', 'revealDocument', 'revealSkill'] });
+    await expect(window.getByTestId('metric-materials')).toContainText('1');
     const health = await fetch(`${origin}/api/v1/health`).then((r) => r.json());
     expect(health.data.vaultSource.adapter).toBe('filesystem');
     expect(health.data.writeGate.status).toBe('blocked');
     await writeFile(join(vaultRoot, '01图书馆/新增资料.md'), material);
-    await expect(window.getByTestId('metric-pending')).toContainText('2', { timeout: 30_000 });
+    await expect(window.getByTestId('metric-materials')).toContainText('2', { timeout: 30_000 });
     await window.evaluate(() => window.open('https://example.com'));
     expect(instance.windows()).toHaveLength(1);
     await window.evaluate(() => { location.href = 'file:///tmp/forbidden.html'; });

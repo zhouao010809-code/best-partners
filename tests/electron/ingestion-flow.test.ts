@@ -219,7 +219,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '已处理结果', exact: true }).click();
       await expect(window.getByRole('region', { name: '已处理结果列表', exact: true }).getByRole('button', { name: `打开 ${sourceTitle}`, exact: true })).toContainText('已完成取舍');
       await window.getByRole('link', { name: '大脑总览', exact: true }).click();
-      await expect(window.getByTestId('metric-pending')).toContainText('0');
+      await expect(window.getByTestId('metric-materials')).toContainText('0');
       await expect(window.getByTestId('metric-knowledge')).toContainText('1');
       await expect(window.getByRole('region', { name: '待提炼材料牌堆' }).getByRole('button', { name: new RegExp(sourceTitle, 'u') })).toHaveCount(0);
       await expect(window.getByText('暂无待提炼材料')).toBeVisible();
@@ -235,7 +235,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await instance.close(); instance = undefined;
       instance = await electron.launch({ ...launchOptions, env }); window = await instance.firstWindow();
       recordWindow(window); await installProviderFixture(instance, false);
-      await expect(window.getByTestId('metric-pending')).toContainText('0');
+      await expect(window.getByTestId('metric-materials')).toContainText('0');
       await expect(window.getByTestId('metric-knowledge')).toContainText('1');
       await window.getByRole('link', { name: '知识库', exact: true }).click();
       await window.getByLabel('搜索知识', { exact: true }).fill('学习目标');

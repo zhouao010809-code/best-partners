@@ -21,6 +21,9 @@
 .intake-connection i, .intake-history__state i { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: #5bb77a; box-shadow: 0 0 6px #5bb77a24; }
 .intake-connection--warning i { background: #dfb567; }
 .intake-toolbar__hint { color: var(--text-muted); font-size: 11px; }
+.intake-clipper-link { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 11px; white-space: nowrap; text-decoration: none; }
+.intake-clipper-link:hover { color: var(--text-primary); }
+.intake-clipper-link svg { width: 12px; height: 12px; }
 .intake-refresh { display: grid; flex: 0 0 auto; place-items: center; width: 36px; height: 34px; margin-left: auto; border: 1px solid #565654; border-radius: 3px; background: linear-gradient(140deg,#ffffff0d,#ffffff02); color: #d4d4d0; box-shadow: inset 0 1px #ffffff0d; }
 .intake-refresh:hover:not(:disabled) { border-color: #aaa; background: #ffffff12; }
 .intake-trash-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: 0 0 auto; min-height: 34px; margin-left: auto; padding: 6px 10px; border: 1px solid #565654; border-radius: 3px; background: #ffffff04; color: #bbb; font-size: 11px; }

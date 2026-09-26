@@ -10,9 +10,10 @@ describe('DistributionChecklist', () => {
       openClipperInstall: vi.fn().mockResolvedValue(undefined)
     };
     render(<DistributionChecklist bridge={bridge} />);
-    await waitFor(() => expect(screen.getByText(/文件导入和粘贴文本入口始终可用/u)).toBeVisible());
-    fireEvent.click(screen.getByRole('button', { name: '安装并配置' }));
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/安装未完成/u));
-    expect(screen.getByText(/插件不是必需条件/u)).toBeVisible();
+    await waitFor(() => expect(screen.getByText(/文件导入和粘贴文本不受影响/u)).toBeVisible());
+    fireEvent.click(screen.getByRole('button', { name: '配置连接' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/配置未完成/u));
+    expect(screen.getByRole('button', { name: '配置连接' })).toBeEnabled();
+    expect(screen.getByText(/文件导入和粘贴文本不受影响/u)).toBeVisible();
   });
 });
