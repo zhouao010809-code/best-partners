@@ -30,7 +30,15 @@ export function createUpdateController(input: Dependencies) {
   const cleanup = input.cleanup ?? ((path: string) => rm(dirname(path), { recursive: true, force: true }));
   const snapshot = (): UpdateSnapshot => structuredClone({ ...(result ? { result } : {}), transfer, automaticInstall: input.automaticInstall });
   const update = (state: UpdateTransferState) => { transfer = state; input.changed(snapshot()); };
-  const failure = () => update({ status: 'error', message: '更新下载或校验失败，请重试；也可打开下载页面。' });
+  const failure = (error?: unknown) => {
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    const message = code === 'UPDATE_CONNECTION_TIMEOUT' ? '连接更新服务器超时，请检查网络或代理后重试；也可打开下载页面。'
+      : code === 'UPDATE_FIRST_BYTE_TIMEOUT' ? '已连接更新服务器，但未收到安装包数据，请检查网络或代理后重试；也可打开下载页面。'
+      : code === 'UPDATE_DOWNLOAD_STALLED' ? '更新下载一段时间内没有收到新数据，请检查网络后重试；也可打开下载页面。'
+      : code === 'UPDATE_DOWNLOAD_TIMEOUT' ? '更新下载超过 15 分钟，请检查网络后重试；也可打开下载页面。'
+      : '更新下载或校验失败，请重试；也可打开下载页面。';
+    update({ status: 'error', message });
+  };
   const nativePending = () => transfer.status === 'downloading' && transfer.mode === 'automatic';
   const onError = () => { if (nativePending()) failure(); };
   const onDownloaded = () => {
@@ -77,7 +85,7 @@ export function createUpdateController(input: Dependencies) {
         if (id !== operation) { await cleanup(path); return; }
         installer = path; abort = undefined;
         update({ status: 'ready', version: release.version, mode: 'installer' });
-      }).catch(() => { if (id === operation) { abort = undefined; failure(); } });
+      }).catch(error => { if (id === operation) { abort = undefined; failure(error); } });
     },
     async cancelUpdate(): Promise<void> {
       if (transfer.status !== 'downloading' || transfer.mode !== 'installer') return;

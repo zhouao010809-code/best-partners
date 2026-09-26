@@ -11,6 +11,13 @@ function displayTime(value: string): string {
   }).format(date);
 }
 
+function displayBytes(bytes: number): string {
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ['KB', 'MB', 'GB'];
+  const exponent = Math.min(3, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${Number((bytes / 1024 ** exponent).toFixed(1))} ${units[exponent - 1]}`;
+}
+
 export function AppUpdates() {
   const desktop = window.xiaozhaoDesktop;
   const [snapshot, setSnapshot] = useState<UpdateSnapshot>({ transfer: { status: 'idle' }, automaticInstall: false });
@@ -81,9 +88,15 @@ export function AppUpdates() {
   const ready = transfer.status === 'ready';
   const automaticReady = ready && transfer.mode === 'automatic' && automatic;
   const errorMessage = actionError?.message ?? (transfer.status === 'error' ? transfer.message : undefined);
-  const progress = downloading && transfer.totalBytes !== undefined && transfer.totalBytes > 0
-    && transfer.receivedBytes !== undefined && Number.isFinite(transfer.totalBytes) && Number.isFinite(transfer.receivedBytes)
-    ? Math.min(100, Math.max(0, Math.floor(transfer.receivedBytes / transfer.totalBytes * 100))) : undefined;
+  const receivedBytes = downloading && transfer.receivedBytes !== undefined && Number.isFinite(transfer.receivedBytes)
+    ? Math.max(0, transfer.receivedBytes) : 0;
+  const totalBytes = downloading && transfer.totalBytes !== undefined && transfer.totalBytes > 0 && Number.isFinite(transfer.totalBytes)
+    ? transfer.totalBytes : undefined;
+  const progress = receivedBytes > 0 && totalBytes !== undefined
+    ? Math.min(100, receivedBytes / totalBytes * 100) : undefined;
+  const percentage = progress === undefined ? undefined : progress < 0.1 ? '<0.1%' : `${Number(progress.toFixed(1))}%`;
+  const downloadStatus = receivedBytes === 0 ? '正在连接下载源…'
+    : `正在下载更新${percentage === undefined ? '' : ` · ${percentage}`} · 已下载 ${displayBytes(receivedBytes)}${totalBytes === undefined ? '' : ` / ${displayBytes(totalBytes)}`}`;
 
   return <section className="settings-section settings-card settings-updates" aria-label="应用更新">
     <header className="settings-section__heading">
@@ -107,7 +120,7 @@ export function AppUpdates() {
           {canDownload && <p className="settings-updates__meta">{automatic
             ? '下载完成后，重启应用即可完成更新。' : '下载完成后打开安装包，按提示替换应用。'}</p>}
           {downloading && <div>
-            <p className="settings-feedback" role="status">{progress === undefined ? '正在下载更新…' : `正在下载更新 · ${progress}%`}</p>
+            <p className="settings-feedback" role="status">{downloadStatus}</p>
             <progress aria-label="更新下载进度" max={100} {...(progress === undefined ? {} : { value: progress })} />
           </div>}
           {ready && <p className="settings-feedback" role="status">更新已下载，版本 {transfer.version}</p>}

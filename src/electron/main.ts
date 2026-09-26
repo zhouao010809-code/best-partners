@@ -1,4 +1,4 @@
-import { app, autoUpdater, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createInitialVault, loadDesktopSettings, resolveInitialVaultSettings, saveDesktopSettings, validateDesktopVault } from './settings-store.js';
@@ -22,7 +22,8 @@ import { checkForUpdate, RELEASES_URL } from './update-check.js';
 import { validateUpdateUrl } from './update-navigation.js';
 import { createUpdateController } from './update-controller.js';
 import { supportsAutomaticUpdates } from './update-signature.js';
-import { clearPreviousUpdateDownloads } from './update-download.js';
+import { clearPreviousUpdateDownloads, downloadUpdateInstaller } from './update-download.js';
+import { createUpdateDownloadFetcher } from './update-network.js';
 
 app.setName('最佳拍档');
 let started: StartedServer | undefined;
@@ -166,12 +167,17 @@ async function bootstrap(): Promise<void> {
   const skillNavigation = createDesktopSkillNavigation({ catalog: skillCatalog, shell });
   ipcMain.handle('desktop:get-app-version', (event) => { assertMainSender(event); return app.getVersion(); });
   await clearPreviousUpdateDownloads(join(userDataDir, 'updates')).catch(() => undefined);
+  const updateCheckFetch: typeof fetch = (resource, options) => net.fetch(
+    resource instanceof URL ? resource.href : resource, { ...options, credentials: 'omit' }
+  );
+  const updateDownloadFetch = createUpdateDownloadFetcher({ request: options => net.request(options) });
   updateController = createUpdateController({
     automaticInstall: await supportsAutomaticUpdates({ packaged: app.isPackaged, platform: process.platform, arch: process.arch, executable: process.execPath }),
     native: autoUpdater,
     directory: join(userDataDir, 'updates'),
-    check: () => checkForUpdate({ currentVersion: app.getVersion(), releasesUrl: process.env.NODE_ENV === 'test'
+    check: () => checkForUpdate({ currentVersion: app.getVersion(), fetcher: updateCheckFetch, releasesUrl: process.env.NODE_ENV === 'test'
       ? (process.env.XIAOZHAO_TEST_UPDATE_FEED_URL ?? RELEASES_URL) : RELEASES_URL }),
+    download: input => downloadUpdateInstaller({ ...input, fetcher: updateDownloadFetch }),
     changed: state => { if (window && !window.isDestroyed()) window.webContents.send('desktop:update-state', state); },
     openInstaller: path => shell.openPath(path),
     requestInstall: () => { installRequested = true; setImmediate(() => app.quit()); }

@@ -85,3 +85,27 @@ it('restores the downloaded update if restart preparation fails', async () => {
   await expect(f.controller.installUpdate()).rejects.toThrow('未能重启');
   expect(f.controller.snapshot().transfer).toEqual({ status: 'ready', version: '0.1.1', mode: 'automatic' });
 });
+
+it.each([
+  ['UPDATE_CONNECTION_TIMEOUT', '连接更新服务器超时'],
+  ['UPDATE_FIRST_BYTE_TIMEOUT', '未收到安装包数据'],
+  ['UPDATE_DOWNLOAD_STALLED', '没有收到新数据'],
+  ['UPDATE_DOWNLOAD_TIMEOUT', '超过 15 分钟']
+])('explains %s without leaking diagnostic paths and permits retry', async (code, expected) => {
+  const f = fixture(); f.download.mockRejectedValueOnce(Object.assign(new Error('/private/network/secrets'), { code }));
+  await f.controller.checkForUpdates(); await f.controller.downloadUpdate(); await tick();
+  const transfer = f.controller.snapshot().transfer;
+  expect(transfer).toMatchObject({ status: 'error', message: expect.stringContaining(expected) });
+  expect(transfer).toMatchObject({ message: expect.stringContaining('重试') });
+  expect(JSON.stringify(transfer)).not.toContain('/private');
+  await f.controller.downloadUpdate(); await tick(); expect(f.controller.snapshot().transfer.status).toBe('ready');
+});
+
+it('does not show a late timeout from a cancelled download over idle or a retry', async () => {
+  const f = fixture(); let reject!: (error: Error) => void;
+  f.download.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  await f.controller.checkForUpdates(); await f.controller.downloadUpdate(); await f.controller.cancelUpdate();
+  reject(Object.assign(new Error('internal'), { code: 'UPDATE_DOWNLOAD_STALLED' })); await tick();
+  expect(f.controller.snapshot().transfer.status).toBe('idle');
+  await f.controller.downloadUpdate(); await tick(); expect(f.controller.snapshot().transfer.status).toBe('ready');
+});

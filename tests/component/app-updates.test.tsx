@@ -49,7 +49,7 @@ it('downloads an unsigned installer explicitly, reports real progress and opens 
   expect(desktop.downloadUpdate).toHaveBeenCalledTimes(1);
   await publish({ ...current, transfer: { status: 'downloading', version: available.version, mode: 'installer', receivedBytes: 250, totalBytes: 1000 } });
   expect(screen.getByRole('progressbar', { name: '更新下载进度' })).toHaveAttribute('value', '25');
-  expect(screen.getByText('正在下载更新 · 25%')).toBeVisible();
+  expect(screen.getByText('正在下载更新 · 25% · 已下载 250 B / 1000 B')).toBeVisible();
   expect(screen.getByRole('button', { name: '取消下载' })).toBeEnabled();
   await publish({ ...current, transfer: { status: 'ready', version: available.version, mode: 'installer' } });
   await user.click(screen.getByRole('button', { name: '打开安装包' }));
@@ -66,6 +66,46 @@ it('uses indeterminate progress when the updater has no total and allows cancell
   expect(desktop.cancelUpdate).toHaveBeenCalledTimes(1);
   await publish({ ...current, transfer: { status: 'idle' } });
   expect(screen.getByRole('button', { name: '下载更新' })).toBeEnabled();
+});
+
+it('shows a connecting state instead of a stationary zero percent until the first bytes arrive', async () => {
+  current.transfer = { status: 'downloading', version: available.version, mode: 'installer', receivedBytes: 0, totalBytes: 160 * 1024 * 1024 };
+  const user = userEvent.setup(); open();
+  expect(await screen.findByText('正在连接下载源…')).toBeVisible();
+  expect(screen.getByRole('progressbar', { name: '更新下载进度' })).not.toHaveAttribute('value');
+  expect(screen.queryByText(/0%/u)).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '打开安装包' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: '取消下载' }));
+  expect(desktop.cancelUpdate).toHaveBeenCalledTimes(1);
+});
+
+it('makes sub-one-percent transfers visible with byte counts and one decimal percentage', async () => {
+  current.transfer = { status: 'downloading', version: available.version, mode: 'installer', receivedBytes: 256 * 1024, totalBytes: 160 * 1024 * 1024 };
+  open();
+  expect(await screen.findByText('正在下载更新 · 0.2% · 已下载 256 KB / 160 MB')).toBeVisible();
+  expect(screen.getByRole('progressbar', { name: '更新下载进度' })).toHaveAttribute('value', '0.15625');
+  await publish({ ...current, transfer: { status: 'downloading', version: available.version, mode: 'installer', receivedBytes: 1024, totalBytes: 160 * 1024 * 1024 } });
+  expect(screen.getByText('正在下载更新 · <0.1% · 已下载 1 KB / 160 MB')).toBeVisible();
+});
+
+it('shows received bytes even when the download total is unknown', async () => {
+  current.transfer = { status: 'downloading', version: available.version, mode: 'installer', receivedBytes: 1.5 * 1024 * 1024 };
+  open();
+  expect(await screen.findByText('正在下载更新 · 已下载 1.5 MB')).toBeVisible();
+  expect(screen.getByRole('progressbar', { name: '更新下载进度' })).not.toHaveAttribute('value');
+  expect(screen.queryByText('正在连接下载源…')).not.toBeInTheDocument();
+});
+
+it('keeps the installer unavailable at one hundred percent until verification reports ready', async () => {
+  current.transfer = { status: 'downloading', version: available.version, mode: 'installer', receivedBytes: 1000, totalBytes: 1000 };
+  open();
+  expect(await screen.findByText('正在下载更新 · 100% · 已下载 1000 B / 1000 B')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '打开安装包' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '取消下载' })).toBeEnabled();
+  await publish({ ...current, transfer: { status: 'error', message: '安装包校验失败，请重试下载。' } });
+  expect(screen.getByRole('alert')).toHaveTextContent('安装包校验失败');
+  expect(screen.getByRole('button', { name: '重试下载' })).toBeEnabled();
+  expect(desktop.installUpdate).not.toHaveBeenCalled();
 });
 
 it('only offers restart installation with both automatic capability and an automatic release manifest', async () => {
