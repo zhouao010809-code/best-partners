@@ -36,3 +36,11 @@
 本机最终 `verify:fast` 通过：1,146 单元、662 集成、23 MCP、13 company MCP，共 1,844 项。
 
 最后补齐 CI 平台边界：8 项真实 macOS native 集成用例只由 macOS full gate 执行，Linux 继续运行其余 8 项附件解析测试；未删断言。本机 macOS 16/16 通过，模拟 Linux 8 通过、8 跳过且无 xcrun 调用。Electron 44 使用惰性安装，full gate 先显式初始化 Electron，以支持归档恢复的 Electron 进程测试。
+
+## 最终发布确认
+
+- [v0.1.6](https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.6) 已于 `2026-09-26T10:19:46Z` 发布为最新预览版，目标提交 `ed606ddc2402447a0421c3a6eff0af68bbb2a878`。发布前的 CI 维护提交只涉及测试、工作流和文档，应用运行时与已核验安装包一致。
+- [GitHub CI](https://github.com/zhouao010809-code/best-partners/actions/runs/36235110695) 的 Linux verify-fast 与 macOS verify-full 均通过。
+- GitHub 两个资产均 uploaded，DMG 大小及 SHA-256、校验文件摘要均与本机一致。
+- 使用生产查询函数的真实公共请求验证：0.1.5 可发现 0.1.6，安装包地址、大小、摘要正确；0.1.6 返回已是最新版本。
+- 本机最终应用在 `/Applications/最佳拍档.app`；安装包及校验文件另存 `/Users/ao/Downloads/最佳拍档-0.1.6/`。
