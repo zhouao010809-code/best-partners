@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { creationListResponseSchema, creationDetailResponseSchema, creationSuggestionResponseSchema, creationExportResponseSchema,
+  type ProjectCreation, type CreationDetail, type CreationCreate, type CreationSave, type CreationSuggestion, type CreationGenerateRequest, type CreationExport } from '../../shared/api/project-creations.js';
 import { attachmentResponseSchema, attachmentPagesResponseSchema, attachmentListResponseSchema, attachmentArchiveResponseSchema, type Attachment, type AttachmentPages, type AttachmentArchiveResult } from '../../shared/api/attachments.js';
 import { assistantDraftListResponseSchema, assistantDraftResponseSchema, assistantDraftDeleteResponseSchema, type AssistantDraft, type AssistantDraftList, type AssistantDraftSave, type AssistantDraftQuery } from '../../shared/api/assistant-drafts.js';
 import { assistantProvidersResponseSchema, assistantConversationResponseSchema, assistantHistoryResponseSchema, assistantLoginResponseSchema,
@@ -136,6 +138,15 @@ export interface KnowledgeQuery {
 }
 
 export interface ReadConsoleApi {
+  readonly creations?: {
+    list(projectId: string, signal?: AbortSignal): Promise<ApiClientResult<{ items: ProjectCreation[] }>>;
+    get(projectId: string, id: string, signal?: AbortSignal): Promise<ApiClientResult<CreationDetail>>;
+    create(projectId: string, input: CreationCreate): Promise<ApiClientResult<CreationDetail>>;
+    save(projectId: string, id: string, input: CreationSave): Promise<ApiClientResult<CreationDetail>>;
+    snapshot(projectId: string, id: string, input: { expectedRevision: number; finalize: boolean }): Promise<ApiClientResult<CreationDetail>>;
+    exportVersion(projectId: string, id: string, versionId: string): Promise<ApiClientResult<CreationExport>>;
+    suggest(projectId: string, input: CreationGenerateRequest, signal?: AbortSignal): Promise<ApiClientResult<CreationSuggestion>>;
+  };
   readonly skills?: {
     list(signal?: AbortSignal): Promise<ApiClientResult<SkillsPage>>;
     get(id: string, signal?: AbortSignal): Promise<ApiClientResult<SkillDetail>>;
@@ -457,7 +468,17 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
     return result;
   }
 
+  const creationsPath = (projectId: string, id?: string) => `/api/v1/projects/${encodeURIComponent(projectId)}/creations${id ? `/${encodeURIComponent(id)}` : ''}`;
   return {
+    creations: {
+      list: (p, signal) => requestData(fetcher, creationsPath(p), creationListResponseSchema, getInit(signal)),
+      get: (p, id, signal) => requestData(fetcher, creationsPath(p, id), creationDetailResponseSchema, getInit(signal)),
+      create: (p, input) => postWithCsrf(creationsPath(p), creationDetailResponseSchema, input),
+      save: (p, id, input) => writeWithCsrf(creationsPath(p, id), creationDetailResponseSchema, 'PUT', JSON.stringify(input)),
+      snapshot: (p, id, input) => postWithCsrf(`${creationsPath(p, id)}/versions`, creationDetailResponseSchema, input),
+      exportVersion: (p, id, versionId) => postWithCsrf(`${creationsPath(p, id)}/versions/${encodeURIComponent(versionId)}/export`, creationExportResponseSchema, {}),
+      suggest: (p, input, signal) => postWithCsrf(`/api/v1/projects/${encodeURIComponent(p)}/creation-suggestions`, creationSuggestionResponseSchema, input, undefined, signal)
+    },
     skills: {
       list: signal => requestData(fetcher, '/api/v1/skills', skillsResponseSchema, getInit(signal)),
       get: (id, signal) => requestData(fetcher, `/api/v1/skills/${encodeURIComponent(id)}`, skillResponseSchema, getInit(signal)),

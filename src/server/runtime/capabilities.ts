@@ -1,3 +1,4 @@
+import type { ProjectCreationService } from '../../shared/api/project-creations.js';
 import type Database from 'better-sqlite3';
 import type { AssistantAdapter } from '../assistant/types.js';
 import type { AttachmentService } from '../attachments/service.js';
@@ -36,6 +37,7 @@ export interface RuntimePersonalCapabilities {
   readonly skillCatalog?: SkillCatalogService;
   readonly projectService?: ProjectService;
   readonly projectWritePlans?: ProjectWritePlanService;
+  readonly projectCreations?: ProjectCreationService;
 }
 
 export interface RuntimeAssistantCapabilities {
@@ -72,6 +74,7 @@ export interface RuntimeCapabilityHost {
   readonly skillCatalog?: SkillCatalogService;
   readonly projectService?: ProjectService;
   readonly projectWritePlans?: ProjectWritePlanService;
+  readonly projectCreations?: ProjectCreationService;
 }
 
 /**
@@ -101,6 +104,7 @@ export function applyRuntimeCapabilities<T extends RuntimeCapabilityHost>(option
     trashService: personal?.trashService,
     skillCatalog: personal?.skillCatalog,
     projectService: personal?.projectService,
-    projectWritePlans: personal?.projectWritePlans
+    projectWritePlans: personal?.projectWritePlans,
+    projectCreations: personal?.projectCreations
   } as T;
 }

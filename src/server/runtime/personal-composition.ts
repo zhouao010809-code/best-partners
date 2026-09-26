@@ -1,3 +1,5 @@
+import { createProjectCreationService } from '../projects/project-creations.js';
+import type { ProjectCreationService } from '../../shared/api/project-creations.js';
 import { basename, join } from 'node:path';
 import { openStateKernel } from '../db/database.js';
 import { type IndexRefreshAttempt } from '../index/index-scheduler.js';
@@ -52,6 +54,7 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
   let skillCatalog: SkillCatalogService | undefined;
   let projectService: (ProjectService & { close(): Promise<void> }) | undefined;
   let projectWritePlans: ProjectWritePlanService | undefined;
+  let projectCreations: ProjectCreationService | undefined;
   const intakeMutation = createIntakeMutationGate();
 
   try {
@@ -60,6 +63,7 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
       const ownedProject = projectService;
       disposer.add(() => ownedProject.close());
       projectWritePlans = createProjectWritePlanService({ database: kernel.db });
+      projectCreations = createProjectCreationService({ database: kernel.db });
     }
     // Register lifecycle phases before acquiring their resources. On both
     // startup failure and shutdown, consumers finish before the index scheduler,
@@ -173,7 +177,8 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
         ...(trashService ? { trashService } : {}),
         ...(skillCatalog ? { skillCatalog } : {}),
         ...(projectService ? { projectService } : {}),
-        ...(projectWritePlans ? { projectWritePlans } : {})
+        ...(projectWritePlans ? { projectWritePlans } : {}),
+        ...(projectCreations ? { projectCreations } : {})
       },
       ...(assistantAdapters === undefined ? {} : { assistant: { adapters: assistantAdapters } })
     };

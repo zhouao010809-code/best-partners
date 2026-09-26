@@ -1,3 +1,7 @@
+import { registerProjectCreationRoutes } from './routes/project-creations.js';
+import { createCreationAssistant } from '../projects/creation-assistant.js';
+import { PublicApiError } from '../../shared/api/errors.js';
+import type { CreationGenerator, CreationSuggestion } from '../../shared/api/project-creations.js';
 import type { FastifyInstance } from 'fastify';
 import type { BuildServerOptions } from '../app.js';
 import type { CompanyRuntime } from '../company/company-runtime.js';
@@ -79,7 +83,36 @@ export function registerApplicationRoutes(input: ApplicationRouteRegistryInput):
       return rows.flat();
     } : undefined });
   registerIndexJobRoutes(app, indexJobs);
-  if (runtimeMode === 'personal') registerProjectRoutes(app, options.projectService, options.projectWritePlans);
+  if (runtimeMode === 'personal') {
+    registerProjectRoutes(app, options.projectService, options.projectWritePlans);
+    const adapter = options.assistantAdapters?.find(value => value.id === 'deepseek');
+    const creations = options.projectCreations;
+    let generate: CreationGenerator | undefined;
+    if (adapter && creations && options.projectService && options.projectWritePlans) {
+      const writer = createCreationAssistant({ adapter, projectService: options.projectService, projectWritePlans: options.projectWritePlans, ...(readService ? { readService } : {}) });
+      const shutdown = new AbortController();
+      const pending = new Map<string, Promise<CreationSuggestion>>();
+      generate = (projectId, request, signal) => {
+        const key = `${projectId}:${request.itemId ?? 'topics'}`;
+        if (pending.has(key)) throw new PublicApiError('CREATION_BUSY', '这条内容正在生成建议，请等本次完成或停止后重试。', 409);
+        if (pending.size >= 4) throw new PublicApiError('CREATION_BUSY', '当前创作任务较多，请稍后重试。', 409);
+        const active = AbortSignal.any([shutdown.signal, AbortSignal.timeout(300_000), ...(signal ? [signal] : [])]);
+        const done = (async () => {
+          active.throwIfAborted();
+          const detail = request.itemId ? await creations.get(projectId, request.itemId) : undefined;
+          const suggestion = await writer.generate(projectId, request, detail?.item, active, detail?.messages);
+          active.throwIfAborted();
+          if (request.itemId) await creations.recordExchange(projectId, request.itemId, { instruction: request.instruction, suggestion });
+          return suggestion;
+        })();
+        pending.set(key, done);
+        void done.then(() => pending.delete(key), () => pending.delete(key));
+        return done;
+      };
+      app.addHook('preClose', async () => { shutdown.abort(); await Promise.allSettled(pending.values()); });
+    }
+    registerProjectCreationRoutes(app, creations, generate);
+  }
   if (companyRuntime !== undefined) {
     registerCompanyAuthRoutes(app, {
       auth: companyRuntime.auth,

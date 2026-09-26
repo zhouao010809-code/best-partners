@@ -33,7 +33,8 @@ function initialMigrations(): readonly Migration[] {
     },
     { version: 19, sql: readFileSync(bundledMigrationPath('019_company_project_skill_bindings.sql'), 'utf8') },
     { version: 20, sql: readFileSync(bundledMigrationPath('020_company_platform_metrics.sql'), 'utf8') },
-    { version: 21, sql: readFileSync(bundledMigrationPath('021_personal_projects.sql'), 'utf8') }
+    { version: 21, sql: readFileSync(bundledMigrationPath('021_personal_projects.sql'), 'utf8') },
+    { version: 22, sql: readFileSync(bundledMigrationPath('022_project_creations.sql'), 'utf8') }
   ];
 }
 

@@ -101,6 +101,8 @@ for (const mode of ['development', 'packaged'] as const) {
       const update = status.getByRole('button', { name: '更新资料', exact: true });
       const ask = window.getByRole('button', { name: '问问这个项目', exact: true });
       const panel = window.getByRole('complementary', { name: '问问 AI' });
+      await expect(panel).toBeHidden();
+      await ask.click();
       await expect(panel).toBeVisible();
       await expect(panel.getByRole('heading', { name: '项目问问', exact: true })).toBeVisible();
       await expect(panel.getByText('A项目', { exact: true })).toHaveCount(1);
@@ -119,6 +121,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await panel.getByRole('button', { name: '关闭问问', exact: true }).click();
       await expect(panel).toBeHidden();
 
+      await window.getByRole('tab', { name: '项目资料', exact: true }).click();
       const files = window.getByRole('region', { name: '项目资料与产出', exact: true });
       const sourceTab = files.getByRole('tab', { name: /^项目资料/u });
       const outputTab = files.getByRole('tab', { name: /^已保存产出/u });

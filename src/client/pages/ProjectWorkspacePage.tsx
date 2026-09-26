@@ -5,6 +5,7 @@ import type { ApiClientResult } from '../api/client.js';
 import type { ProjectScanPreview, ProjectSummary } from '../../shared/api/projects.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { ProjectBindPreview } from '../components/projects/ProjectBindPreview.js';
+import { ProjectWorkbench } from '../components/projects/ProjectWorkbench.js';
 import { ProjectFilesPanel } from '../components/projects/ProjectFilesPanel.js';
 import { ProjectStatusCard } from '../components/projects/ProjectStatusCard.js';
 import { PageState } from '../components/PageState.js';
@@ -188,13 +189,13 @@ export function ProjectWorkspacePage() {
     <section className="projects-page project-workspace" aria-labelledby="project-workspace-title">
       <Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link>
       <header className="projects-page__heading project-workspace__heading">
-        <div><h1 id="project-workspace-title"><FolderKanban size={24} aria-hidden="true" />{project.displayName}</h1><p>查看项目资料，让问问帮你梳理重点、查找信息和起草内容。</p></div>
-        <button type="button" className="projects-button projects-button--primary" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}><MessageCircle size={16} aria-hidden="true" />问问这个项目</button>
+        <div><h1 id="project-workspace-title"><FolderKanban size={24} aria-hidden="true" />{project.displayName}</h1><p>根据项目资料策划选题，写脚本，和问问一起打磨。</p></div>
+        <button type="button" className="projects-button projects-button--quiet" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}><MessageCircle size={16} aria-hidden="true" />问问这个项目</button>
       </header>
       {message !== undefined && <p className="projects-inline-message" role="status">{message}</p>}
       {staleNotice && <p className="project-stale-notice" role="status"><ShieldCheck size={15} aria-hidden="true" />重新连接后，旧的项目写入计划不会自动执行；请重新确认当前资料。</p>}
       <ProjectStatusCard project={project} onRefresh={() => void refreshProject()} onReconnect={() => void beginReconnect()} refreshing={refreshing} reconnecting={reconnecting} {...(project.availability === 'reconnect-required' ? { message: '请重新选择原项目文件夹或它的新位置。' } : {})} />
-      <ProjectFilesPanel key={`${project.id}:${filesRefreshVersion}`} api={api} projectId={project.id} revision={project.sourceRevision} onAsk={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })} />
+      <ProjectWorkbench key={project.id} api={api} projectId={project.id} files={<ProjectFilesPanel key={`${project.id}:${filesRefreshVersion}`} api={api} projectId={project.id} revision={project.sourceRevision} onAsk={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })} />} />
     </section>
   );
 }

@@ -1,3 +1,4 @@
+import type { ProjectCreationService } from '../shared/api/project-creations.js';
 import Fastify from 'fastify';
 import type Database from 'better-sqlite3';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -149,6 +150,7 @@ export interface BuildServerOptions {
   readonly skillCatalog?: SkillCatalogService;
   readonly projectService?: ProjectService;
   readonly projectWritePlans?: ProjectWritePlanService;
+  readonly projectCreations?: ProjectCreationService;
   /**
    * Embedded composition owns service shutdown when this is false. Standalone
    * callers keep the historical app-owned lifecycle by default.

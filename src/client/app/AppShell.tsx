@@ -560,7 +560,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
   }, []);
   useEffect(() => {
     if (projectRouteId !== undefined && previousProjectRouteId.current !== projectRouteId) {
-      setAssistantOpen(true);
+      setAssistantOpen(false);
     }
     previousProjectRouteId.current = projectRouteId;
   }, [projectRouteId]);
@@ -647,7 +647,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
         <header className="workspace-bar">
           <div className="workspace-bar__context">
             <Activity aria-hidden="true" />
-            <span>{location.pathname.startsWith('/projects/') ? '项目工作区 · 项目问问' : location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
+            <span>{location.pathname.startsWith('/projects/') ? '项目工作区 · 创作工作台' : location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
           </div>
           <div className="workspace-bar__actions"><div className={`workspace-bar__status${quietOverview ? ' workspace-bar__status--quiet' : ''}`} role="status" aria-label="索引运行状态" title={indexStatus}>
             <CircleDot aria-hidden="true" />
