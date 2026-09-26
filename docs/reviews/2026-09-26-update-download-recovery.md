@@ -34,3 +34,5 @@
 第二轮 CI 中 macOS 的 1,146 项单元测试已全过；干净环境的附件集成测试暴露出未预先构建 personal-archive.node，现由 CI 先构建。Linux 目录替换测试的夹具改为移走并保留旧目录，防止 inode 立即复用，保留原安全断言；本机 11 项通过。最终云端结果以本节后续发布记录为准。
 
 本机最终 `verify:fast` 通过：1,146 单元、662 集成、23 MCP、13 company MCP，共 1,844 项。
+
+最后补齐 CI 平台边界：8 项真实 macOS native 集成用例只由 macOS full gate 执行，Linux 继续运行其余 8 项附件解析测试；未删断言。本机 macOS 16/16 通过，模拟 Linux 8 通过、8 跳过且无 xcrun 调用。Electron 44 使用惰性安装，full gate 先显式初始化 Electron，以支持归档恢复的 Electron 进程测试。

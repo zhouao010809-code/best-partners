@@ -11,6 +11,9 @@ import { createIntakeService } from '../../src/server/services/intake-service.js
 import { readFileSync, unlinkSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseLibraryNote } from '../../src/server/rules/library-schema.js';
+// The macOS full CI gate covers real native archive transactions; parsing stays cross-platform.
+const itWithNativeArchive = it.runIf(process.platform === 'darwin' && process.arch === 'arm64');
+
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 async function fixture() {
@@ -64,7 +67,7 @@ it('resumes a parse interrupted by closing the service and retains its stable up
   const reopened = createAttachmentService({ directory: f.directory }); cleanups.push(() => reopened.close()); await reopened.ready(); await reopened.waitForParsing(item.id);
   expect(reopened.get(item.id).status).toBe('ready'); expect(reopened.list().map(item => item.id)).toEqual([item.id]);
 });
-it('archives a real PDF through native intake, preserves pages and reuses the operation after reopening', async () => {
+itWithNativeArchive('archives a real PDF through native intake, preserves pages and reuses the operation after reopening', async () => {
   const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
@@ -94,7 +97,7 @@ it('archives a real PDF through native intake, preserves pages and reuses the op
   const missingOriginalCopy = await reopened.upload({ name: 'third.pdf', bytes: pdf, uploadId: randomUUID(), groupId: randomUUID() }); await reopened.waitForParsing(missingOriginalCopy.id);
   await expect(reopened.archive({ id: missingOriginalCopy.id })).rejects.toThrow('原件'); expect(port.listRecovery()).toEqual(afterVersionJournals);
 });
-it('previews an archive without changing the ledger, staging, vault, or original bytes', async () => {
+itWithNativeArchive('previews an archive without changing the ledger, staging, vault, or original bytes', async () => {
   const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
@@ -120,7 +123,7 @@ it('previews an archive without changing the ledger, staging, vault, or original
   await expect(service.archive({ id: uploaded.id }, undefined, first)).rejects.toThrow('重新生成预览');
   expect(service.get(uploaded.id).archive).toBeUndefined(); expect(port.listRecovery()).toEqual(beforeRecovery); expect(port.stat(first.target)).toBeNull();
 });
-it('retains uploaded Markdown bytes and its source metadata when creating the derived archive note', async () => {
+itWithNativeArchive('retains uploaded Markdown bytes and its source metadata when creating the derived archive note', async () => {
   const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
@@ -131,7 +134,7 @@ it('retains uploaded Markdown bytes and its source metadata when creating the de
   expect(readFileSync(join(vault.root, result.target, '附件/原件.md'))).toEqual(bytes);
   const note = readFileSync(join(vault.root, result.materialPath), 'utf8'); expect(note).toContain('原始作者'); expect(note).toContain('https://example.test/article'); expect(note).toContain('原始标题'); expect(note).toContain(`<!-- xiaozhao-page:${uploaded.sha256}:1 -->`);
 });
-it('recovers the existing intake operation when the archive result is lost before its receipt', async () => {
+itWithNativeArchive('recovers the existing intake operation when the archive result is lost before its receipt', async () => {
   const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
@@ -143,7 +146,7 @@ it('recovers the existing intake operation when the archive result is lost befor
   const result = await reopened.archive({ id: uploaded.id }); expect(result.state).toBe('archived'); expect(port.listRecovery()).toEqual(journals);
   expect(readFileSync(join(vault.root, result.target, '附件/原件.txt'), 'utf8')).toBe('KEPT ORIGINAL');
 });
-it('does not begin an intake transaction if stopped while commit awaits the current rules', async () => {
+itWithNativeArchive('does not begin an intake transaction if stopped while commit awaits the current rules', async () => {
   const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   let rulesCalls = 0, release!: () => void, reached!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; }), inCommit = new Promise<void>(resolve => { reached = resolve; });

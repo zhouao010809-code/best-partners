@@ -10,6 +10,9 @@ import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js'
 import { FileSystemVaultGateway } from '../../src/server/vault/FileSystemVaultGateway.js';
 import { createNativeReadVaultPortFactory } from '../../src/server/vault/NativeReadVaultPort.js';
 
+// The macOS full CI gate exercises the real helper; Linux fast has no xcrun toolchain.
+const itWithNativeRead = it.runIf(process.platform === 'darwin' && process.arch === 'arm64');
+
 let workspace: string;
 let helperPath: string;
 let clientRoot: string;
@@ -71,7 +74,7 @@ async function paths(server: StartedServer) {
   return body.data.items.map((item) => item.path);
 }
 
-it('never returns A rows when B uses the same desktop settings directory but its first scan stalls or fails', async () => {
+itWithNativeRead('never returns A rows when B uses the same desktop settings directory but its first scan stalls or fails', async () => {
   const userDataDir = join(workspace, 'shared-user-data');
   const first = await createVault('vault-a', 'A-only');
   const a = await launch(first, userDataDir);
@@ -104,7 +107,7 @@ it('never returns A rows when B uses the same desktop settings directory but its
   await resumed.server.close();
 });
 
-it('uses a fresh namespace when a new directory replaces the old vault at the exact same path', async () => {
+itWithNativeRead('uses a fresh namespace when a new directory replaces the old vault at the exact same path', async () => {
   const userDataDir = join(workspace, 'replacement-user-data');
   const original = await createVault('same-path-vault', 'original-only');
   const a = await launch(original, userDataDir);

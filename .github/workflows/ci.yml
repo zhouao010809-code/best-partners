@@ -43,6 +43,7 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
+      - run: node node_modules/electron/install.js
       - run: npm run build:personal-archive
       - run: npm run verify:full
       - if: failure()

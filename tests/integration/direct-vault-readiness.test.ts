@@ -9,6 +9,9 @@ import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js'
 import { FileSystemVaultGateway } from '../../src/server/vault/FileSystemVaultGateway.js';
 import { createNativeReadVaultPortFactory } from '../../src/server/vault/NativeReadVaultPort.js';
 
+// The macOS full CI gate exercises the real helper; Linux fast has no xcrun toolchain.
+const itWithNativeRead = it.runIf(process.platform === 'darwin' && process.arch === 'arm64');
+
 let workspace: string;
 let server: StartedServer;
 let gateway: FileSystemVaultGateway;
@@ -46,7 +49,7 @@ async function health() {
   };
 }
 
-it('reflects missing rules, required folders and root identity after startup without rereading notes or rebuilding', async () => {
+itWithNativeRead('reflects missing rules, required folders and root identity after startup without rereading notes or rebuilding', async () => {
   const reads = vi.spyOn(gateway, 'readRaw');
   const lists = vi.spyOn(gateway, 'listDirectory');
   const before = await health();
