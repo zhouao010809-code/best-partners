@@ -8,7 +8,8 @@ export function creationError(result: ApiClientResult<unknown>, fallback = 'Êìç‰
 }
 export function editable(item: ProjectCreation): Omit<CreationSave, 'expectedRevision'> {
   const { kind, title, brief, body, audience, angle, rationale, sources } = item;
-  return { kind, title, brief, body, audience, angle, rationale, sources };
+  return { kind, title, brief, body, audience, angle, rationale, sources,
+    referenceSelection: item.referenceSelection ?? { mode: 'auto', paths: [] } };
 }
 export const draftFingerprint = (item: ProjectCreation) => JSON.stringify(editable(item));
 const recoveryOwners = new Map<string, symbol>();

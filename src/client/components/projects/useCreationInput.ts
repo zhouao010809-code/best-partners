@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 
 /** Retains an unsent request across the settings round-trip on the current local connection. */
-export function useCreationInput(key: string) {
+export function useCreationInput(key: string, maxLength = 4000) {
   const state = useState(() => {
-    try { return (localStorage.getItem(key) ?? '').slice(0, 4000); } catch { return ''; }
+    try { return (localStorage.getItem(key) ?? '').slice(0, maxLength); } catch { return ''; }
   });
   const [text] = state;
   useEffect(() => {

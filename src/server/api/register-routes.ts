@@ -89,7 +89,7 @@ export function registerApplicationRoutes(input: ApplicationRouteRegistryInput):
     const creations = options.projectCreations;
     let generate: CreationGenerator | undefined;
     if (adapter && creations && options.projectService && options.projectWritePlans) {
-      const writer = createCreationAssistant({ adapter, projectService: options.projectService, projectWritePlans: options.projectWritePlans, ...(readService ? { readService } : {}) });
+      const writer = createCreationAssistant({ adapter, projectService: options.projectService, projectWritePlans: options.projectWritePlans, getProfileContext: projectId => creations.getProfileContext(projectId), ...(readService ? { readService } : {}) });
       const shutdown = new AbortController();
       const pending = new Map<string, Promise<CreationSuggestion>>();
       generate = (projectId, request, signal) => {

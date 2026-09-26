@@ -60,6 +60,21 @@ function fixture(items = [creation()]) {
   return { api, stored, get, list, save, snapshot, snapshotValue, suggest };
 }
 
+function projectFiles(api: ReadConsoleApi) {
+  const source = { relativePath: '采访/本次采访.md', kind: 'file' as const, parseStatus: 'readable' as const, origin: 'source' as const };
+  Object.assign(api, { projects: {
+    files: vi.fn(async () => ok({ items: [source], total: 1, revision: 1 })),
+    file: vi.fn(async () => ok({ ...source, content: '真实采访资料' }))
+  } });
+}
+
+async function selectInterview() {
+  fireEvent.click(screen.getByRole('button', { name: /本条参考资料/u }));
+  fireEvent.click(screen.getByRole('radio', { name: '只用所选资料' }));
+  fireEvent.click(await screen.findByRole('checkbox', { name: '采访/本次采访.md' }));
+  fireEvent.click(screen.getByRole('button', { name: '应用资料选择' }));
+}
+
 function editor(f: ReturnType<typeof fixture>) {
   return render(<MemoryRouter><CreationEditor api={f.api} projectId={projectId} id={firstId} onBack={vi.fn()} onSaved={vi.fn()} onOpen={vi.fn()} /></MemoryRouter>);
 }
@@ -70,6 +85,50 @@ async function ready() {
 
 beforeEach(() => { localStorage.clear(); });
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); });
+
+it('autosaves a changed source scope and prevents adopting the suggestion for the old scope', async () => {
+  const f = fixture(); projectFiles(f.api);
+  editor(f); await ready();
+  fireEvent.click(screen.getByRole('button', { name: '根据资料起草' }));
+  expect(await screen.findByRole('button', { name: '采用到正文' })).toBeEnabled();
+  await selectInterview();
+  expect(screen.getByRole('button', { name: '采用到正文' })).toBeDisabled();
+  expect(screen.getByRole('textbox', { name: '脚本正文' })).toHaveValue(originalBody);
+  await waitFor(() => expect(f.stored.get(firstId)!.item.referenceSelection).toEqual({ mode: 'selected', paths: ['采访/本次采访.md'] }));
+  expect(f.stored.get(firstId)!.item.body).toBe(originalBody);
+});
+
+it('rejects an old suggestion when the saved project creative profile changes', async () => {
+  const f = fixture(); f.suggest.mockResolvedValue(ok(suggestion({ profileRevision: 1 })));
+  const renderEditor = (revision: number) => <MemoryRouter><CreationEditor api={f.api} projectId={projectId} id={firstId} profileRevision={revision} onBack={vi.fn()} onSaved={vi.fn()} onOpen={vi.fn()} /></MemoryRouter>;
+  const ui = render(renderEditor(1)); await ready();
+  fireEvent.click(screen.getByRole('button', { name: '根据资料起草' }));
+  expect(await screen.findByRole('button', { name: '采用到正文' })).toBeEnabled();
+  ui.rerender(renderEditor(2));
+  expect(screen.getByRole('button', { name: '采用到正文' })).toBeDisabled();
+  expect(screen.getByText(/项目创作档案已更新/u)).toBeVisible();
+  expect(screen.getByRole('textbox', { name: '脚本正文' })).toHaveValue(originalBody);
+});
+
+it('saves generated topics with the submitted instructions and reference scope while preserving newer input', async () => {
+  const f = fixture(); projectFiles(f.api);
+  const pending = deferred<ApiClientResult<CreationSuggestion>>(); f.suggest.mockReturnValue(pending.promise);
+  const create = vi.fn(async (_p: string, input: Record<string, unknown>) => ok({ item: { ...creation(randomUUID()), ...input }, versions: [], messages: [] }));
+  Object.assign(f.api.creations!, { create });
+  render(<MemoryRouter><ProjectWorkbench api={f.api} projectId={projectId} files={<p>资料</p>} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '策划选题' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '选题要求' }), { target: { value: '本次采访找选题' } });
+  await selectInterview();
+  fireEvent.click(screen.getByRole('button', { name: '根据资料策划' }));
+  await waitFor(() => expect(f.suggest).toHaveBeenCalledOnce());
+  expect(f.suggest.mock.calls[0]![1]).toMatchObject({ instruction: '本次采访找选题', referenceSelection: { mode: 'selected', paths: ['采访/本次采访.md'] } });
+  fireEvent.change(screen.getByRole('textbox', { name: '选题要求' }), { target: { value: '下一批新的要求' } });
+  await act(async () => pending.resolve(ok({ id: randomUUID(), task: 'topics', reply: '候选角度', topics: [{ title: '从采访出发', audience: '家长', angle: '真实问题', rationale: '采访依据' }], sources: [], createdAt: timestamp })));
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  expect(create.mock.calls[0]![1]).toMatchObject({ brief: '本次采访找选题', referenceSelection: { mode: 'selected', paths: ['采访/本次采访.md'] } });
+  fireEvent.click(screen.getByRole('button', { name: '策划选题' }));
+  expect(screen.getByRole('textbox', { name: '选题要求' })).toHaveValue('下一批新的要求');
+});
 
 it('keeps a manual edit made while AI is running and refuses the late suggestion before adopting anything', async () => {
   const f = fixture();
@@ -251,4 +310,69 @@ it('does not revive an old AI suggestion against newer unsaved recovery text tha
   expect(screen.queryByRole('button', { name: '采用到正文' })).not.toBeInTheDocument();
   expect(f.suggest).not.toHaveBeenCalled();
   await waitFor(() => expect(f.stored.get(firstId)!.item.body).toBe(recoveredBody));
+});
+
+
+it('does not save planned topics from an outdated project profile', async () => {
+  const f = fixture([]); const user = userEvent.setup();
+  const late = deferred<ApiClientResult<CreationSuggestion>>();
+  const profile = { projectId, revision: 1, audience: '', goal: '', style: '', facts: '', avoid: '', samples: [] };
+  const create = vi.fn();
+  Object.assign(f.api.creations!, {
+    getProfile: vi.fn(async () => ok(profile)),
+    saveProfile: vi.fn(async () => ok({ ...profile, revision: 2, audience: '新的受众' })),
+    create
+  });
+  f.suggest.mockReturnValueOnce(late.promise);
+  render(<MemoryRouter><ProjectWorkbench api={f.api} projectId={projectId} files={<p>资料</p>} /></MemoryRouter>);
+  await user.click(await screen.findByRole('button', { name: '策划选题' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '选题要求' }), { target: { value: '策划短视频' } });
+  await user.click(screen.getByRole('button', { name: '根据资料策划' }));
+  await waitFor(() => expect(f.suggest).toHaveBeenCalledOnce());
+  await user.click(screen.getByRole('button', { name: /项目创作档案/u }));
+  fireEvent.change(screen.getByLabelText('受众'), { target: { value: '新的受众' } });
+  await user.click(screen.getByRole('button', { name: '保存项目档案' }));
+  await screen.findByText('项目档案已保存，后续创作会使用这一版。');
+  await act(async () => late.resolve(ok(suggestion({ task: 'topics', profileRevision: 1, topics: [{ title: '旧受众选题', audience: '', angle: '', rationale: '' }] }))));
+  expect(await screen.findByRole('alert')).toHaveTextContent('项目创作档案已变化');
+  expect(create).not.toHaveBeenCalled();
+});
+
+
+it('invalidates a legacy saved suggestion after a creative profile is introduced', async () => {
+  const f = fixture();
+  const old = suggestion({ body: '升级前的建议，不含档案版本。' });
+  f.stored.get(firstId)!.messages = [{ id: randomUUID(), instruction: '旧创作要求', suggestion: old, createdAt: timestamp }];
+  const renderEditor = (revision: number) => <MemoryRouter><CreationEditor api={f.api} projectId={projectId} id={firstId} profileRevision={revision} onBack={vi.fn()} onSaved={vi.fn()} onOpen={vi.fn()} /></MemoryRouter>;
+  const ui = render(renderEditor(0)); await ready();
+  expect(await screen.findByRole('button', { name: '采用到正文' })).toBeEnabled();
+  ui.rerender(renderEditor(1));
+  expect(screen.getByRole('button', { name: '采用到正文' })).toBeDisabled();
+  expect(screen.getByRole('textbox', { name: '脚本正文' })).toHaveValue(originalBody);
+});
+
+
+it('stops the remaining topic saves if the profile changes during an earlier save', async () => {
+  const f = fixture([]); const user = userEvent.setup();
+  const firstSave = deferred<ApiClientResult<CreationDetail>>();
+  const profile = { projectId, revision: 1, audience: '', goal: '', style: '', facts: '', avoid: '', samples: [] };
+  const create = vi.fn().mockReturnValue(firstSave.promise);
+  Object.assign(f.api.creations!, {
+    getProfile: vi.fn(async () => ok(profile)),
+    saveProfile: vi.fn(async () => ok({ ...profile, revision: 2, audience: '新的受众' })), create
+  });
+  f.suggest.mockResolvedValueOnce(ok(suggestion({ task: 'topics', profileRevision: 1, topics: [1, 2].map(n => ({ title: `角度${n}`, audience: '', angle: '', rationale: '' })) })));
+  render(<MemoryRouter><ProjectWorkbench api={f.api} projectId={projectId} files={<p>资料</p>} /></MemoryRouter>);
+  await user.click(await screen.findByRole('button', { name: '策划选题' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '选题要求' }), { target: { value: '策划短视频' } });
+  await user.click(screen.getByRole('button', { name: '根据资料策划' }));
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  await user.click(screen.getByRole('button', { name: /项目创作档案/u }));
+  fireEvent.change(screen.getByLabelText('受众'), { target: { value: '新的受众' } });
+  await user.click(screen.getByRole('button', { name: '保存项目档案' }));
+  await screen.findByText('项目档案已保存，后续创作会使用这一版。');
+  await act(async () => firstSave.resolve(ok({ item: { ...creation(), kind: 'topic', title: '角度1' }, versions: [], messages: [] })));
+  expect(await screen.findByRole('alert')).toHaveTextContent('已保存 1 条选题');
+  expect(screen.getByRole('alert')).toHaveTextContent('剩余选题未保存');
+  expect(create).toHaveBeenCalledOnce();
 });

@@ -98,3 +98,18 @@ it('aborts pending generation before shutdown and does not record an incomplete 
   expect((await response).statusCode).toBeGreaterThanOrEqual(400);
   expect(await f.creations.get(f.project.id, created.item.id)).toEqual(created);
 }, 10_000);
+
+
+it('retains session and CSRF checks for profile saves and keeps personal profiles out of the company runtime', async () => {
+  const f = await fixture(); const url = `/api/v1/projects/${f.project.id}/creative-profile`;
+  const payload = { audience: '家长', goal: '', style: '', facts: '', avoid: '', samples: [], expectedRevision: 0 };
+  expect((await f.app.inject({ method: 'PUT', url, headers, payload })).statusCode).toBe(401);
+  expect((await f.app.inject({ method: 'PUT', url, headers: { ...headers, cookie: f.cookie }, payload })).statusCode).toBe(403);
+  expect((await f.app.inject({ url, headers })).json().data.revision).toBe(0);
+  expect((await f.app.inject({ method: 'PUT', url, headers: f.auth, payload })).statusCode).toBe(200);
+  expect((await f.app.inject({ url, headers })).json().data).toMatchObject({ audience: '家长', revision: 1 });
+  expect(f.run).not.toHaveBeenCalled();
+  const company = buildServer({ runtimeMode: 'company', projectCreations: f.creations }); cleanup.push(() => company.close());
+  expect((await company.inject({ url, headers })).statusCode).toBe(404);
+  expect((await company.inject({ method: 'PUT', url, headers: f.auth, payload })).statusCode).toBe(404);
+});

@@ -99,7 +99,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(status).toHaveCount(1);
       await expect(status.getByText('资料已连接', { exact: true })).toBeVisible();
       const update = status.getByRole('button', { name: '更新资料', exact: true });
-      const ask = window.getByRole('button', { name: '问问这个项目', exact: true });
+      const ask = window.getByRole('button', { name: '讨论项目', exact: true });
       const panel = window.getByRole('complementary', { name: '问问 AI' });
       await expect(panel).toBeHidden();
       await ask.click();

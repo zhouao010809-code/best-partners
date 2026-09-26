@@ -146,7 +146,7 @@ export function ProjectsPage() {
   return (
     <section className="projects-page" aria-labelledby="projects-title">
       <header className="projects-page__heading">
-        <div><h1 id="projects-title">我的项目</h1><p>把已有文件夹添加为项目，在里面查看资料、向问问提问，并保存结果。</p></div>
+        <div><h1 id="projects-title">我的项目</h1><p>用项目资料策划选题、写脚本，保留定稿，再导出给拍摄和剪辑。</p></div>
         <button type="button" className="projects-button projects-button--primary" onClick={() => void addProject()} disabled={scanning || binding}>
           {scanning ? <LoaderCircle size={16} className="projects-spin" aria-hidden="true" /> : <FolderPlus size={16} aria-hidden="true" />}
           {scanning ? '正在扫描…' : '添加项目'}

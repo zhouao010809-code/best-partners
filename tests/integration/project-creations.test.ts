@@ -253,3 +253,85 @@ describe('creation limits and recovery boundaries', () => {
     expect((await empty.inject({ url: `/api/v1/projects/${f.project.id}/creations` })).statusCode).toBe(503);
   });
 });
+
+const blankProfileFields = { audience: '', goal: '', style: '', facts: '', avoid: '' };
+describe('creative context profiles and references', () => {
+  it('persists a blank optional project profile with compare-and-swap revisions without changing project data', async () => {
+    const f = await fixture();
+    const projectBefore = f.database.prepare('SELECT * FROM personal_projects WHERE id = ?').get(f.project.id);
+    expect(await f.service.getProfile(f.project.id)).toEqual({ projectId: f.project.id, revision: 0, ...blankProfileFields, samples: [] });
+    const input = { ...blankProfileFields, audience: '独立创作者', facts: '已核对的项目事实', samples: [], expectedRevision: 0 };
+    const saved = await f.service.saveProfile(f.project.id, input);
+    expect(saved).toMatchObject({ ...blankProfileFields, audience: input.audience, facts: input.facts, revision: 1 });
+    await expect(f.service.saveProfile(f.project.id, input)).rejects.toMatchObject({ code: 'CREATIVE_PROFILE_REVISION_CONFLICT', statusCode: 409 });
+    f.reopen(); expect(await f.service.getProfile(f.project.id)).toEqual(saved);
+    expect((await f.service.getProfile(f.second.id)).revision).toBe(0);
+    expect(f.database.prepare('SELECT * FROM personal_projects WHERE id = ?').get(f.project.id)).toEqual(projectBefore);
+    await expect(f.service.getProfile(randomUUID())).rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' });
+  });
+
+  it('accepts only owned final samples and keeps a selected immutable sample when its draft is finalized again', async () => {
+    const f = await fixture();
+    const created = await f.service.create(f.project.id, { kind: 'script', title: '样稿', body: '第一份定稿' });
+    const draft = await f.service.snapshot(f.project.id, created.item.id, { expectedRevision: 1, finalize: false });
+    const profile = { ...blankProfileFields, samples: [{ creationId: created.item.id, versionId: draft.versions[0]!.id }], expectedRevision: 0 };
+    await expect(f.service.saveProfile(f.project.id, profile)).rejects.toMatchObject({ code: 'CREATIVE_PROFILE_SAMPLE_INVALID' });
+    const finalized = await f.service.snapshot(f.project.id, created.item.id, { expectedRevision: 2, finalize: true });
+    profile.samples[0]!.versionId = finalized.versions[0]!.id;
+    await expect(f.service.saveProfile(f.second.id, profile)).rejects.toMatchObject({ code: 'CREATIVE_PROFILE_SAMPLE_INVALID' });
+    const saved = await f.service.saveProfile(f.project.id, profile);
+    const edited = await f.service.save(f.project.id, created.item.id, savedInput(finalized.item, { body: '后续定稿' }));
+    await f.service.snapshot(f.project.id, created.item.id, { expectedRevision: edited.item.revision, finalize: true });
+    const resaved = await f.service.saveProfile(f.project.id, { ...profile, expectedRevision: saved.revision, style: '口语化' });
+    expect(resaved.samples).toEqual(profile.samples);
+    expect(await f.service.getProfileContext(f.project.id)).toMatchObject({ profile: resaved, samples: [{ id: finalized.versions[0]!.id, body: '第一份定稿' }] });
+    await expect(f.service.saveProfile(f.project.id, { ...profile, expectedRevision: resaved.revision, samples: [{ ...profile.samples[0]!, creationId: randomUUID() }] })).rejects.toMatchObject({ code: 'CREATIVE_PROFILE_SAMPLE_INVALID' });
+    f.reopen(); expect((await f.service.getProfileContext(f.project.id)).samples[0]!.body).toBe('第一份定稿');
+  });
+
+  it('defaults old drafts to automatic references and preserves saved scopes in snapshots, restores, and exports', async () => {
+    const f = await fixture();
+    const created = await f.service.create(f.project.id, { kind: 'script', title: '参考范围', body: '正文' });
+    expect(created.item.referenceSelection).toEqual({ mode: 'auto', paths: [] });
+    const referenceSelection = { mode: 'selected' as const, paths: ['原始资料.md'] };
+    const scoped = await f.service.save(f.project.id, created.item.id, savedInput(created.item, { referenceSelection }));
+    const preserved = await f.service.save(f.project.id, created.item.id, savedInput(scoped.item, { body: '新正文' }));
+    expect(preserved.item.referenceSelection).toEqual(referenceSelection);
+    const snapshot = await f.service.snapshot(f.project.id, created.item.id, { expectedRevision: preserved.item.revision, finalize: true });
+    expect(snapshot.versions[0]!.referenceSelection).toEqual(referenceSelection);
+    const reset = await f.service.save(f.project.id, created.item.id, savedInput(snapshot.item, { referenceSelection: { mode: 'auto', paths: [] } }));
+    const restored = await f.service.save(f.project.id, created.item.id, savedInput(reset.item, { referenceSelection: snapshot.versions[0]!.referenceSelection }));
+    f.reopen(); expect((await f.service.get(f.project.id, created.item.id)).item.referenceSelection).toEqual(restored.item.referenceSelection);
+    const exported = await f.service.exportVersion(f.project.id, created.item.id, snapshot.versions[0]!.id);
+    expect(await readFile(join(f.projectRoot, exported.path), 'utf8')).toContain('"paths": [\n    "原始资料.md"');
+  });
+
+  it('rejects malformed reference scopes and item request overrides, and supports non-item profile requests', async () => {
+    const invalid = [
+      { mode: 'auto', paths: ['原始资料.md'] }, { mode: 'selected', paths: [] },
+      { mode: 'selected', paths: ['原始资料.md', '原始资料.md'] }, { mode: 'selected', paths: ['../secret.md'] },
+      { mode: 'selected', paths: ['/private.md'] }, { mode: 'selected', paths: ['AI工作区'] },
+      { mode: 'selected', paths: ['AI工作区/内容草稿/稿件.md'] }, { mode: 'selected', paths: Array.from({ length: 21 }, (_, i) => `${i}.md`) },
+      { mode: 'auto', paths: [], rootPath: '/tmp' }
+    ];
+    for (const referenceSelection of invalid) expect(creationCreateSchema.safeParse({ kind: 'script', title: '无效范围', referenceSelection }).success).toBe(false);
+    const referenceSelection = { mode: 'selected', paths: ['原始资料.md'] };
+    expect(creationGenerateRequestSchema.safeParse({ task: 'topics', instruction: '选题', referenceSelection }).success).toBe(true);
+    expect(creationGenerateRequestSchema.safeParse({ task: 'script', instruction: '写稿', itemId: randomUUID(), expectedRevision: 1, referenceSelection }).success).toBe(false);
+    expect(creationGenerateRequestSchema.safeParse({ task: 'profile', instruction: '起草创作档案' }).success).toBe(true);
+    expect(creationGenerateRequestSchema.safeParse({ task: 'profile', instruction: '起草创作档案', itemId: randomUUID(), expectedRevision: 1 }).success).toBe(false);
+  });
+
+  it('validates profile HTTP contracts and rejects unknown fields, duplicate samples and overlong profile values', async () => {
+    const f = await httpFixture(); const url = `/api/v1/projects/${f.project.id}/creative-profile`;
+    const blank = await f.app.inject({ url }); expect(blank.statusCode).toBe(200); expect(blank.headers['cache-control']).toBe('no-store');
+    expect(blank.json().data.revision).toBe(0);
+    const payload = { ...blankProfileFields, samples: [], expectedRevision: 0 };
+    const save = await f.app.inject({ method: 'PUT', url, payload }); expect(save.statusCode).toBe(200); expect(save.json().data.revision).toBe(1);
+    expect((await f.app.inject({ method: 'PUT', url, payload })).statusCode).toBe(409);
+    const repeatedSample = { creationId: randomUUID(), versionId: randomUUID() };
+    for (const invalid of [{ ...payload, samples: [repeatedSample, repeatedSample] }, { ...payload, samples: Array.from({ length: 4 }, () => ({ creationId: randomUUID(), versionId: randomUUID() })) }, { ...payload, rootPath: f.otherRoot }, { ...payload, goal: '字'.repeat(2001) }, { ...payload, facts: '字'.repeat(4001) }, { ...payload, expectedRevision: -1 }]) {
+      expect((await f.app.inject({ method: 'PUT', url, payload: invalid })).statusCode).toBe(400);
+    }
+  });
+});

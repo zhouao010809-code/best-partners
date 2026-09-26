@@ -219,7 +219,7 @@ export interface ProjectService {
   refresh(id: string, signal?: AbortSignal): Promise<ProjectSummary>;
   ensureFresh(id: string, signal?: AbortSignal): Promise<ProjectSummary>;
   listFiles(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }): Promise<ProjectFilePage>;
-  readFile(id: string, relativePath: string): Promise<ProjectFileDetail>;
+  readFile(id: string, relativePath: string, signal?: AbortSignal): Promise<ProjectFileDetail>;
   context(id: string): Promise<ProjectContext>;
 }
 

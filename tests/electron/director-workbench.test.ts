@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js';
+import { creativeProfileResponseSchema, type ProjectCreativeProfile } from '../../src/shared/api/creative-profile.js';
 import {
   creationDetailResponseSchema,
   creationExportResponseSchema,
@@ -19,6 +20,10 @@ const secondTitle = '第二条独立脚本';
 const firstBody = '开头：先问客户最关心什么。\n\n正文：根据真实需求安排拍摄内容。\n\n结尾：留下一个具体问题。';
 const finalBody = '开头：拍摄之前，先确认客户最关心的问题。\n\n正文：根据真实需求安排拍摄内容。\n\n结尾：留下一个具体问题。';
 const laterDraft = `${finalBody}\n\n编导补充：这一段仍是未定稿的工作草稿。`;
+const profileAudience = '准备拍摄短视频的本地商家';
+const profileStyle = '口语直接，先讲具体问题，避免夸大承诺';
+const selectedReferences = { mode: 'selected' as const, paths: ['客户资料/项目要求.md'] };
+const automaticReferences = { mode: 'auto' as const, paths: [] };
 
 async function makeFixture(): Promise<Fixture> {
   const temporary = await realpath(tmpdir());
@@ -58,6 +63,15 @@ async function readCreation(window: Page, projectId: string, creationId: string)
   }, `/api/v1/projects/${projectId}/creations/${creationId}`);
   expect(result.status, JSON.stringify(result.body)).toBe(200);
   return creationDetailResponseSchema.parse(result.body).data;
+}
+
+async function readProfile(window: Page, projectId: string): Promise<ProjectCreativeProfile> {
+  const result = await window.evaluate(async path => {
+    const response = await fetch(path);
+    return { status: response.status, body: await response.json() };
+  }, `/api/v1/projects/${projectId}/creative-profile`);
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  return creativeProfileResponseSchema.parse(result.body).data;
 }
 
 function mutation(window: Page, method: string, path: string): Promise<Response> {
@@ -106,7 +120,7 @@ async function expectSaved(window: Page, projectId: string, id: string, body: st
 }
 
 for (const mode of ['development', 'packaged'] as const) {
-  test(`${mode}: manual scripts survive restart, keep final versions immutable and export exact snapshots`, async ({}, info) => {
+  test(`${mode}: manual scripts, creative profiles and reference scopes survive restart with immutable final snapshots`, async ({}, info) => {
     test.setTimeout(180_000);
     const fixture = await makeFixture();
     const originalProject = await snapshotFiles(fixture.project);
@@ -145,10 +159,26 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
       const projectId = new URL(window.url()).pathname.split('/').at(-1)!;
       const collectionPath = `/api/v1/projects/${projectId}/creations`;
+      const profilePath = `/api/v1/projects/${projectId}/creative-profile`;
       for (const name of ['创作台', '选题库', '项目资料', '已定稿']) {
         await expect(window.getByRole('tab', { name, exact: true })).toBeVisible();
       }
       await expect(window.getByRole('complementary', { name: '问问 AI', exact: true })).toBeHidden();
+
+      // The optional project profile is saved explicitly; manual setup never invokes AI.
+      const profile = window.getByRole('region', { name: '项目创作档案', exact: true });
+      await profile.getByRole('button', { name: /项目创作档案/u }).click();
+      await expect(profile.getByRole('textbox', { name: '受众', exact: true })).toBeEnabled();
+      await profile.getByRole('textbox', { name: '受众', exact: true }).fill(profileAudience);
+      await profile.getByRole('textbox', { name: '表达风格', exact: true }).fill(profileStyle);
+      expect((await readProfile(window, projectId)).revision).toBe(0);
+      const profileSaving = mutation(window, 'PUT', profilePath);
+      await profile.getByRole('button', { name: '保存项目档案', exact: true }).click();
+      const profileResponse = await profileSaving;
+      expect(profileResponse.ok(), await profileResponse.text()).toBe(true);
+      const savedProfile = creativeProfileResponseSchema.parse(await profileResponse.json()).data;
+      expect(savedProfile).toMatchObject({ projectId, revision: 1, audience: profileAudience, style: profileStyle, samples: [] });
+      await expect(profile.getByText('当前生效档案 · 第 1 版', { exact: true })).toBeVisible();
 
       const firstCreated = mutation(window, 'POST', collectionPath);
       await window.getByRole('button', { name: '新建脚本', exact: true }).click();
@@ -157,6 +187,13 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('textbox', { name: '创作要求', exact: true }).fill('面向准备拍摄的商家，写一条一分钟短视频；不虚构客户案例。');
       await window.getByRole('textbox', { name: '脚本正文', exact: true }).fill(firstBody);
       await expectSaved(window, projectId, first.item.id, firstBody);
+      const references = window.getByRole('region', { name: '本条参考资料设置', exact: true });
+      await references.getByRole('button', { name: /本条参考资料/u }).click();
+      await references.getByRole('radio', { name: '只用所选资料', exact: true }).check();
+      await references.getByRole('checkbox', { name: '客户资料/项目要求.md', exact: true }).check();
+      await references.getByRole('button', { name: '应用资料选择', exact: true }).click();
+      await expect.poll(async () => (await readCreation(window, projectId, first.item.id)).item.referenceSelection).toEqual(selectedReferences);
+      await expect(window.getByText('已保存到本机', { exact: true })).toBeVisible();
 
       // Switching entries must preserve their independent drafts without any AI setup.
       await window.getByRole('button', { name: '返回创作台', exact: true }).click();
@@ -167,6 +204,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('textbox', { name: '脚本正文', exact: true }).fill('这是第二条脚本，与第一条内容无关。');
       await expectSaved(window, projectId, second.item.id, '这是第二条脚本，与第一条内容无关。');
       await window.getByRole('button', { name: '返回创作台', exact: true }).click();
+      await profile.getByRole('button', { name: /项目创作档案/u }).click();
       for (const width of [1360, 720]) {
         await resize(instance, window, width);
         await expect(window.getByRole('button', { name: '新建脚本', exact: true })).toBeVisible();
@@ -177,6 +215,17 @@ for (const mode of ['development', 'packaged'] as const) {
       await resize(instance, window, 1360);
       await window.getByRole('button', { name: `打开创作：${firstTitle}`, exact: true }).click();
       await expect(window.getByRole('textbox', { name: '脚本正文', exact: true })).toHaveValue(firstBody);
+      await references.getByRole('button', { name: /本条参考资料/u }).click();
+      await expect(references.getByRole('radio', { name: '只用所选资料', exact: true })).toBeChecked();
+      await expect(references.getByRole('checkbox', { name: '客户资料/项目要求.md', exact: true })).toBeChecked();
+      await profile.getByRole('button', { name: /项目创作档案/u }).click();
+      for (const width of [1360, 720]) {
+        await resize(instance, window, width);
+        await expect(references.getByRole('button', { name: '移除参考资料：客户资料/项目要求.md', exact: true })).toBeVisible();
+        await window.screenshot({ path: info.outputPath(`director-selected-references-${width}.png`), fullPage: true });
+      }
+      await profile.getByRole('button', { name: /项目创作档案/u }).click();
+      await resize(instance, window, 1360);
 
       const versionsPath = `${collectionPath}/${first.item.id}/versions`;
       const savedVersion = mutation(window, 'POST', versionsPath);
@@ -184,7 +233,14 @@ for (const mode of ['development', 'packaged'] as const) {
       const versionOneDetail = await detailResponse(await savedVersion);
       expect(versionOneDetail.versions).toHaveLength(1);
       const versionOne = versionOneDetail.versions[0]!;
-      expect(versionOne).toMatchObject({ number: 1, title: firstTitle, body: firstBody });
+      expect(versionOne).toMatchObject({ number: 1, title: firstTitle, body: firstBody, referenceSelection: selectedReferences });
+      await expect(window.getByRole('region', { name: '版本记录', exact: true })).toHaveCount(0);
+
+      // Updating the working draft's scope must not rewrite the saved version's scope.
+      await references.getByRole('radio', { name: '自动找资料', exact: true }).check();
+      await references.getByRole('button', { name: '应用资料选择', exact: true }).click();
+      await expect.poll(async () => (await readCreation(window, projectId, first.item.id)).item.referenceSelection).toEqual(automaticReferences);
+      expect((await readCreation(window, projectId, first.item.id)).versions.find(version => version.id === versionOne.id)).toEqual(versionOne);
 
       await window.getByRole('textbox', { name: '脚本正文', exact: true }).fill(finalBody);
       await expectSaved(window, projectId, first.item.id, finalBody);
@@ -192,12 +248,37 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '确认定稿', exact: true }).click();
       const finalized = await detailResponse(await finalizing);
       const finalVersion = finalized.versions.find(version => version.id === finalized.item.finalVersionId)!;
-      expect(finalVersion).toMatchObject({ number: 2, title: firstTitle, body: finalBody });
+      expect(finalVersion).toMatchObject({ number: 2, title: firstTitle, body: finalBody, referenceSelection: automaticReferences });
+      await expect(window.getByRole('region', { name: '版本记录', exact: true })).toHaveCount(0);
+      await window.getByRole('button', { name: '查看并导出定稿', exact: true }).click();
+      const finalPreview = window.getByRole('region', { name: '导出版本预览', exact: true });
+      await expect(finalPreview).toBeVisible();
+      await expect(finalPreview.locator('pre')).toHaveText(finalBody);
+      expect(await snapshotFiles(fixture.project)).toEqual(originalProject);
+      await finalPreview.getByRole('button', { name: '取消导出', exact: true }).click();
+      await expect(window.getByRole('region', { name: '版本记录', exact: true })).toHaveCount(0);
+
+      // Select the actual immutable final version, then explicitly save it as a style sample.
+      await profile.getByRole('button', { name: /项目创作档案/u }).click();
+      await profile.getByRole('button', { name: /定稿范例/u }).click();
+      await profile.getByRole('button', { name: `${firstTitle} · 选择定稿`, exact: true }).click();
+      await expect(profile.getByText(`${firstTitle} · 第 2 版`, { exact: true })).toBeVisible();
+      expect((await readProfile(window, projectId)).samples).toEqual([]);
+      const sampleSaving = mutation(window, 'PUT', profilePath);
+      await profile.getByRole('button', { name: '保存项目档案', exact: true }).click();
+      const sampleResponse = await sampleSaving;
+      expect(sampleResponse.ok(), await sampleResponse.text()).toBe(true);
+      const profileWithSample = creativeProfileResponseSchema.parse(await sampleResponse.json()).data;
+      expect(profileWithSample).toMatchObject({ revision: 2, audience: profileAudience, style: profileStyle,
+        samples: [{ creationId: first.item.id, versionId: finalVersion.id }] });
       await window.getByRole('textbox', { name: '脚本正文', exact: true }).fill(laterDraft);
       const draftAfterFinal = await expectSaved(window, projectId, first.item.id, laterDraft);
       expect(draftAfterFinal.item.finalVersionId).toBe(finalVersion.id);
       expect(draftAfterFinal.versions.find(version => version.id === finalVersion.id)).toEqual(finalVersion);
       expect(draftAfterFinal.versions.find(version => version.id === versionOne.id)).toEqual(versionOne);
+      expect(draftAfterFinal.item.referenceSelection).toEqual(automaticReferences);
+      await profile.getByRole('button', { name: /项目创作档案/u }).click();
+      await references.getByRole('button', { name: /本条参考资料/u }).click();
 
       for (const width of [1360, 720]) {
         await resize(instance, window, width);
@@ -208,6 +289,15 @@ for (const mode of ['development', 'packaged'] as const) {
         await back.scrollIntoViewIfNeeded();
         await expect(back).toBeInViewport();
         await window.screenshot({ path: info.outputPath(`director-editor-${width}.png`), fullPage: true });
+        await window.screenshot({ path: info.outputPath(`director-editor-viewport-${width}.png`) });
+        await profile.getByRole('button', { name: /项目创作档案/u }).click();
+        await references.getByRole('button', { name: /本条参考资料/u }).click();
+        await profile.scrollIntoViewIfNeeded();
+        await expect(profile.getByRole('textbox', { name: '受众', exact: true })).toHaveValue(profileAudience);
+        await expect(references.getByRole('radio', { name: '自动找资料', exact: true })).toBeChecked();
+        await window.screenshot({ path: info.outputPath(`director-creative-context-${width}.png`), fullPage: true });
+        await profile.getByRole('button', { name: /项目创作档案/u }).click();
+        await references.getByRole('button', { name: /本条参考资料/u }).click();
       }
       expect(await snapshotFiles(fixture.project)).toEqual(originalProject);
       expect(await snapshotFiles(fixture.vault)).toEqual(originalVault);
@@ -223,6 +313,13 @@ for (const mode of ['development', 'packaged'] as const) {
       await resize(instance, window, 1360);
       await window.getByRole('link', { name: '我的项目', exact: true }).click();
       await window.locator(`a[href="/projects/${projectId}"]`).click();
+      const restartedProfile = window.getByRole('region', { name: '项目创作档案', exact: true });
+      await restartedProfile.getByRole('button', { name: /项目创作档案/u }).click();
+      await expect(restartedProfile.getByRole('textbox', { name: '受众', exact: true })).toHaveValue(profileAudience);
+      await expect(restartedProfile.getByRole('textbox', { name: '表达风格', exact: true })).toHaveValue(profileStyle);
+      expect(await readProfile(window, projectId)).toEqual(profileWithSample);
+      await restartedProfile.getByRole('button', { name: /定稿范例/u }).click();
+      await expect(restartedProfile.getByText(`${firstTitle} · 第 2 版`, { exact: true })).toBeVisible();
       await window.getByRole('tab', { name: '已定稿', exact: true }).click();
       await window.getByRole('button', { name: `打开创作：${firstTitle}`, exact: true }).click();
       await expect(window.getByRole('textbox', { name: '内容标题', exact: true })).toHaveValue(firstTitle);
@@ -230,7 +327,12 @@ for (const mode of ['development', 'packaged'] as const) {
       const restarted = await readCreation(window, projectId, first.item.id);
       expect(restarted.item.finalVersionId).toBe(finalVersion.id);
       expect(restarted.versions).toEqual(draftAfterFinal.versions);
+      expect(restarted.item.referenceSelection).toEqual(automaticReferences);
       expect((await readCreation(window, projectId, second.item.id)).item.body).toBe('这是第二条脚本，与第一条内容无关。');
+      const restartedReferences = window.getByRole('region', { name: '本条参考资料设置', exact: true });
+      await restartedReferences.getByRole('button', { name: /本条参考资料/u }).click();
+      await expect(restartedReferences.getByRole('radio', { name: '自动找资料', exact: true })).toBeChecked();
+      await expect(window.getByRole('region', { name: '版本记录', exact: true })).toHaveCount(0);
 
       await window.getByRole('button', { name: /^版本记录(?: · \d+)?$/u }).click();
       const exportedPaths: string[] = [];
@@ -268,6 +370,10 @@ for (const mode of ['development', 'packaged'] as const) {
       const restored = await expectSaved(window, projectId, first.item.id, firstBody);
       expect(restored.item.finalVersionId).toBe(finalVersion.id);
       expect(restored.versions).toEqual(draftAfterFinal.versions);
+      expect(restored.item.referenceSelection).toEqual(selectedReferences);
+      await expect(restartedReferences.getByRole('radio', { name: '只用所选资料', exact: true })).toBeChecked();
+      await expect(restartedReferences.getByRole('checkbox', { name: '客户资料/项目要求.md', exact: true })).toBeChecked();
+      expect(await readProfile(window, projectId)).toEqual(profileWithSample);
 
       const projectAfter = await snapshotFiles(fixture.project);
       for (const [path, hash] of Object.entries(originalProject)) expect(projectAfter[path], path).toBe(hash);

@@ -210,8 +210,8 @@ export function ProjectFilesPanel({ api, projectId, revision, onAsk }: ProjectFi
         {(outputEmpty || visibleFiles.length === 0) ? <div className="project-files__state">
           <Folder size={26} aria-hidden="true" />
           <h3>{outputEmpty ? '还没有已保存的产出' : query ? '没有找到匹配文件' : '暂无可显示的文件'}</h3>
-          <p>{outputEmpty ? '在问问中确认保存后，产出会显示在这里，并保存在项目的 AI工作区 文件夹。' : query ? '试试其他关键词，也可以开启“显示隐藏文件”继续查找。' : '添加项目资料后，在页面上方更新资料；也可以开启“显示隐藏文件”查看。'}</p>
-          {outputEmpty && onAsk !== undefined && <button type="button" className="project-files__action" onClick={onAsk}>打开项目问问</button>}
+          <p>{outputEmpty ? (api.creations ? '在创作台定稿后，点击“查看并导出定稿”；确认导出的文件会显示在这里，保存在项目的 AI工作区 文件夹。项目讨论中确认保存的产出也会显示在这里。' : '项目讨论中确认保存的产出会显示在这里，保存在项目的 AI工作区 文件夹。') : query ? '试试其他关键词，也可以开启“显示隐藏文件”继续查找。' : '添加项目资料后，在页面上方更新资料；也可以开启“显示隐藏文件”查看。'}</p>
+          {outputEmpty && onAsk !== undefined && <button type="button" className="project-files__action" onClick={onAsk}>讨论项目</button>}
         </div> : <div className="project-files__layout">
           <div className="project-files__browser"><ul className="project-files__list" aria-label={origin === 'output' ? '已保存产出文件' : '项目源文件'}>
             {query ? visibleFiles.map(file => <li key={file.relativePath}>{file.kind === 'file' ? fileRow(file, true) : <div className="project-files__search-folder"><Folder size={17} aria-hidden="true" /><span><strong>{basename(file.relativePath)}</strong><small>{directory(file.relativePath) || '项目根目录'} · 文件夹</small></span></div>}</li>) : renderNodes(tree)}

@@ -69,6 +69,16 @@
 .creation-history{margin-top:24px;font-size:12px;color:var(--text-muted)}
 .creation-history article{padding:12px 0;border-top:1px solid var(--border-muted);line-height:1.8}
 .creation-final-state{color:var(--accent-primary);font-size:12px;margin:0 0 16px}
+.creation-final-state{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.creation-text-action{display:inline-flex;align-items:center;gap:5px;border:0;background:none;color:var(--accent-primary);font:inherit;font-size:11px;cursor:pointer;padding:4px 0}
+.project-workspace--editing{gap:10px}
+.project-workspace--editing .project-workspace__heading{align-items:center}
+.project-workspace--editing .project-workspace__heading h1{font-size:18px;margin:0;overflow-wrap:anywhere}
+.project-workspace-source-status{font-size:11px;color:var(--text-muted);min-width:0}
+.project-workspace-source-status>summary{width:fit-content;cursor:pointer;padding:4px 0}
+.project-workspace-source-status .project-status-card{margin-top:8px}
+.project-workspace--editing .creation-manuscript,.project-workspace--editing .creation-assistant{padding-top:18px}
+.project-workspace--editing .creation-brief{margin:13px 0}
 .creation-versions,.creation-export{margin:0 0 22px;border:1px solid var(--border-muted);border-radius:6px;padding:16px}
 .creation-versions h3,.creation-export h3{font-size:14px;font-weight:500;margin:0 0 12px}
 .creation-versions article{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:13px 0;border-top:1px solid var(--border-muted);flex-wrap:wrap}

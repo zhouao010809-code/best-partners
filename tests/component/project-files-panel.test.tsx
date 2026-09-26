@@ -145,8 +145,8 @@ it('explains saved output location and opens the assistant without sending from 
   render(<ProjectFilesPanel api={f.api} projectId="project-1" onAsk={onAsk} />);
   await user.click(screen.getByRole('tab', { name: '已保存产出' }));
   expect(await screen.findByText('还没有已保存的产出')).toBeVisible();
-  expect(screen.getByText(/问问中确认保存/u)).toHaveTextContent('AI工作区');
-  await user.click(screen.getByRole('button', { name: '打开项目问问' }));
+  expect(screen.getByText(/项目讨论中确认保存/u)).toHaveTextContent('AI工作区');
+  await user.click(screen.getByRole('button', { name: '讨论项目' }));
   expect(onAsk).toHaveBeenCalledOnce();
   expect(f.read).not.toHaveBeenCalled();
 });

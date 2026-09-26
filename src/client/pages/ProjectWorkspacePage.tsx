@@ -37,6 +37,7 @@ export function ProjectWorkspacePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [staleNotice, setStaleNotice] = useState(false);
   const [filesRefreshVersion, setFilesRefreshVersion] = useState(0);
+  const [editing, setEditing] = useState(false);
   const controllerRef = useRef<AbortController | undefined>(undefined);
 
   const load = useCallback(async (): Promise<void> => {
@@ -186,16 +187,16 @@ export function ProjectWorkspacePage() {
   }
 
   return (
-    <section className="projects-page project-workspace" aria-labelledby="project-workspace-title">
+    <section className={`projects-page project-workspace${editing ? ' project-workspace--editing' : ''}`} aria-labelledby="project-workspace-title">
       <Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link>
       <header className="projects-page__heading project-workspace__heading">
-        <div><h1 id="project-workspace-title"><FolderKanban size={24} aria-hidden="true" />{project.displayName}</h1><p>根据项目资料策划选题，写脚本，和问问一起打磨。</p></div>
-        <button type="button" className="projects-button projects-button--quiet" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}><MessageCircle size={16} aria-hidden="true" />问问这个项目</button>
+        <div><h1 id="project-workspace-title"><FolderKanban size={editing ? 19 : 24} aria-hidden="true" />{project.displayName}</h1>{!editing && <p>根据项目资料策划选题，写脚本，和问问一起打磨。</p>}</div>
+        <button type="button" className="projects-button projects-button--quiet" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}><MessageCircle size={16} aria-hidden="true" />讨论项目</button>
       </header>
       {message !== undefined && <p className="projects-inline-message" role="status">{message}</p>}
       {staleNotice && <p className="project-stale-notice" role="status"><ShieldCheck size={15} aria-hidden="true" />重新连接后，旧的项目写入计划不会自动执行；请重新确认当前资料。</p>}
-      <ProjectStatusCard project={project} onRefresh={() => void refreshProject()} onReconnect={() => void beginReconnect()} refreshing={refreshing} reconnecting={reconnecting} {...(project.availability === 'reconnect-required' ? { message: '请重新选择原项目文件夹或它的新位置。' } : {})} />
-      <ProjectWorkbench key={project.id} api={api} projectId={project.id} files={<ProjectFilesPanel key={`${project.id}:${filesRefreshVersion}`} api={api} projectId={project.id} revision={project.sourceRevision} onAsk={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })} />} />
+      {editing && project.availability === 'ready' ? <details className="project-workspace-source-status"><summary>项目资料 · {project.readableFileCount} 份可读{refreshing ? ' · 更新中…' : ''}</summary><ProjectStatusCard project={project} onRefresh={() => void refreshProject()} onReconnect={() => void beginReconnect()} refreshing={refreshing} reconnecting={reconnecting} /></details> : <ProjectStatusCard project={project} onRefresh={() => void refreshProject()} onReconnect={() => void beginReconnect()} refreshing={refreshing} reconnecting={reconnecting} {...(project.availability === 'reconnect-required' ? { message: '请重新选择原项目文件夹或它的新位置。' } : {})} />}
+      <ProjectWorkbench key={project.id} api={api} projectId={project.id} onEditingChange={setEditing} files={<ProjectFilesPanel key={`${project.id}:${filesRefreshVersion}`} api={api} projectId={project.id} revision={project.sourceRevision} onAsk={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })} />} />
     </section>
   );
 }

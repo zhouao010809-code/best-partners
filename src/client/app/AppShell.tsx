@@ -652,7 +652,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
           <div className="workspace-bar__actions"><div className={`workspace-bar__status${quietOverview ? ' workspace-bar__status--quiet' : ''}`} role="status" aria-label="索引运行状态" title={indexStatus}>
             <CircleDot aria-hidden="true" />
             <span>{health.status === 'ready' && health.data.index.status === 'ready' ? '资料已就绪' : indexStatus}</span>
-          </div><AssistantToggle open={assistantOpen} running={assistantRunning} onClick={() => setAssistantOpen(value => !value)} /></div>
+          </div>{projectRouteId === undefined && <AssistantToggle open={assistantOpen} running={assistantRunning} onClick={() => setAssistantOpen(value => !value)} />}</div>
         </header>
 
         <main id="main-content" className="main-content" tabIndex={-1}>

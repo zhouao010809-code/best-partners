@@ -96,7 +96,7 @@ describe('ProjectWorkspacePage', () => {
       const user = userEvent.setup();
       renderPage();
       await screen.findByRole('heading', { name: 'A项目', level: 1 });
-      await user.click(screen.getByRole('button', { name: '问问这个项目' }));
+      await user.click(screen.getByRole('button', { name: '讨论项目' }));
       expect(received).toHaveLength(1);
       expect((received[0] as CustomEvent).detail).toMatchObject({ scope: 'project', projectId: id, projectRevision: project.sourceRevision });
     } finally {

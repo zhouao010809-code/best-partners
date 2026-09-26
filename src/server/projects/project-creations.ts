@@ -11,11 +11,12 @@ import {
   type CreationDetail, type CreationExchange, type CreationVersion, type ProjectCreation,
   type ProjectCreationService
 } from '../../shared/api/project-creations.js';
+import { createCreativeProfileOperations } from './creative-profile.js';
 import { resolveProjectOutputPath } from './project-paths.js';
 
 type ProjectRow = { id: string; root_path: string; availability: string };
-type CreationRow = { id: string; project_id: string; kind: string; title: string; brief: string; body: string; audience: string; angle: string; rationale: string; sources_json: string; revision: number; final_version_id: string | null; created_at: string; updated_at: string };
-type VersionRow = { id: string; creation_id: string; number: number; title: string; brief: string; body: string; sources_json: string; export_content: string; content_sha256: string; created_at: string };
+type CreationRow = { id: string; project_id: string; kind: string; title: string; brief: string; body: string; audience: string; angle: string; rationale: string; sources_json: string; reference_selection_json: string; revision: number; final_version_id: string | null; created_at: string; updated_at: string };
+type VersionRow = { id: string; creation_id: string; number: number; title: string; brief: string; body: string; sources_json: string; reference_selection_json: string; export_content: string; content_sha256: string; created_at: string };
 type ExchangeRow = { id: string; instruction: string; suggestion_json: string; created_at: string };
 type ExportRow = { version_id: string; root_path: string; relative_path: string; content_sha256: string; status: 'pending' | 'completed' };
 type DirectoryIdentity = { path: string; dev: number; ino: number };
@@ -30,12 +31,12 @@ function parsed<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
 }
 function publicItem(row: CreationRow): ProjectCreation {
   return projectCreationSchema.parse({ id: row.id, projectId: row.project_id, kind: row.kind, title: row.title, brief: row.brief, body: row.body,
-    audience: row.audience, angle: row.angle, rationale: row.rationale, sources: JSON.parse(row.sources_json), revision: row.revision,
+    audience: row.audience, angle: row.angle, rationale: row.rationale, sources: JSON.parse(row.sources_json), referenceSelection: JSON.parse(row.reference_selection_json), revision: row.revision,
     ...(row.final_version_id ? { finalVersionId: row.final_version_id } : {}), createdAt: row.created_at, updatedAt: row.updated_at });
 }
 function publicVersion(row: VersionRow): CreationVersion {
   return creationVersionSchema.parse({ id: row.id, creationId: row.creation_id, number: row.number, title: row.title,
-    brief: row.brief, body: row.body, sources: JSON.parse(row.sources_json), createdAt: row.created_at });
+    brief: row.brief, body: row.body, sources: JSON.parse(row.sources_json), referenceSelection: JSON.parse(row.reference_selection_json), createdAt: row.created_at });
 }
 function slug(title: string): string {
   const cleaned = title.normalize('NFKC').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/gu, '-');
@@ -44,7 +45,7 @@ function slug(title: string): string {
   return value || '创作稿件';
 }
 function exportContent(item: ProjectCreation, version: { id: string; number: number; createdAt: string }, exchanges: CreationExchange[]): string {
-  return `# ${item.title}\n\n${item.body}\n\n---\n\n## 创作要求\n\n${item.brief || '未填写'}\n\n## 来源依据\n\n\`\`\`json\n${JSON.stringify(item.sources, null, 2)}\n\`\`\`\n\n## 版本记录\n\n- 创作编号：${item.id}\n- 版本：${version.number}\n- 版本编号：${version.id}\n- 保存时间：${version.createdAt}\n\n## 相关讨论\n\n${exchanges.length ? exchanges.map(entry => `- ${entry.createdAt} · ${entry.id}\n  ${entry.instruction.replace(/\n/gu, '\n  ')}`).join('\n') : '此版本没有关联讨论。'}\n`;
+  return `# ${item.title}\n\n${item.body}\n\n---\n\n## 创作要求\n\n${item.brief || '未填写'}\n\n## 参考范围\n\n\`\`\`json\n${JSON.stringify(item.referenceSelection ?? { mode: 'auto', paths: [] }, null, 2)}\n\`\`\`\n\n## 来源依据\n\n\`\`\`json\n${JSON.stringify(item.sources, null, 2)}\n\`\`\`\n\n## 版本记录\n\n- 创作编号：${item.id}\n- 版本：${version.number}\n- 版本编号：${version.id}\n- 保存时间：${version.createdAt}\n\n## 相关讨论\n\n${exchanges.length ? exchanges.map(entry => `- ${entry.createdAt} · ${entry.id}\n  ${entry.instruction.replace(/\n/gu, '\n  ')}`).join('\n') : '此版本没有关联讨论。'}\n`;
 }
 async function directories(root: string): Promise<DirectoryIdentity[]> {
   const paths = [root, join(root, 'AI工作区'), join(root, 'AI工作区', '内容草稿')];
@@ -104,6 +105,7 @@ export function createProjectCreationService(input: { database: Database.Databas
     if (row.revision !== revision) failure('CREATION_REVISION_CONFLICT', '这条创作已有更新，已保留当前编辑。请重新读取后合并。', 409);
   }
   const service: ProjectCreationService = {
+    ...createCreativeProfileOperations({ database, now, getCreation: async (projectId, id) => detail(projectId, id) }),
     async list(projectId) {
       project(projectId);
       return (database.prepare('SELECT * FROM personal_project_creations WHERE project_id = ? ORDER BY updated_at DESC, rowid DESC').all(projectId) as CreationRow[]).map(publicItem);
@@ -116,17 +118,17 @@ export function createProjectCreationService(input: { database: Database.Databas
         const { count } = database.prepare('SELECT COUNT(*) AS count FROM personal_project_creations WHERE project_id = ?').get(projectId) as { count: number };
         if (count >= MAX_CREATIONS) failure('CREATION_LIMIT_EXCEEDED', '每个项目最多保存 200 条创作，现有内容已完整保留。', 409);
         database.prepare(`INSERT INTO personal_project_creations
-          (id,project_id,kind,title,brief,body,audience,angle,rationale,sources_json,revision,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)`).run(id, projectId, value.kind, value.title, value.brief, value.body, value.audience, value.angle, value.rationale, JSON.stringify(value.sources), timestamp, timestamp);
+          (id,project_id,kind,title,brief,body,audience,angle,rationale,sources_json,reference_selection_json,revision,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)`).run(id, projectId, value.kind, value.title, value.brief, value.body, value.audience, value.angle, value.rationale, JSON.stringify(value.sources), JSON.stringify(value.referenceSelection ?? { mode: 'auto', paths: [] }), timestamp, timestamp);
       }).immediate();
       return detail(projectId, id);
     },
     async save(projectId, id, raw) {
       const value = parsed(creationSaveSchema, raw);
       database.transaction(() => {
-        assertRevision(owned(projectId, id), value.expectedRevision);
-        database.prepare(`UPDATE personal_project_creations SET kind=?,title=?,brief=?,body=?,audience=?,angle=?,rationale=?,sources_json=?,revision=revision+1,updated_at=? WHERE id=? AND project_id=? AND revision=?`)
-          .run(value.kind, value.title, value.brief, value.body, value.audience, value.angle, value.rationale, JSON.stringify(value.sources), now().toISOString(), id, projectId, value.expectedRevision);
+        const row = owned(projectId, id); assertRevision(row, value.expectedRevision);
+        database.prepare(`UPDATE personal_project_creations SET kind=?,title=?,brief=?,body=?,audience=?,angle=?,rationale=?,sources_json=?,reference_selection_json=?,revision=revision+1,updated_at=? WHERE id=? AND project_id=? AND revision=?`)
+          .run(value.kind, value.title, value.brief, value.body, value.audience, value.angle, value.rationale, JSON.stringify(value.sources), value.referenceSelection === undefined ? row.reference_selection_json : JSON.stringify(value.referenceSelection), now().toISOString(), id, projectId, value.expectedRevision);
       }).immediate();
       return detail(projectId, id);
     },
@@ -137,8 +139,8 @@ export function createProjectCreationService(input: { database: Database.Databas
         const item = publicItem(row); const versionId = makeId(); const timestamp = now().toISOString();
         const { number } = database.prepare('SELECT COALESCE(MAX(number),0)+1 AS number FROM personal_project_creation_versions WHERE creation_id = ?').get(id) as { number: number };
         const content = exportContent(item, { id: versionId, number, createdAt: timestamp }, exchanges(id));
-        database.prepare(`INSERT INTO personal_project_creation_versions (id,creation_id,number,title,brief,body,sources_json,export_content,content_sha256,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`)
-          .run(versionId, id, number, row.title, row.brief, row.body, row.sources_json, content, sha256(content), timestamp);
+        database.prepare(`INSERT INTO personal_project_creation_versions (id,creation_id,number,title,brief,body,sources_json,reference_selection_json,export_content,content_sha256,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+          .run(versionId, id, number, row.title, row.brief, row.body, row.sources_json, row.reference_selection_json, content, sha256(content), timestamp);
         database.prepare('UPDATE personal_project_creations SET revision=revision+1,final_version_id=?,updated_at=? WHERE id=? AND project_id=? AND revision=?')
           .run(value.finalize ? versionId : row.final_version_id, timestamp, id, projectId, value.expectedRevision);
       }).immediate();

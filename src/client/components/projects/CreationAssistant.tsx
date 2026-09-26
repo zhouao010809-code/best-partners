@@ -14,10 +14,11 @@ type Props = {
   persistedDraft: ProjectCreation;
   selection?: { text: string; start: number; end: number } | undefined;
   locked?: boolean;
+  profileRevision?: number | undefined;
   flush(): Promise<ProjectCreation | undefined>;
   onAdopt(body: string, suggestion: CreationSuggestion): boolean;
 };
-export function CreationAssistant({ api, projectId, draft, persistedDraft, messages, selection, flush, onAdopt, locked = false }: Props) {
+export function CreationAssistant({ api, projectId, draft, persistedDraft, messages, selection, flush, onAdopt, profileRevision, locked = false }: Props) {
   const [provider, setProvider] = useState<AssistantProvider>();
   const [providerError, setProviderError] = useState('');
   const [model, setModel] = useState('');
@@ -71,7 +72,8 @@ export function CreationAssistant({ api, projectId, draft, persistedDraft, messa
     finally { if (mounted.current && controller.current === active) setBusy(false); }
   }
   const ready = provider?.status === 'ready' && !!model;
-  const stale = pending && (pending.fingerprint !== draftFingerprint(draft) || pending.suggestion.baseRevision !== draft.revision);
+  const profileStale = pending && profileRevision !== undefined && (pending.suggestion.profileRevision ?? 0) !== profileRevision;
+  const stale = pending && (pending.fingerprint !== draftFingerprint(draft) || pending.suggestion.baseRevision !== draft.revision || profileStale);
   const suggestion = pending?.suggestion;
   const canAdopt = suggestion && (suggestion.body !== undefined || suggestion.replacement !== undefined);
   function adopt() {
@@ -84,7 +86,7 @@ export function CreationAssistant({ api, projectId, draft, persistedDraft, messa
     setPending(undefined); setDismissed('已采用到正文，可在版本记录中保留这一稿。');
   }
   return <aside className="creation-assistant" aria-label="本条内容的问问">
-    <header><Sparkles size={18} /><div><h3>问问</h3><small>围绕这条内容一起打磨</small></div></header>
+    <header><Sparkles size={18} /><div><h3>打磨这篇</h3><small>沿用项目档案，围绕当前稿件修改</small></div></header>
     <div className="creation-model"><label>创作模型<select aria-label="创作模型" value={model} onChange={event => setModel(event.target.value)} disabled={busy}>{provider?.models.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label><button type="button" onClick={() => void refreshProvider()} disabled={busy}>刷新配置</button></div>
     {!ready && <p className="creation-notice" role="status">{provider?.problem || providerError || (provider ? '请先配置 DeepSeek，再让问问协助创作。' : '正在读取模型配置…')} <Link to="/settings">前往模型设置</Link></p>}
     <div className="creation-ai-tools">
@@ -101,7 +103,7 @@ export function CreationAssistant({ api, projectId, draft, persistedDraft, messa
       {suggestion.replacement && <><small>原文</small><pre>{suggestion.replacement.before}</pre><small>建议替换为</small><pre>{suggestion.replacement.after}</pre></>}
       {suggestion.body !== undefined && <pre>{suggestion.body}</pre>}
       <CreationSources sources={suggestion.sources} api={api} />
-      {stale && canAdopt && <p role="status" className="creation-notice">正文或版本已变化，请重新生成建议，以保留你的最新修改。</p>}
+      {stale && canAdopt && <p role="status" className="creation-notice">{profileStale ? '项目创作档案已更新，请根据新档案重新生成建议。' : '正文或版本已变化，或参考资料已调整，请重新生成建议，以保留你的最新修改。'}</p>}
       {canAdopt && <div className="creation-actions"><button type="button" className="projects-button projects-button--primary" disabled={!!stale || locked} onClick={adopt}><Check size={14} />采用到正文</button><button type="button" className="projects-button" onClick={() => { setPending(undefined); setDismissed('已保留原文，建议留在讨论记录中。'); }}>保留原文</button></div>}
     </section>}
     {!!history.length && <details className="creation-history"><summary>本条讨论 · {history.length}</summary>{history.slice().reverse().map(message => <article key={message.id}><strong>{message.instruction}</strong><SafeMarkdown>{message.suggestion.reply}</SafeMarkdown>{(message.suggestion.body || message.suggestion.replacement) && <details><summary>查看当时建议</summary><pre>{message.suggestion.body ?? message.suggestion.replacement?.after}</pre></details>}<CreationSources sources={message.suggestion.sources} api={api} /></article>)}</details>}

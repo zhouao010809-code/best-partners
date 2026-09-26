@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { PublicApiError } from '../../../shared/api/errors.js';
+import { creativeProfileResponseSchema, creativeProfileSaveSchema } from '../../../shared/api/creative-profile.js';
 import { API_VERSION } from '../../../shared/api/schemas.js';
 import {
   creationCreateSchema, creationSaveSchema, creationSnapshotSchema,
@@ -22,6 +23,18 @@ function parse<T extends z.ZodType>(schema: T, value: unknown): z.output<T> {
 }
 
 export function registerProjectCreationRoutes(app: FastifyInstance, service?: ProjectCreationService, generate?: CreationGenerator): void {
+  const profilePath = '/api/v1/projects/:projectId/creative-profile';
+  app.get(profilePath, async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { projectId } = parse(creationProjectParamsSchema, request.params);
+    return parseApiOutput(creativeProfileResponseSchema, { data: await required(service).getProfile(projectId), version: API_VERSION });
+  });
+  app.put(profilePath, async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { projectId } = parse(creationProjectParamsSchema, request.params);
+    const input = parse(creativeProfileSaveSchema, request.body);
+    return parseApiOutput(creativeProfileResponseSchema, { data: await required(service).saveProfile(projectId, input), version: API_VERSION });
+  });
   const base = '/api/v1/projects/:projectId/creations';
   app.get(base, async (request, reply) => {
     reply.header('cache-control', 'no-store');

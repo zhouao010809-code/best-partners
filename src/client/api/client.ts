@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { creativeProfileResponseSchema, type ProjectCreativeProfile, type CreativeProfileSave } from '../../shared/api/creative-profile.js';
 import { creationListResponseSchema, creationDetailResponseSchema, creationSuggestionResponseSchema, creationExportResponseSchema,
   type ProjectCreation, type CreationDetail, type CreationCreate, type CreationSave, type CreationSuggestion, type CreationGenerateRequest, type CreationExport } from '../../shared/api/project-creations.js';
 import { attachmentResponseSchema, attachmentPagesResponseSchema, attachmentListResponseSchema, attachmentArchiveResponseSchema, type Attachment, type AttachmentPages, type AttachmentArchiveResult } from '../../shared/api/attachments.js';
@@ -139,6 +140,8 @@ export interface KnowledgeQuery {
 
 export interface ReadConsoleApi {
   readonly creations?: {
+    getProfile?(projectId: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectCreativeProfile>>;
+    saveProfile?(projectId: string, input: CreativeProfileSave): Promise<ApiClientResult<ProjectCreativeProfile>>;
     list(projectId: string, signal?: AbortSignal): Promise<ApiClientResult<{ items: ProjectCreation[] }>>;
     get(projectId: string, id: string, signal?: AbortSignal): Promise<ApiClientResult<CreationDetail>>;
     create(projectId: string, input: CreationCreate): Promise<ApiClientResult<CreationDetail>>;
@@ -471,6 +474,8 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
   const creationsPath = (projectId: string, id?: string) => `/api/v1/projects/${encodeURIComponent(projectId)}/creations${id ? `/${encodeURIComponent(id)}` : ''}`;
   return {
     creations: {
+      getProfile: (p, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(p)}/creative-profile`, creativeProfileResponseSchema, getInit(signal)),
+      saveProfile: (p, input) => writeWithCsrf(`/api/v1/projects/${encodeURIComponent(p)}/creative-profile`, creativeProfileResponseSchema, 'PUT', JSON.stringify(input)),
       list: (p, signal) => requestData(fetcher, creationsPath(p), creationListResponseSchema, getInit(signal)),
       get: (p, id, signal) => requestData(fetcher, creationsPath(p, id), creationDetailResponseSchema, getInit(signal)),
       create: (p, input) => postWithCsrf(creationsPath(p), creationDetailResponseSchema, input),

@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { createTextPdf } from '../helpers/pdf-fixture.js';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -393,4 +394,95 @@ describe('personal project registry and index', () => {
     expect(page.items).toHaveLength(200);
     expect(page.total).toBeLessThanOrEqual(5_000);
   });
+});
+
+
+describe('live project file snapshot provenance', () => {
+  it('pairs changed UTF-8 text with its actual file hash, size and parsed BOM-free content without refreshing the index', async () => {
+    const f = await fixture(); const preview = await f.service.scan(f.projectRoot);
+    const project = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const original = await f.service.readFile(project.id, 'README.md');
+    const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('已经变化的新正文\n')]);
+    await writeFile(join(f.projectRoot, 'README.md'), bytes);
+    const detail = await f.service.readFile(project.id, 'README.md');
+    expect(detail.content).toBe('已经变化的新正文\n');
+    expect(detail.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+    expect(detail.sha256).not.toBe(original.sha256);
+    expect(detail.bytes).toBe(bytes.length);
+    expect(detail.totalCharacters).toBe(detail.content!.length);
+    expect(await readFile(join(f.projectRoot, 'README.md'))).toEqual(bytes);
+  });
+
+  it('uses parsed PDF text while its evidence hash still identifies the current PDF bytes', async () => {
+    const f = await fixture(); const first = createTextPdf(['First PDF evidence']);
+    await writeFile(join(f.projectRoot, 'evidence.pdf'), first);
+    const preview = await f.service.scan(f.projectRoot); const project = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const original = await f.service.readFile(project.id, 'evidence.pdf');
+    expect(original.content).toBe('First PDF evidence');
+    expect(original.sha256).toBe(createHash('sha256').update(first).digest('hex'));
+    const changed = createTextPdf(['Second PDF evidence']); await writeFile(join(f.projectRoot, 'evidence.pdf'), changed);
+    const current = await f.service.readFile(project.id, 'evidence.pdf');
+    expect(current.content).toBe('Second PDF evidence');
+    expect(current.sha256).toBe(createHash('sha256').update(changed).digest('hex'));
+    expect(current.content).not.toContain('%PDF-');
+  });
+
+  it('does not expose replacement-character text when a formerly readable file becomes invalid UTF-8', async () => {
+    const f = await fixture(); const preview = await f.service.scan(f.projectRoot);
+    const project = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    await writeFile(join(f.projectRoot, 'brief.txt'), Buffer.from([0xff, 0xfe, 0x41, 0x00]));
+    const detail = await f.service.readFile(project.id, 'brief.txt');
+    expect(detail).toMatchObject({ parseStatus: 'failed', problem: 'PARSE_FAILED' });
+    expect(detail.content).toBeUndefined();
+  });
+
+  it('bounds a previously readable file that grows beyond the parser limit and still refuses replaced file symlinks', async () => {
+    const f = await fixture(); const preview = await f.service.scan(f.projectRoot);
+    const project = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    await writeFile(join(f.projectRoot, 'brief.txt'), Buffer.alloc(2 * 1024 * 1024 + 1, 'x'));
+    const grown = await f.service.readFile(project.id, 'brief.txt');
+    expect(grown).toMatchObject({ parseStatus: 'too-large', problem: 'FILE_TOO_LARGE_FOR_INDEX' });
+    expect(grown.content).toBeUndefined();
+    const outside = join(f.root, 'outside.md'); await writeFile(outside, '外部内容不得读取');
+    await rm(join(f.projectRoot, 'README.md')); await symlink(outside, join(f.projectRoot, 'README.md'));
+    const linked = await f.service.readFile(project.id, 'README.md');
+    expect(linked.content).toBeUndefined(); expect(linked.problem).toBe('PROJECT_FILE_UNAVAILABLE');
+  });
+
+  it('honors an already-aborted read signal before reading or parsing a file', async () => {
+    const f = await fixture(); const preview = await f.service.scan(f.projectRoot);
+    const project = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+    const controller = new AbortController(); controller.abort();
+    await expect(f.service.readFile(project.id, 'README.md', controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});
+
+it('cancels an in-flight freshness scan without marking the project unavailable or recording a failed refresh', async () => {
+  const f = await fixture(); const preview = await f.service.scan(f.projectRoot);
+  const project = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
+  const before = f.database.prepare('SELECT * FROM personal_projects WHERE id=?').get(project.id);
+  const operationsBefore = f.database.prepare('SELECT * FROM personal_project_operations WHERE project_id=?').all(project.id);
+  let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+  let scanCount = 0;
+  const service = createProjectService({ database: f.database, vaultRoot: f.vaultRoot, stateRoot: f.stateRoot,
+    scan: async (path, options) => {
+      scanCount += 1;
+      if (scanCount > 1) return scanProjectFolder(path, options);
+      entered();
+      return new Promise((_resolve, reject) => {
+        if (options?.signal?.aborted) { reject(options.signal.reason); return; }
+        options?.signal?.addEventListener('abort', () => reject(options.signal!.reason), { once: true });
+      });
+    }
+  });
+  const controller = new AbortController();
+  const pending = service.ensureFresh(project.id, controller.signal);
+  await started; controller.abort();
+  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  expect(f.database.prepare('SELECT * FROM personal_projects WHERE id=?').get(project.id)).toEqual(before);
+  expect(f.database.prepare('SELECT * FROM personal_project_operations WHERE project_id=?').all(project.id)).toEqual(operationsBefore);
+  await writeFile(join(f.projectRoot, 'brief.txt'), '取消之后的新内容');
+  expect((await service.ensureFresh(project.id)).sourceRevision).toBe(project.sourceRevision + 1);
+  expect(scanCount).toBe(2);
+  await service.close();
 });

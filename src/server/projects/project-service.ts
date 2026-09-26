@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, relative, sep } from 'node:path';
 import {
@@ -17,6 +18,7 @@ import {
   type ProjectSummary
 } from '../../shared/api/projects.js';
 import { scanProjectFolder, type ProjectScanEntry, type ProjectScanResult } from './project-scanner.js';
+import { parseAttachment } from '../attachments/parser.js';
 import { canonicalProjectRoot, resolveProjectPath } from './project-paths.js';
 
 type CodedError = Error & { code: string };
@@ -67,6 +69,7 @@ interface FileRow {
 }
 
 const MAX_CONTENT_CHARACTERS = 200_000;
+const MAX_READ_BYTES = 2 * 1024 * 1024;
 const SCAN_TTL_MS = 15 * 60 * 1000;
 const FRESHNESS_TTL_MS = 1_000;
 const MAX_FILE_SEARCH_CANDIDATES = 5_000;
@@ -390,18 +393,22 @@ export function createProjectService(input: {
   }
 
   async function refreshUnlocked(id: string, signal?: AbortSignal): Promise<ProjectSummary> {
+    signal?.throwIfAborted();
     const row = rowOrThrow(database, id);
     let root: string;
     try {
       root = await canonicalBoundRoot(row.root_path);
       if (root !== row.root_path) throw coded('PROJECT_ROOT_RECONNECT_REQUIRED', 'Project root identity changed');
     } catch (error) {
+      signal?.throwIfAborted();
       return setRefreshFailure(row, 'reconnect-required', error);
     }
     let result: ProjectScanResult;
     try {
       result = await scanWithOptions(root, signal);
+      signal?.throwIfAborted();
     } catch (error) {
+      signal?.throwIfAborted();
       if (isCoded(error, 'PROJECT_ROOT_SYMLINK') || isCoded(error, 'PROJECT_ROOT_INVALID') || isCoded(error, 'PROJECT_ROOT_PROTECTED') || isCoded(error, 'PROJECT_SOURCE_CHANGED') || isCoded(error, 'PROJECT_ROOT_RECONNECT_REQUIRED')) {
         return setRefreshFailure(row, isCoded(error, 'PROJECT_SOURCE_CHANGED') ? 'unavailable' : 'reconnect-required', error);
       }
@@ -441,11 +448,13 @@ export function createProjectService(input: {
 
   async function ensureFresh(id: string, signal?: AbortSignal): Promise<ProjectSummary> {
     return withLock(`project:${id}`, async () => {
+      signal?.throwIfAborted();
       const timestamp = now().getTime();
       const last = freshness.get(id) ?? 0;
       if (timestamp - last < FRESHNESS_TTL_MS) return projectSummary(rowOrThrow(database, id), database);
       freshness.set(id, timestamp);
-      return refreshUnlocked(id, signal);
+      try { return await refreshUnlocked(id, signal); }
+      catch (error) { if (signal?.aborted) freshness.delete(id); throw error; }
     });
   }
 
@@ -520,7 +529,8 @@ export function createProjectService(input: {
     return projectFilePageSchema.parse({ items: matched.slice(0, limit).map(publicFile), total: matched.length, revision: project.source_revision });
   }
 
-  async function readFileForProject(id: string, relativePath: string): Promise<ProjectFileDetail> {
+  async function readFileForProject(id: string, relativePath: string, signal?: AbortSignal): Promise<ProjectFileDetail> {
+    signal?.throwIfAborted();
     const project = rowOrThrow(database, id);
     const row = database.prepare('SELECT * FROM personal_project_files WHERE project_id = ? AND relative_path = ?').get(id, relativePath) as FileRow | undefined;
     if (row === undefined) throw coded('PROJECT_FILE_NOT_FOUND', 'Project file not found');
@@ -534,17 +544,41 @@ export function createProjectService(input: {
       if (info.isSymbolicLink() || !info.isFile()) throw coded('PROJECT_FILE_UNAVAILABLE', 'Project file is unavailable');
       const canonicalFile = await realpath(absolute);
       if (!contained(canonicalRoot, canonicalFile)) throw coded('PROJECT_FILE_UNAVAILABLE', 'Project file is outside the project root');
-      const handle = await open(absolute, 'r');
+      const handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
-        const buffer = Buffer.allocUnsafe(MAX_CONTENT_CHARACTERS * 4 + 1);
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-        const decoded = buffer.subarray(0, bytesRead).toString('utf8');
+        const opened = await handle.stat();
+        if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) throw coded('PROJECT_FILE_UNAVAILABLE', 'Project file was replaced');
+        if (opened.size > MAX_READ_BYTES) return projectFileDetailSchema.parse({ ...metadata, bytes: opened.size, parseStatus: 'too-large', problem: 'FILE_TOO_LARGE_FOR_INDEX' });
+        const buffer = Buffer.allocUnsafe(MAX_READ_BYTES + 1);
+        let length = 0;
+        while (length < buffer.length) {
+          signal?.throwIfAborted();
+          const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+          if (bytesRead === 0) break;
+          length += bytesRead;
+        }
+        signal?.throwIfAborted();
+        const after = await handle.stat(); const current = await lstat(absolute);
+        if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs
+          || current.isSymbolicLink() || !current.isFile() || current.dev !== opened.dev || current.ino !== opened.ino
+          || await canonicalBoundRoot(project.root_path) !== canonicalRoot || await realpath(absolute) !== canonicalFile) throw coded('PROJECT_FILE_CHANGED', 'Project file changed while reading');
+        if (length > MAX_READ_BYTES) return projectFileDetailSchema.parse({ ...metadata, bytes: length, parseStatus: 'too-large', problem: 'FILE_TOO_LARGE_FOR_INDEX' });
+        const bytes = buffer.subarray(0, length);
+        // The hash and parsed text originate from this same verified byte snapshot,
+        // never an older index row or a UTF-8 re-encoding of a PDF/BOM-bearing file.
+        const live = { ...metadata, bytes: length, modifiedAt: after.mtime.toISOString(), sha256: createHash('sha256').update(bytes).digest('hex') };
+        const mediaType = relativePath.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/plain';
+        const parsed = await parseAttachment(bytes, mediaType, signal ?? new AbortController().signal);
+        signal?.throwIfAborted();
+        if (parsed.status !== 'ready') return projectFileDetailSchema.parse({ ...live, parseStatus: 'failed', problem: parsed.status === 'encrypted' ? 'PDF_ENCRYPTED' : parsed.status === 'needs-ocr' ? 'PDF_NEEDS_OCR' : 'PARSE_FAILED' });
+        const decoded = parsed.pages.map(page => page.text).join('\n');
         const content = decoded.slice(0, MAX_CONTENT_CHARACTERS);
-        return projectFileDetailSchema.parse({ ...metadata, content, totalCharacters: content.length, truncated: decoded.length > MAX_CONTENT_CHARACTERS || bytesRead === buffer.length });
+        return projectFileDetailSchema.parse({ ...live, content, totalCharacters: content.length, truncated: decoded.length > MAX_CONTENT_CHARACTERS });
       } finally {
         await handle.close();
       }
     } catch (error) {
+      signal?.throwIfAborted();
       const problem = isCoded(error, 'PROJECT_ROOT_RECONNECT_REQUIRED') ? 'PROJECT_ROOT_RECONNECT_REQUIRED' : isCoded(error, 'PROJECT_FILE_UNAVAILABLE') ? 'PROJECT_FILE_UNAVAILABLE' : 'PROJECT_FILE_CHANGED';
       return projectFileDetailSchema.parse({ ...metadata, problem });
     }
