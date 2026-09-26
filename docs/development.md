@@ -4,7 +4,7 @@
 
 ## 环境与启动
 
-需要 macOS arm64、Node.js 22.12+ 和 Xcode Command Line Tools。
+需要 macOS arm64、Node.js 22.22.3+ 和 Xcode Command Line Tools。
 
 ```sh
 npm ci
@@ -15,7 +15,7 @@ npm run electron
 
 ## 验证入口
 
-Node.js 需要 `22.12+`。日常提交前运行：
+Node.js 需要 `22.22.3+`。日常提交前运行：
 
 ```sh
 npm run verify:fast
