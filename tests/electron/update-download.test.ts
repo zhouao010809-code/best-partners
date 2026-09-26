@@ -79,8 +79,12 @@ async function installTransport(instance: ElectronApplication, feedUrl: string, 
     await instance.evaluate(({ net, shell }, input) => {
       const state = globalThis as unknown as DownloadFixtureState;
       state.openedInstallers = [];
-      // A regression to Node fetch must fail instead of silently bypassing this transport.
-      globalThis.fetch = async () => { throw new Error('NODE_FETCH_MUST_NOT_BE_USED_FOR_UPDATES'); };
+      // Keep the existing feed transport; installer bytes must use Chromium.
+      const nodeFetch = globalThis.fetch;
+      globalThis.fetch = async (resource, options) => {
+        if (String(resource) === input.feedUrl) return nodeFetch(resource, options);
+        throw new Error('NODE_FETCH_MUST_NOT_BE_USED_FOR_INSTALLER_DOWNLOADS');
+      };
       const request = net.request.bind(net);
       net.request = options => {
         if (typeof options !== 'string' && options.url === input.feedUrl) return request(options);
