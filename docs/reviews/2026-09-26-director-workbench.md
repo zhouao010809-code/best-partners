@@ -24,6 +24,14 @@
 
 完整测试与打包证据保存于 `.local/director-workbench-evidence/`。最终构建和发布信息由该目录的发布验证记录及 Git tag 对应。
 
+## 发布与本机验证
+
+- 源码提交 `2a491e73aa0c850944e6d74d3f97a596ef480ecd` 已推送 GitHub main；与完整构建树相比仅验收及执行计划文档不同，运行时代码一致。
+- [v0.1.4 发布页](https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.4) 已于 2026-09-26 发布。草稿阶段核对目标提交和两个附件后发布，GitHub 上 DMG 的 SHA256 为 `0ba4023fec15b167047fa99f3fbc9170fac54f07de91ab68b004a396e8ab1905`，大小 207751034 字节，与本地测试包一致。
+- 直接运行生产更新检查函数：v0.1.3 可发现 v0.1.4，返回正式下载链接、相同校验值与大小；v0.1.4 返回已是最新版本。不包含原生自动安装清单。
+- 本机已打开下载目录下的 v0.1.4 应用。只读检查确认现有项目已连接、有可读资料，DeepSeek 配置状态为 ready；没有为此调用付费模型或写入真实项目资料。
+- 对应证据：`github-draft-verified.json`、`github-release-published.json`、`live-update-check.json`、`installed-app-smoke.json`。
+
 ## 设计推断与未验证
 
 - 创作优先有助于用户定位当前稿和定稿，是针对这次明确反馈的设计选择；自动化操作成功不能当作真人已经认可。

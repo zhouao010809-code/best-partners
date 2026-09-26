@@ -36,4 +36,4 @@
 - [x] Independent spec review then correctness review; fix findings.
 - [x] Architecture, typecheck, focused unit/integration/component and required first-run Electron checks; isolated workbench Electron test includes restart and responsive screenshots. No real account AI requests or real-vault test writes.
 - [x] Update README/reference/review docs and version. Build the complete staged tree, verify packaged DMG contents/version/hash, and check packaged workbench.
-- [ ] Commit, push GitHub main, draft release with verified assets then publish preview release. User has no Apple Developer account, so retain the existing manual DMG update path.
+- [x] Commit, push GitHub main, draft release with verified assets then publish preview release. User has no Apple Developer account, so retain the existing manual DMG update path. Published v0.1.4 at commit `2a491e73aa0c850944e6d74d3f97a596ef480ecd`; the production checker finds it from v0.1.3 with matching asset SHA256 and size, and reports v0.1.4 as current.
