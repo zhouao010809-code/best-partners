@@ -60,9 +60,9 @@ describe('ProjectWorkspacePage', () => {
     const onUpdate = (event: Event) => updates.push(event);
     window.addEventListener('xiaozhao:project-workspace-updated', onUpdate);
     renderPage();
-    expect((await screen.findAllByText('项目语料：需要重新连接')).length).toBeGreaterThan(0);
-    expect(screen.getByText('全局知识库：可检索')).toBeVisible();
-    expect(screen.getByText('写入范围：A项目 / AI工作区')).toBeVisible();
+    expect(await screen.findByText('需要重新连接')).toBeVisible();
+    expect(screen.getByRole('tab', { name: /项目资料/u })).toBeVisible();
+    expect(screen.getByRole('tab', { name: /已保存产出/u })).toBeVisible();
     expect(screen.getByText('A项目')).toBeVisible();
     await user.click(screen.getByRole('button', { name: '重新连接' }));
     expect(await screen.findByRole('heading', { name: '确认项目文件夹' })).toBeVisible();
@@ -81,9 +81,11 @@ describe('ProjectWorkspacePage', () => {
   it('shows the connected project context when the bound folder is ready', async () => {
     get.mockResolvedValueOnce(ok({ ...project, availability: 'ready' }));
     renderPage();
-    expect((await screen.findAllByText('项目语料：已连接')).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('全局知识库：可检索')).toBeVisible();
-    expect(screen.getByText('写入范围：A项目 / AI工作区')).toBeVisible();
+    expect(await screen.findByText('资料已连接')).toBeVisible();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.queryByText('PROJECT SYNC')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /项目资料/u })).toBeVisible();
+    expect(screen.getByRole('tab', { name: /已保存产出/u })).toBeVisible();
   });
 
   it('opens the existing project assistant intent from the workspace', async () => {
@@ -93,8 +95,8 @@ describe('ProjectWorkspacePage', () => {
     try {
       const user = userEvent.setup();
       renderPage();
-      await screen.findByText('写入范围：A项目 / AI工作区');
-      await user.click(screen.getByRole('button', { name: '打开项目问问' }));
+      await screen.findByRole('heading', { name: 'A项目', level: 1 });
+      await user.click(screen.getByRole('button', { name: '问问这个项目' }));
       expect(received).toHaveLength(1);
       expect((received[0] as CustomEvent).detail).toMatchObject({ scope: 'project', projectId: id, projectRevision: project.sourceRevision });
     } finally {
@@ -106,9 +108,26 @@ describe('ProjectWorkspacePage', () => {
     const user = userEvent.setup();
     refresh.mockResolvedValueOnce({ ok: false, code: 'PROJECT_ROOT_RECONNECT_REQUIRED', state: { status: 'operation-error', message: 'root unavailable' } });
     renderPage();
-    await screen.findAllByText('项目语料：需要重新连接');
-    await user.click(screen.getByRole('button', { name: '刷新索引' }));
+    await screen.findByText('需要重新连接');
+    await user.click(screen.getByRole('button', { name: '更新资料' }));
     expect(await screen.findByText('项目文件夹已变化，请重新连接；当前项目会话仍保留。')).toBeVisible();
     expect(screen.getByText('A项目')).toBeVisible();
+  });
+
+  it('notifies the open assistant after refreshing project content', async () => {
+    const user = userEvent.setup();
+    const updates = vi.fn();
+    window.addEventListener('xiaozhao:project-workspace-updated', updates);
+    try {
+      get.mockResolvedValueOnce(ok({ ...project, availability: 'ready' }));
+      renderPage();
+      await screen.findByText('资料已连接');
+      await user.click(screen.getByRole('button', { name: '更新资料' }));
+      await screen.findByText('项目资料已更新。');
+      expect(updates).toHaveBeenCalledOnce();
+      expect((updates.mock.calls[0]![0] as CustomEvent).detail).toEqual({ projectId: id });
+    } finally {
+      window.removeEventListener('xiaozhao:project-workspace-updated', updates);
+    }
   });
 });

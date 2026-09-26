@@ -63,10 +63,10 @@ it('binds the single panel to a project, sends its source revision, and scopes h
   service.send.mockResolvedValueOnce(ok(projectConversation));
   service.history.mockResolvedValue(ok({ conversations: [] }));
   const user = userEvent.setup(); render(<ProjectHarness />);
-  expect((await screen.findAllByText('项目模式 · A项目')).length).toBeGreaterThan(0);
-  expect(screen.getByText('项目语料：已连接')).toBeVisible();
-  expect(screen.getByText('全局知识库：可检索')).toBeVisible();
-  expect(screen.getByText('写入范围：A项目 / AI工作区')).toBeVisible();
+  expect(await screen.findByRole('heading', { name: '项目问问' })).toBeVisible();
+  expect(screen.getByText('A项目', { exact: true })).toBeVisible();
+  expect(screen.getByText('项目资料已连接')).toBeVisible();
+  expect(screen.getByText('围绕当前项目资料回答，可参考知识库；确认后保存到 AI工作区。')).toBeVisible();
   await user.type(screen.getByLabelText('发送给问问的消息'), '下周拍 6 条获客内容');
   await user.click(screen.getByRole('button', { name: '发送消息' }));
   await waitFor(() => expect(service.send).toHaveBeenCalledTimes(1));

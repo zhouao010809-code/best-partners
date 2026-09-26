@@ -30,6 +30,8 @@
   padding: 3px;
   filter: blur(3px);
 }
+/* Keep the panel's decorative border inside its scrollable bounds. */
+.assistant-panel::before, .assistant-panel::after { inset: 0; }
 .assistant-toggle:is(:hover, :focus-visible):not(:disabled)::after,
 .app-frame:has(.queue-workspace[data-ai-active='true'], .extraction-workbench[data-ai-active='true']) .assistant-toggle::after,
 .assistant-toggle[data-ai-active='true']::after {

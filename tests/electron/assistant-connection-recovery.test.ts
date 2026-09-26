@@ -95,8 +95,8 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '确认添加项目', exact: true }).click();
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
       const projectId = new URL(window.url()).pathname.split('/').at(-1)!;
-      await expect(panel.getByRole('heading', { name: '项目模式 · 连接恢复测试项目', exact: true })).toBeVisible();
-      await expect(panel.getByText('项目语料：已连接', { exact: true })).toBeVisible();
+      await expect(panel.getByRole('heading', { name: '项目问问', exact: true })).toBeVisible();
+      await expect(panel.getByText('项目资料已连接', { exact: true })).toBeVisible();
 
       const input = panel.getByLabel('发送给问问的消息');
       const draft = '请解释这个项目的目标，保留我的草稿。';

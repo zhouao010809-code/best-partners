@@ -279,6 +279,7 @@ export interface AppShellProps {
 
 export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = false }: AppShellProps) {
   const location = useLocation();
+  const projectPage = /^\/projects(?:\/[^/]+)?\/?$/u.test(location.pathname);
   const projectRouteId = (() => {
     const match = location.pathname.match(/^\/projects\/([^/]+)$/u);
     if (!match?.[1]) return undefined;
@@ -533,7 +534,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
 
   useEffect(() => {
     if (previousPath.current !== undefined && previousPath.current !== location.pathname) {
-      headingRef.current?.focus({ preventScroll: true });
+      (headingRef.current ?? document.getElementById('main-content'))?.focus({ preventScroll: true });
     }
     previousPath.current = location.pathname;
   }, [location.pathname]);
@@ -655,7 +656,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
         </header>
 
         <main id="main-content" className="main-content" tabIndex={-1}>
-          <header className="page-heading">
+          {!projectPage && <header className="page-heading">
             <div>
               {location.pathname !== '/' && <p className="page-heading__eyebrow">{identity.eyebrow}</p>}
               <h1 ref={headingRef} tabIndex={-1}>{identity.title}</h1>
@@ -665,7 +666,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
               <span aria-hidden="true" />
               {location.pathname === '/intake' ? 'CONFIRM TO ARCHIVE' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? 'CONFIRM TO KEEP' : 'CANDIDATES ONLY' : location.pathname === '/settings' ? 'LOCAL SETTINGS' : location.pathname === '/skills' ? 'ORGANIZE LOCALLY' : (location.pathname === '/trash' || location.pathname.startsWith('/library') || location.pathname === '/knowledge') && api.trash ? 'MANUAL CONFIRM' : 'READ ONLY'}
             </div>}
-          </header>
+          </header>}
 
           <div className="page-stage">
             <Outlet context={runtime} />

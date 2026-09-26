@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, BookOpen, FolderKanban, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react';
+import { ArrowLeft, FolderKanban, MessageCircle, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import type { ApiClientResult } from '../api/client.js';
 import type { ProjectScanPreview, ProjectSummary } from '../../shared/api/projects.js';
@@ -94,14 +94,15 @@ export function ProjectWorkspacePage() {
           setProject({ ...project, availability: 'reconnect-required' });
           setMessage('项目文件夹已变化，请重新连接；当前项目会话仍保留。');
         } else {
-          setMessage(resultMessage(result, '项目索引刷新未完成。'));
+          setMessage(resultMessage(result, '项目资料更新未完成。'));
         }
         return;
       }
       setProject(result.value);
-      setMessage('项目索引已刷新。');
+      window.dispatchEvent(new CustomEvent(PROJECT_WORKSPACE_UPDATED_EVENT, { detail: { projectId: id } }));
+      setMessage('项目资料已更新。');
     } catch {
-      setMessage('项目索引刷新未完成，请重试。');
+      setMessage('项目资料更新未完成，请重试。');
     } finally {
       setRefreshing(false);
     }
@@ -173,32 +174,27 @@ export function ProjectWorkspacePage() {
   }
 
   if (state === 'failed') {
-    return <section className="projects-page" aria-labelledby="project-workspace-title"><Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link><header className="projects-page__heading"><div><p className="projects-eyebrow">PROJECT / LOCAL WORKSPACE</p><h2 id="project-workspace-title">项目工作区</h2></div></header><PageState state={{ status: 'operation-error', message: message ?? '项目工作区暂时无法读取。' }} /><button type="button" className="projects-button projects-button--quiet" onClick={() => void load()}><RefreshCw size={15} aria-hidden="true" />重新读取</button></section>;
+    return <section className="projects-page" aria-labelledby="project-workspace-title"><Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link><header className="projects-page__heading"><div><h1 id="project-workspace-title">项目资料</h1></div></header><PageState state={{ status: 'operation-error', message: message ?? '项目工作区暂时无法读取。' }} /><button type="button" className="projects-button projects-button--quiet" onClick={() => void load()}><RefreshCw size={15} aria-hidden="true" />重新读取</button></section>;
   }
   if (state === 'loading' || project === undefined) {
-    return <section className="projects-page" aria-labelledby="project-workspace-title"><header className="projects-page__heading"><div><p className="projects-eyebrow">PROJECT / LOCAL WORKSPACE</p><h2 id="project-workspace-title">项目工作区</h2></div></header><PageState state={{ status: 'loading', message: '正在读取项目工作区。' }} /></section>;
+    return <section className="projects-page" aria-labelledby="project-workspace-title"><header className="projects-page__heading"><div><h1 id="project-workspace-title">项目资料</h1></div></header><PageState state={{ status: 'loading', message: '正在读取项目工作区。' }} /></section>;
   }
 
   if (reconnectPreview !== undefined) {
-    return <section className="projects-page" aria-labelledby="project-workspace-title"><Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link><header className="projects-page__heading"><div><p className="projects-eyebrow">PROJECT / RECONNECT</p><h2 id="project-workspace-title">重新连接 {project.displayName}</h2><p>项目编号和现有问问会话保持不变；请选择新的本地项目文件夹。</p></div></header>{message !== undefined && <p className="projects-inline-message" role="alert">{message}</p>}<ProjectBindPreview preview={reconnectPreview} displayName={reconnectName} onDisplayNameChange={setReconnectName} onConfirm={() => void confirmReconnect()} onCancel={() => { setReconnectPreview(undefined); setReconnectName(''); setMessage('已取消重新连接，当前项目和会话没有变化。'); }} submitting={reconnecting} reconnecting /></section>;
+    return <section className="projects-page" aria-labelledby="project-workspace-title"><Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link><header className="projects-page__heading"><div><h1 id="project-workspace-title">重新连接 {project.displayName}</h1><p>项目编号和现有问问会话保持不变；请选择新的本地项目文件夹。</p></div></header>{message !== undefined && <p className="projects-inline-message" role="alert">{message}</p>}<ProjectBindPreview preview={reconnectPreview} displayName={reconnectName} onDisplayNameChange={setReconnectName} onConfirm={() => void confirmReconnect()} onCancel={() => { setReconnectPreview(undefined); setReconnectName(''); setMessage('已取消重新连接，当前项目和会话没有变化。'); }} submitting={reconnecting} reconnecting /></section>;
   }
 
   return (
     <section className="projects-page project-workspace" aria-labelledby="project-workspace-title">
       <Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link>
       <header className="projects-page__heading project-workspace__heading">
-        <div><p className="projects-eyebrow">PROJECT / ISOLATED WORKSPACE</p><h2 id="project-workspace-title"><FolderKanban size={22} aria-hidden="true" />{project.displayName}</h2><p>项目语料、项目问问和 AI 工作区各自独立；全局知识库只作为可检索的辅助来源。</p></div>
-        <button type="button" className="projects-button projects-button--primary" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}>打开项目问问</button>
+        <div><h1 id="project-workspace-title"><FolderKanban size={24} aria-hidden="true" />{project.displayName}</h1><p>查看项目资料，让问问帮你梳理重点、查找信息和起草内容。</p></div>
+        <button type="button" className="projects-button projects-button--primary" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}><MessageCircle size={16} aria-hidden="true" />问问这个项目</button>
       </header>
       {message !== undefined && <p className="projects-inline-message" role="status">{message}</p>}
       {staleNotice && <p className="project-stale-notice" role="status"><ShieldCheck size={15} aria-hidden="true" />重新连接后，旧的项目写入计划不会自动执行；请重新确认当前资料。</p>}
       <ProjectStatusCard project={project} onRefresh={() => void refreshProject()} onReconnect={() => void beginReconnect()} refreshing={refreshing} reconnecting={reconnecting} {...(project.availability === 'reconnect-required' ? { message: '请重新选择原项目文件夹或它的新位置。' } : {})} />
-      <section className="project-context-strip" aria-label="项目问问范围">
-        <div><BookOpen size={16} aria-hidden="true" /><span><strong>项目语料：{project.availability === 'ready' ? '已连接' : project.availability === 'scanning' ? '扫描中' : '需要重新连接'}</strong><small>只读取当前项目文件夹的索引</small></span></div>
-        <div><Sparkles size={16} aria-hidden="true" /><span><strong>全局知识库：可检索</strong><small>按本次任务召回相关方法和证据</small></span></div>
-        <div><ShieldCheck size={16} aria-hidden="true" /><span><strong>写入范围：{project.displayName} / AI工作区</strong><small>确认后才会生成项目产出</small></span></div>
-      </section>
-      <ProjectFilesPanel key={`${project.id}:${filesRefreshVersion}`} api={api} projectId={project.id} revision={project.sourceRevision} />
+      <ProjectFilesPanel key={`${project.id}:${filesRefreshVersion}`} api={api} projectId={project.id} revision={project.sourceRevision} onAsk={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })} />
     </section>
   );
 }

@@ -29,9 +29,8 @@ export function ProjectBindPreview({
     <section className="project-bind-preview instrument-panel" aria-labelledby="project-bind-preview-title">
       <header className="project-bind-preview__header">
         <div>
-          <p className="projects-eyebrow">PROJECT FOLDER / SCAN PREVIEW</p>
           <h2 id="project-bind-preview-title">确认项目文件夹</h2>
-          <p>只建立本地索引，不复制或改写原文件。项目产出会在确认后写入 AI工作区。</p>
+          <p>文件保留在原位置。添加后，你可以浏览资料、围绕这个项目提问；确认保存的结果放在项目的 AI工作区。</p>
         </div>
         <FolderOpen aria-hidden="true" />
       </header>

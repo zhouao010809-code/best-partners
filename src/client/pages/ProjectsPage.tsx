@@ -132,7 +132,7 @@ export function ProjectsPage() {
   if (preview !== undefined) {
     return (
       <section className="projects-page" aria-labelledby="projects-title">
-        <header className="projects-page__heading"><div><p className="projects-eyebrow">PERSONAL PROJECTS / BIND</p><h2 id="projects-title">添加我的项目</h2><p>选择一个已有项目文件夹即可开始；不需要先填写背景、阶段或目标。</p></div></header>
+        <header className="projects-page__heading"><div><h1 id="projects-title">添加我的项目</h1><p>选择一个已有项目文件夹即可开始；不需要先填写背景、阶段或目标。</p></div></header>
         {message !== undefined && <p className="projects-inline-message" role="alert">{message}</p>}
         <ProjectBindPreview preview={preview} displayName={displayName} onDisplayNameChange={setDisplayName} onConfirm={() => void bindProject()} onCancel={() => { setPreview(undefined); setDisplayName(''); setMessage('已取消绑定，项目文件夹没有变化。'); }} submitting={binding} />
       </section>
@@ -140,13 +140,13 @@ export function ProjectsPage() {
   }
 
   if (state === 'failed') {
-    return <section className="projects-page" aria-labelledby="projects-title"><header className="projects-page__heading"><div><p className="projects-eyebrow">PERSONAL PROJECTS / LOCAL FOLDERS</p><h2 id="projects-title">我的项目</h2><p>每个项目绑定自己的本地文件夹，资料和产出彼此隔离。</p></div><button type="button" className="projects-button projects-button--quiet" onClick={() => void load(true)}><RefreshCw size={15} aria-hidden="true" />重新读取</button></header><PageState state={{ status: 'operation-error', message: message ?? '项目列表暂时无法读取。' }} /></section>;
+    return <section className="projects-page" aria-labelledby="projects-title"><header className="projects-page__heading"><div><h1 id="projects-title">我的项目</h1><p>连接本地文件夹，围绕项目资料提问和创作。</p></div><button type="button" className="projects-button projects-button--quiet" onClick={() => void load(true)}><RefreshCw size={15} aria-hidden="true" />重新读取</button></header><PageState state={{ status: 'operation-error', message: message ?? '项目列表暂时无法读取。' }} /></section>;
   }
 
   return (
     <section className="projects-page" aria-labelledby="projects-title">
       <header className="projects-page__heading">
-        <div><p className="projects-eyebrow">PERSONAL PROJECTS / LOCAL FOLDERS</p><h2 id="projects-title">我的项目</h2><p>把客户项目文件夹连接进来。项目问问读取当前项目语料，也可以检索全局知识库；原始文件不会被复制。</p></div>
+        <div><h1 id="projects-title">我的项目</h1><p>把已有文件夹添加为项目，在里面查看资料、向问问提问，并保存结果。</p></div>
         <button type="button" className="projects-button projects-button--primary" onClick={() => void addProject()} disabled={scanning || binding}>
           {scanning ? <LoaderCircle size={16} className="projects-spin" aria-hidden="true" /> : <FolderPlus size={16} aria-hidden="true" />}
           {scanning ? '正在扫描…' : '添加项目'}
@@ -154,8 +154,16 @@ export function ProjectsPage() {
       </header>
       {message !== undefined && <p className="projects-inline-message" role="status">{message}</p>}
       {state === 'loading' && <PageState state={{ status: 'loading', message: '正在读取项目列表。' }} />}
-      {state !== 'loading' && projects.length === 0 && <section className="projects-empty instrument-panel"><FolderKanban size={28} aria-hidden="true" /><h3>还没有绑定项目</h3><p>点击“添加项目”，选择一个已有客户项目文件夹。确认前只扫描和预览，不会写入原文件。</p><button type="button" className="projects-button projects-button--primary" onClick={() => void addProject()} disabled={scanning}><FolderPlus size={15} aria-hidden="true" />选择项目文件夹</button></section>}
-      {projects.length > 0 && <div className="projects-list" aria-label="已绑定项目">{projects.map((project) => <Link to={`/projects/${encodeURIComponent(project.id)}`} className="project-list-card" key={project.id}><span className={`project-list-card__icon project-list-card__icon--${project.availability}`}><FolderKanban size={19} aria-hidden="true" /></span><span className="project-list-card__body"><strong>{project.displayName}</strong><small>{project.fileCount} 个文件 · 可读取 {project.readableFileCount} 个 · 最近扫描 {project.lastScannedAt ? new Date(project.lastScannedAt).toLocaleString('zh-CN', { hour12: false }) : '尚未扫描'}</small></span><span className={`project-list-card__status project-list-card__status--${project.availability}`}>{project.availability === 'reconnect-required' && <TriangleAlert size={14} aria-hidden="true" />}{availabilityLabel(project.availability)}</span><ArrowRight size={17} aria-hidden="true" /></Link>)}</div>}
+      {state !== 'loading' && projects.length === 0 && <section className="projects-empty instrument-panel"><FolderKanban size={28} aria-hidden="true" /><h3>添加你的第一个项目</h3><p>选择电脑上的一个项目文件夹，例如客户资料、课程或创作素材。文件保留在原位置。</p><button type="button" className="projects-button projects-button--primary" onClick={() => void addProject()} disabled={scanning}><FolderPlus size={15} aria-hidden="true" />选择项目文件夹</button></section>}
+      {projects.length > 0 && <section className="projects-collection" aria-label="已添加项目">
+        <p className="projects-collection__count">共 {projects.length} 个项目</p>
+        <div className="projects-list">{projects.map((project) => <Link to={`/projects/${encodeURIComponent(project.id)}`} className="project-list-card" key={project.id}>
+          <span className={`project-list-card__icon project-list-card__icon--${project.availability}`}><FolderKanban size={22} aria-hidden="true" /></span>
+          <span className="project-list-card__body"><strong>{project.displayName}</strong><small>{project.readableFileCount} 份可阅读资料 · 共 {project.fileCount} 个文件</small></span>
+          <span className={`project-list-card__status project-list-card__status--${project.availability}`}>{project.availability === 'reconnect-required' && <TriangleAlert size={14} aria-hidden="true" />}{availabilityLabel(project.availability)}</span>
+          <span className="project-list-card__enter">进入项目<ArrowRight size={16} aria-hidden="true" /></span>
+        </Link>)}</div>
+      </section>}
     </section>
   );
 }

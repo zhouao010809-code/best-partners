@@ -196,6 +196,11 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     }
   }, [api.projects, projectId]);
 
+  const reloadProjectContext = useCallback(async () => {
+    const value = await loadProjectSummary();
+    if (value !== undefined && await draftStore.enterProject(value.id, value.sourceRevision)) setProjectStale(false);
+  }, [draftStore.enterProject, loadProjectSummary]);
+
   useEffect(() => {
     interactionEpoch.current += 1;
     conversationRef.current = undefined;
@@ -228,13 +233,11 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     const refreshProject = (event: Event) => {
       const detail = (event as CustomEvent<{ projectId?: string }>).detail;
       if (detail?.projectId !== projectId) return;
-      void loadProjectSummary().then(async value => {
-        if (value !== undefined) await draftStore.enterProject(value.id, value.sourceRevision);
-      });
+      void reloadProjectContext();
     };
     window.addEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, refreshProject);
     return () => window.removeEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, refreshProject);
-  }, [draftStore.enterProject, loadProjectSummary, projectId]);
+  }, [projectId, reloadProjectContext]);
 
   function chooseProvider(item: AssistantProvider) {
     selectionRef.current = item.id;
@@ -448,7 +451,10 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   useEffect(() => {
     const applyIntent = (event: Event) => {
       const intent = (event as CustomEvent<AssistantIntent>).detail;
-      if (!intent?.prompt) return;
+      if (!intent || typeof intent.prompt !== 'string') return;
+      // Opening the panel is not a new question. Keep project validation in
+      // loadIntent, but never queue or replace a draft for an empty prompt.
+      if (!intent.prompt.trim()) { void loadIntentRef.current(intent); return; }
       setShowHistory(false);
       if (!draftReadyRef.current || restoringRef.current || conversationRef.current?.status === 'running' || pendingRef.current || draftRef.current.trim() || draftStore.currentRef.current.attachments.length || Boolean(intent.attachments?.length && conversationRef.current?.messages.length)) setQueuedIntent(intent);
       else void loadIntentRef.current(intent);
@@ -502,11 +508,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
         setProjectStale(true);
         setError('项目资料已更新，请确认后重试');
         setFailedSend(undefined);
-        const latest = await loadProjectSummary();
-        if (latest !== undefined) {
-          await draftStore.enterProject(latest.id, latest.sourceRevision);
-          setProjectStale(false);
-        }
+        await reloadProjectContext();
       } else { setError(errorMessage(result, '未能确认消息已发送，请重试。')); setFailedSend(payload); }
     } catch { setError('连接中断，尚未确认发送结果。可重试确认这条消息。'); setFailedSend(payload); }
     finally { pendingRef.current = false; setPending(false); setSending(false); }
@@ -686,21 +688,27 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     conversation?.messages.flatMap(message => message.actions.flatMap(action => action.type === 'archive' && selectedAttachmentIds.has(action.attachmentId)
       ? [[action.attachmentId, action.operationId, action.status, action.indexed]] : []))]);
   const safeAuthUrl = login?.authUrl && /^https:\/\//iu.test(login.authUrl) ? login.authUrl : undefined;
+  const projectStatus = projectLoading ? '正在读取项目资料…' : projectError ? '项目资料读取失败'
+    : projectStale || projectRevisionStale ? '项目资料待刷新'
+      : project?.availability === 'ready' ? '项目资料已连接'
+        : project?.availability === 'scanning' ? '正在扫描项目资料…'
+          : project?.availability === 'reconnect-required' ? '项目资料需要重新连接' : '项目资料暂不可用';
+  const suggestions = projectId ? ['梳理项目重点', '找资料回答问题', '起草下一步计划']
+    : contextPath ? ['解释这份资料的核心观点', contextPath.startsWith('02知识库/') ? '用这篇知识拟一个文章提纲' : '把这份资料提炼成知识候选', '举一个具体的应用例子']
+      : ['找出大脑里关于创作的方法', '搜索关于学习方法的知识', '整理资料时，你能帮我做什么？'];
   return <aside id="assistant-panel" className={`assistant-panel assistant-panel--width-${width}${expanded ? ' assistant-panel--expanded' : ''}`} data-ai-active={isRunning || sending || undefined} aria-label="问问 AI">
     <div className="assistant-panel__resize" role="separator" aria-label="调整问问面板宽度" aria-orientation="vertical" aria-valuemin={360} aria-valuemax={600} aria-valuenow={width} tabIndex={0} onPointerDown={resize} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) onWidthChange(Math.min(600, Math.max(360, window.innerWidth - event.clientX))); }} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onWidthChange(Math.min(600, Math.max(360, width + (event.key === 'ArrowLeft' ? 80 : -80)))); } }} />
-    <header className="assistant-panel__header"><div><AssistantEyes active={Boolean(isRunning)} /><h2>{projectId ? `项目模式 · ${project?.displayName ?? '正在读取项目'}` : '问问'}</h2><span className="assistant-panel__caption">你的大脑助手</span></div><div className="assistant-panel__tools">
+    <header className={`assistant-panel__header${projectId ? ' assistant-panel__header--project' : ''}`}><div><AssistantEyes active={Boolean(isRunning)} />{projectId ? <div className="assistant-panel__project-title"><h2>项目问问</h2><span className="assistant-panel__project-name" title={project?.displayName}>{project?.displayName ?? (projectLoading ? '正在读取项目' : '当前项目')}</span></div> : <><h2>问问</h2><span className="assistant-panel__caption">你的大脑助手</span></>}</div><div className="assistant-panel__tools">
       <button type="button" className="assistant-icon-button" aria-label="历史对话" title="历史对话" aria-pressed={showHistory} onClick={() => { setShowHistory(value => !value); void loadHistory(); }}><History /></button>
       <button type="button" className="assistant-icon-button assistant-new-conversation" aria-label="新对话" title={locked ? '当前回答结束后可新建对话' : '新对话'} disabled={locked} onClick={() => void startNewConversation()}><Plus /><span>新对话</span></button>
       <button type="button" className="assistant-icon-button" aria-label={expanded ? '收起阅读' : '展开阅读'} title={expanded ? '收起阅读' : '展开阅读'} onClick={() => setExpanded(value => !value)}>{expanded ? <Minimize2 /> : <Maximize2 />}</button>
       <button type="button" className="assistant-icon-button" aria-label="关闭问问" title="关闭 · Esc" onClick={() => { clearSkillRecommendation(); onClose(); }}><X /></button>
     </div></header>
 
-    {projectId && <section className="assistant-project-context" aria-label="项目问问范围">
-      <strong>项目模式 · {project?.displayName ?? '正在读取项目'}</strong>
-      <span>项目语料：{project?.availability === 'ready' ? '已连接' : project?.availability === 'scanning' ? '扫描中' : projectLoading ? '读取中' : '需要重新连接'}</span>
-      <span>全局知识库：可检索</span>
-      <span>写入范围：{project?.displayName ?? '当前项目'} / AI工作区</span>
-      {projectError && <p role="alert">{projectError}<button type="button" onClick={() => void loadProjectSummary()} disabled={projectLoading}>重新读取项目</button></p>}
+    {projectId && <section className="assistant-project-context assistant-project-context--compact" aria-label="项目问问范围">
+      <p>围绕当前项目资料回答，可参考知识库；确认后保存到 AI工作区。</p>
+      <span className="assistant-project-context__state" role="status">{projectStatus}</span>
+      {projectError && <p role="alert">{projectError}<button type="button" onClick={() => void reloadProjectContext()} disabled={projectLoading}>重新读取项目</button></p>}
       {(projectStale || projectRevisionStale) && <p role="status">项目资料已更新，请确认后重试</p>}
     </section>}
 
@@ -730,7 +738,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
       {login && <div className="assistant-notice" role="status"><p>{login.message}</p>{safeAuthUrl && (window.xiaozhaoDesktop?.openAssistantLogin ? <button onClick={() => { void window.xiaozhaoDesktop!.openAssistantLogin!(safeAuthUrl).catch(() => setError('未能打开登录页，请重试。')); }}>继续登录 <ArrowRight /></button> : <a href={safeAuthUrl} target="_blank" rel="noopener noreferrer">继续登录 <ArrowRight /></a>)}<button onClick={() => void loadProviders()} disabled={providerLoading}>我已完成登录，刷新状态</button></div>}
 
       <div ref={timeline} className="assistant-timeline" onScroll={event => { const el = event.currentTarget; savedScroll.current = el.scrollTop; followOutput.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100; if (followOutput.current) setHasNewContent(false); }}>
-        {!conversation?.messages.length ? <div className="assistant-welcome"><div className="assistant-welcome__mark"><AssistantEyes /></div><h3>{contextPath ? '这份资料，一起读懂。' : '让收藏，变成你的答案。'}</h3><p>从一个问题开始，把有用的想法留下来。</p>{history.length > 0 && <button type="button" className="assistant-resume" disabled={locked} onClick={() => void openConversation(history[0]!)}>继续上次对话：{history[0]!.title}<ArrowRight size={14} /></button>}<div className="assistant-suggestions">{(contextPath ? ['解释这份资料的核心观点', contextPath.startsWith('02知识库/') ? '用这篇知识拟一个文章提纲' : '把这份资料提炼成知识候选', '举一个具体的应用例子'] : ['找出大脑里关于创作的方法', '搜索关于学习方法的知识', '整理资料时，你能帮我做什么？']).map(text => <button key={text} type="button" onClick={() => { setDraft(text); if (contextPath) setScope('current'); textArea.current?.focus(); }}><span>{text}</span><ArrowRight /></button>)}</div></div> : <div className="assistant-messages">{conversation.messages.map(message => <AssistantMessageView key={message.id} message={message} onFollowUp={text => { setDraft(text); textArea.current?.focus(); }} onConfirmAction={confirmAction} onCancelAction={cancelAction} onRegenerateAction={regenerateAction} onConfirmProjectWrite={action => resolveProjectWrite(action)} onCancelProjectWrite={action => resolveProjectWrite(action, true)} />)}</div>}
+        {!conversation?.messages.length ? <div className="assistant-welcome"><div className="assistant-welcome__mark"><AssistantEyes /></div><h3>{projectId ? '先从项目里的一件事开始' : contextPath ? '这份资料，一起读懂。' : '让收藏，变成你的答案。'}</h3><p>{projectId ? '选一个任务，或直接写下你的问题。' : '从一个问题开始，把有用的想法留下来。'}</p>{history.length > 0 && <button type="button" className="assistant-resume" disabled={locked} onClick={() => void openConversation(history[0]!)}>继续上次对话：{history[0]!.title}<ArrowRight size={14} /></button>}<div className="assistant-suggestions">{suggestions.map(text => <button key={text} type="button" onClick={() => { setDraft(text); if (contextPath) setScope('current'); textArea.current?.focus(); }}><span>{text}</span><ArrowRight /></button>)}</div></div> : <div className="assistant-messages">{conversation.messages.map(message => <AssistantMessageView key={message.id} message={message} onFollowUp={text => { setDraft(text); textArea.current?.focus(); }} onConfirmAction={confirmAction} onCancelAction={cancelAction} onRegenerateAction={regenerateAction} onConfirmProjectWrite={action => resolveProjectWrite(action)} onCancelProjectWrite={action => resolveProjectWrite(action, true)} />)}</div>}
         {isRunning && <div className="assistant-activity" role="status"><LoaderCircle className="assistant-spin" /><span>{lastAssistant?.activity || '正在思考…'}<small>已用时 {elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`}</small></span></div>}
         {Boolean(lastAssistant?.steps?.length) && <details className="assistant-steps"><summary>处理过程 · {lastAssistant!.steps!.filter(step => step.status === 'completed').length} 步已完成</summary><ol>{lastAssistant!.steps!.map(step => <li key={step.id}>{step.label}<span>{step.status === 'completed' ? '已完成' : step.status === 'running' ? '进行中' : step.status === 'stopped' ? '已停止' : '未完成'}</span></li>)}</ol></details>}
         {conversation?.status === 'stopped' && <p className="assistant-run-note" role="status">已停止。你可以继续补充问题。</p>}
@@ -765,13 +773,13 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
         {draftStore.error && <div className="assistant-notice" role="alert"><p>{draftStore.error}</p><button type="button" disabled={draftStore.saving} onClick={() => { void (draftStore.ready ? draftStore.flush() : draftStore.load()); }}>重试草稿保存或恢复</button>{draftStore.conflict && <button type="button" onClick={() => void draftStore.saveAsCopy()}>另存当前草稿</button>}</div>}
         {error && <div className="assistant-notice" role="alert"><p>{error}</p>{missingConversation && <button type="button" disabled={restoringConversation} onClick={() => void restoreConversation(draftStore.current.conversationId!)}>重新打开原对话</button>}{failedSend && <button disabled={pending} onClick={() => void send(failedSend)}>重试这条消息</button>}</div>}
         {!contextPath && currentPath && <p className="assistant-context-note">当前页面：《{titleFromPath(currentPath)}》 <button type="button" disabled={locked} onClick={() => { setPinnedPath(currentPath); setScope('current'); }}>带入这份资料</button></p>}
-        <div className="assistant-scope"><BookOpen />{projectId ? <span className="assistant-project-scope-label">项目模式 · {project?.displayName ?? projectId}</span> : <><select aria-label="资料范围" value={scope} disabled={locked} onChange={event => setScope(event.target.value as 'brain' | 'current' | 'project')}><option value="brain">整个大脑</option><option value="current" disabled={!contextPath && !draftStore.current.attachments.length}>{!contextPath && draftStore.current.attachments.length ? '仅本轮附件' : `当前资料${!contextPath ? ' · 请先打开一篇' : ''}`}</option><option value="project" disabled={!draftStore.current.projectId || draftStore.current.projectRevision === undefined}>我的项目{!draftStore.current.projectId ? ' · 请先选择项目' : ''}</option></select>{scope === 'project' && draftStore.current.projectId && <span>项目范围：{draftStore.current.projectId}</span>}{contextPath && scope !== 'project' && <span title={contextPath}>{hasPinnedContext ? '固定：' : '当前：'}{titleFromPath(contextPath)}</span>}{contextPath && scope !== 'project' && <button type="button" className="assistant-icon-button" aria-label={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} title={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} disabled={locked} aria-pressed={hasPinnedContext} onClick={() => setPinnedPath(hasPinnedContext ? undefined : contextPath)}><Pin size={13} /></button>}</>}</div>
+        <div className="assistant-scope"><BookOpen />{projectId ? <span className="assistant-project-scope-label">当前项目资料</span> : <><select aria-label="资料范围" value={scope} disabled={locked} onChange={event => setScope(event.target.value as 'brain' | 'current' | 'project')}><option value="brain">整个大脑</option><option value="current" disabled={!contextPath && !draftStore.current.attachments.length}>{!contextPath && draftStore.current.attachments.length ? '仅本轮附件' : `当前资料${!contextPath ? ' · 请先打开一篇' : ''}`}</option><option value="project" disabled={!draftStore.current.projectId || draftStore.current.projectRevision === undefined}>我的项目{!draftStore.current.projectId ? ' · 请先选择项目' : ''}</option></select>{scope === 'project' && draftStore.current.projectId && <span>项目范围：{draftStore.current.projectId}</span>}{contextPath && scope !== 'project' && <span title={contextPath}>{hasPinnedContext ? '固定：' : '当前：'}{titleFromPath(contextPath)}</span>}{contextPath && scope !== 'project' && <button type="button" className="assistant-icon-button" aria-label={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} title={hasPinnedContext ? '跟随当前页面资料' : '固定这份资料'} disabled={locked} aria-pressed={hasPinnedContext} onClick={() => setPinnedPath(hasPinnedContext ? undefined : contextPath)}><Pin size={13} /></button>}</>}</div>
         {hasPinnedContext && pinnedPath && currentPath && pinnedPath !== currentPath && <p className="assistant-context-change">已切换页面，本轮仍使用《{titleFromPath(pinnedPath)}》。<button type="button" disabled={locked} onClick={() => setPinnedPath(currentPath)}>改用当前页</button></p>}
         {scope === 'current' && conversation?.messages.length ? <p className="assistant-context-note">{contextPath ? `本轮仅检索这份资料${draftStore.current.attachments.length ? '及已选文件' : ''}` : '本轮仅检索已选文件'}；对话仍保留之前的消息。</p> : null}
         {provider && provider.status !== 'ready' && <div className="assistant-notice" role="status"><p>{provider.problem || '连接模型后，开始和你的大脑对话。'}</p><button type="button" disabled={providerLoading || locked} onClick={() => void loadProviders()}>{providerLoading ? '正在检查连接…' : '重新检查连接'}</button>{provider.id === 'deepseek' ? <Link to="/settings#ai-model-settings">配置 DeepSeek <ArrowRight /></Link> : <Link to="/settings">打开设置 <ArrowRight /></Link>}</div>}
         <AttachmentPicker key={draftStore.current.id} api={api} value={draftStore.current.attachments} groupId={draftStore.current.groupId} refreshKey={attachmentRefreshKey} disabled={locked} onAttachmentsChange={setAttachmentRecords} onChange={async attachments => { draftStore.update({ attachments }); if (!await draftStore.flush()) throw new Error('draft not saved'); }}>
         {!attachmentsReady && draftStore.current.attachments.length > 0 && <p className="assistant-context-note">附件可阅读后再发送；无法读取的文件可移除或在收件箱归档原件。</p>}
-        <form className="assistant-composer" onSubmit={event => { event.preventDefault(); void send(); }}><textarea ref={textArea} aria-label="发送给问问的消息" placeholder={provider?.status === 'ready' ? '问问你的大脑…' : '连接 AI 后，问问你的大脑…'} value={draft} disabled={pending || !draftStore.ready || restoringConversation} maxLength={16000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} /><div className="assistant-composer__footer"><span>{isRunning ? '关闭面板后仍会继续' : 'Enter 发送 · Shift Enter 换行'}</span><ContextUsage conversation={conversation} model={model} draftChanged={Boolean(draft.trim())} attachmentCount={draftStore.current.attachments.length} disabled={locked} onContinue={() => setShowContinuation(true)} />{isRunning ? <button type="button" className="assistant-send" aria-label="停止回答" title="停止回答" disabled={pending} onClick={() => void stop()}><Square /></button> : <button type="submit" className="assistant-send ai-glow-control" aria-label={pending ? '正在发送' : '发送消息'} title={sendDisabledReason ?? "发送消息"} aria-describedby={showSendDisabledReason ? "assistant-send-blocked" : undefined} disabled={Boolean(sendDisabledReason)}>{pending ? <LoaderCircle className="assistant-spin" /> : <ArrowUp />}</button>}</div></form></AttachmentPicker>
+        <form className="assistant-composer" onSubmit={event => { event.preventDefault(); void send(); }}><textarea ref={textArea} aria-label="发送给问问的消息" placeholder={projectId ? '想了解这个项目的什么？' : provider?.status === 'ready' ? '问问你的大脑…' : '连接 AI 后，问问你的大脑…'} value={draft} disabled={pending || !draftStore.ready || restoringConversation} maxLength={16000} rows={2} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} /><div className="assistant-composer__footer"><span>{isRunning ? '关闭面板后仍会继续' : 'Enter 发送 · Shift Enter 换行'}</span><ContextUsage conversation={conversation} model={model} draftChanged={Boolean(draft.trim())} attachmentCount={draftStore.current.attachments.length} disabled={locked} onContinue={() => setShowContinuation(true)} />{isRunning ? <button type="button" className="assistant-send" aria-label="停止回答" title="停止回答" disabled={pending} onClick={() => void stop()}><Square /></button> : <button type="submit" className="assistant-send ai-glow-control" aria-label={pending ? '正在发送' : '发送消息'} title={sendDisabledReason ?? "发送消息"} aria-describedby={showSendDisabledReason ? "assistant-send-blocked" : undefined} disabled={Boolean(sendDisabledReason)}>{pending ? <LoaderCircle className="assistant-spin" /> : <ArrowUp />}</button>}</div></form></AttachmentPicker>
         {showSendDisabledReason && <p id="assistant-send-blocked" className="assistant-send-blocked" role="status">{sendDisabledReason}</p>}
         {api.assistantDrafts && <p className="assistant-draft-status" role="status">{draftStore.notice || (!draftStore.ready ? '正在恢复本机草稿…' : draftStore.saving || draftStore.dirty && !draftStore.error ? '正在保存到本机…' : draftStore.error ? '当前草稿尚未保存' : '草稿已保留在本机 · 新对话会保留旧记录')}</p>}
         <p className="assistant-disclosure">仅按问题读取所需资料，整理结果由你确认保存。</p>
