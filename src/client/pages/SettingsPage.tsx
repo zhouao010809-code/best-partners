@@ -16,8 +16,8 @@ import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { PageState } from '../components/PageState.js';
 import { DocumentIssuesPanel } from '../components/DocumentIssuesPanel.js';
 import { DeepSeekSettings } from '../components/DeepSeekSettings.js';
+import { AppUpdates } from '../components/AppUpdates.js';
 import type { HealthSnapshot } from '../api/client.js';
-import type { UpdateCheckResult } from '../../shared/desktop/update.js';
 import { dataFromResource } from './pageSupport.js';
 import '../styles/settings.css';
 
@@ -73,13 +73,6 @@ function indexSummary(snapshot: HealthSnapshot | undefined): string {
     case 'failed': return `索引 v${snapshot.index.version} · 失败`;
     case 'unavailable': return '索引不可用';
   }
-}
-
-function displayTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '时间不可用' : new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
-  }).format(date);
 }
 
 function DiagnosticRow({ diagnostic }: { readonly diagnostic: Diagnostic }) {
@@ -138,11 +131,6 @@ export function SettingsPage() {
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const issuesButton = useRef<HTMLButtonElement>(null);
-  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'up-to-date' | 'available' | 'error'>('idle');
-  const [updateResult, setUpdateResult] = useState<Extract<UpdateCheckResult, { status: 'available' }>>();
-  const [updateDownloadError, setUpdateDownloadError] = useState(false);
-  const updatePending = useRef(false);
-
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
@@ -191,44 +179,6 @@ export function SettingsPage() {
     } finally {
       if (mountedRef.current) setChoosing(false);
     }
-  };
-
-  const checkUpdates = async (): Promise<void> => {
-    if (!desktop?.checkForUpdates || updatePending.current) return;
-    updatePending.current = true;
-    setUpdateState('checking');
-    setUpdateDownloadError(false);
-    try {
-      const result = await desktop.checkForUpdates();
-      if (!mountedRef.current) return;
-      if (result.status === 'available') {
-        setUpdateResult(result);
-        setUpdateState('available');
-      } else if (result.status === 'up-to-date') {
-        setUpdateResult(undefined);
-        setUpdateState('up-to-date');
-      } else {
-        setUpdateState('error');
-      }
-    } catch {
-      if (mountedRef.current) setUpdateState('error');
-    } finally {
-      updatePending.current = false;
-    }
-  };
-
-  const openUpdateLink = async (url: string): Promise<void> => {
-    setUpdateDownloadError(false);
-    try {
-      if (desktop?.openUpdateDownload) await desktop.openUpdateDownload(url);
-      else window.open(url, '_blank', 'noopener,noreferrer');
-    } catch {
-      if (mountedRef.current) setUpdateDownloadError(true);
-    }
-  };
-
-  const openUpdateDownload = async (): Promise<void> => {
-    if (updateResult) await openUpdateLink(updateResult.assetUrl);
   };
 
   const vault = snapshot === undefined ? undefined : vaultDiagnostic(snapshot);
@@ -298,35 +248,7 @@ export function SettingsPage() {
             </div>
           </section>
           <DeepSeekSettings />
-          <section className="settings-section settings-card settings-updates" aria-label="应用更新">
-            <header className="settings-section__heading">
-              <div><h2>应用更新</h2><p>手动检查桌面版是否有新版本</p></div>
-            </header>
-            <div className="settings-section__body">
-              {desktop?.checkForUpdates ? <>
-                <div className="settings-updates__actions">
-                  <button type="button" className="settings-button" disabled={updateState === 'checking'} onClick={() => void checkUpdates()}>
-                    {updateState === 'checking' ? '正在检查…' : updateState === 'error' ? '重试检查' : '检查应用更新'}
-                  </button>
-                </div>
-                {updateState === 'checking' && <p className="settings-feedback" role="status">正在检查应用更新…</p>}
-                {updateState === 'up-to-date' && <p className="settings-feedback" role="status">已是最新版本</p>}
-                {updateState === 'error' && <p className="settings-feedback settings-feedback--error" role="alert">暂时无法检查应用更新，请稍后重试。</p>}
-                {updateState === 'available' && updateResult && <div className="settings-updates__result" role="status">
-                  <p className="settings-updates__version">发现新版本 {updateResult.version}</p>
-                  <p className="settings-updates__meta">当前版本 {updateResult.currentVersion}{updateResult.publishedAt ? ` · 发布于 ${displayTime(updateResult.publishedAt)}` : ''}</p>
-                  <p className="settings-updates__notes">{updateResult.notes}</p>
-                  <div className="settings-updates__actions">
-                    <button type="button" className="settings-button settings-button--primary" onClick={() => void openUpdateDownload()}>打开下载页面</button>
-                    {updateResult.releaseUrl && (desktop?.openUpdateDownload
-                      ? <button type="button" className="settings-button settings-button--quiet" onClick={() => void openUpdateLink(updateResult.releaseUrl)}>查看 Release 页面</button>
-                      : <a className="settings-button settings-button--quiet" href={updateResult.releaseUrl} target="_blank" rel="noopener noreferrer">查看 Release 页面</a>)}
-                  </div>
-                  {updateDownloadError && <p className="settings-feedback settings-feedback--error" role="alert">未能打开下载页面，请复制 Release 页面地址后重试。</p>}
-                </div>}
-              </> : <p className="settings-feedback" role="status">桌面版可用，浏览器预览不会检查应用更新。</p>}
-            </div>
-          </section>
+          <AppUpdates />
         </div>
 
         <aside className="settings-health-summary settings-health" aria-label="运行状态摘要">

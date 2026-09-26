@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createInitialVault, loadDesktopSettings, resolveInitialVaultSettings, saveDesktopSettings, validateDesktopVault } from './settings-store.js';
@@ -20,6 +20,9 @@ import { createSkillCatalogService } from '../server/services/skill-catalog.js';
 import { createDesktopSkillNavigation } from './skill-navigation.js';
 import { checkForUpdate, RELEASES_URL } from './update-check.js';
 import { validateUpdateUrl } from './update-navigation.js';
+import { createUpdateController } from './update-controller.js';
+import { supportsAutomaticUpdates } from './update-signature.js';
+import { clearPreviousUpdateDownloads } from './update-download.js';
 
 app.setName('最佳拍档');
 let started: StartedServer | undefined;
@@ -27,6 +30,8 @@ let window: BrowserWindow | undefined;
 let quitState: 'idle' | 'closing' | 'ready' = 'idle';
 let choosing = false;
 let projectChoosing = false;
+let updateController: ReturnType<typeof createUpdateController> | undefined;
+let installRequested = false;
 
 function createMainWindow(origin: string): BrowserWindow {
   const policy = createDesktopWindowPolicy(origin);
@@ -45,6 +50,11 @@ function createMainWindow(origin: string): BrowserWindow {
   created.webContents.on('will-navigate', (event, url) => { if (!policy.allowNavigation(url)) event.preventDefault(); });
   created.webContents.on('will-redirect', (event, url) => { if (!policy.allowNavigation(url)) event.preventDefault(); });
   created.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  created.webContents.on('will-prevent-unload', () => {
+    // Respect an editor's veto. Do not leave the update button stuck in restart.
+    installRequested = false;
+    updateController?.installCancelled();
+  });
   return created;
 }
 
@@ -155,13 +165,22 @@ async function bootstrap(): Promise<void> {
   const navigation = createDesktopVaultNavigation({ reader: await nativeReader.create(settings.vaultRoot), shell });
   const skillNavigation = createDesktopSkillNavigation({ catalog: skillCatalog, shell });
   ipcMain.handle('desktop:get-app-version', (event) => { assertMainSender(event); return app.getVersion(); });
-  ipcMain.handle('desktop:check-for-updates', async (event) => {
-    assertMainSender(event);
-    const releasesUrl = process.env.NODE_ENV === 'test'
-      ? (process.env.XIAOZHAO_TEST_UPDATE_FEED_URL ?? RELEASES_URL)
-      : RELEASES_URL;
-    return checkForUpdate({ currentVersion: app.getVersion(), releasesUrl });
+  await clearPreviousUpdateDownloads(join(userDataDir, 'updates')).catch(() => undefined);
+  updateController = createUpdateController({
+    automaticInstall: await supportsAutomaticUpdates({ packaged: app.isPackaged, platform: process.platform, arch: process.arch, executable: process.execPath }),
+    native: autoUpdater,
+    directory: join(userDataDir, 'updates'),
+    check: () => checkForUpdate({ currentVersion: app.getVersion(), releasesUrl: process.env.NODE_ENV === 'test'
+      ? (process.env.XIAOZHAO_TEST_UPDATE_FEED_URL ?? RELEASES_URL) : RELEASES_URL }),
+    changed: state => { if (window && !window.isDestroyed()) window.webContents.send('desktop:update-state', state); },
+    openInstaller: path => shell.openPath(path),
+    requestInstall: () => { installRequested = true; setImmediate(() => app.quit()); }
   });
+  ipcMain.handle('desktop:check-for-updates', event => { assertMainSender(event); return updateController!.checkForUpdates(); });
+  ipcMain.handle('desktop:get-update-state', event => { assertMainSender(event); return updateController!.snapshot(); });
+  ipcMain.handle('desktop:download-update', event => { assertMainSender(event); return updateController!.downloadUpdate(); });
+  ipcMain.handle('desktop:cancel-update', event => { assertMainSender(event); return updateController!.cancelUpdate(); });
+  ipcMain.handle('desktop:install-update', event => { assertMainSender(event); return updateController!.installUpdate(); });
   ipcMain.handle('desktop:open-update-download', async (event, url: unknown) => {
     assertMainSender(event);
     await shell.openExternal(validateUpdateUrl(url));
@@ -253,11 +272,18 @@ app.on('will-quit', (event) => {
   quitState = 'closing';
   const finishQuit = () => {
     quitState = 'ready';
-    setImmediate(() => app.quit());
+    setImmediate(() => { if (installRequested) autoUpdater.quitAndInstall(); else app.quit(); });
   };
   void (started?.close() ?? Promise.resolve()).then(finishQuit, finishQuit);
 });
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => { if (!installRequested) app.quit(); });
+app.on('quit', () => updateController?.dispose());
+autoUpdater.on('error', () => {
+  if (!installRequested || quitState !== 'ready') return;
+  installRequested = false;
+  dialog.showErrorBox('更新未能安装', '应用已保存并关闭。请重新打开最佳拍档，再检查更新或下载安装包。');
+  app.quit();
+});
 app.on('second-instance', () => { if (window?.isMinimized()) window.restore(); window?.focus(); });
 
 const isClipperHost = process.argv.includes('--clipper-host');

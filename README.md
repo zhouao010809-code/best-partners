@@ -76,7 +76,7 @@ AI 提炼得到的是草稿。你可以修改内容、检查来源、选择保�
 
 ### 选择一个版本
 
-- **试用已发布的预览包**：[下载 Apple Silicon 预览版](https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.0-preview.1)。该版本发布于 2026-09-13，尚未完成 Developer ID 签名和 Apple 公证，请先阅读 Release 安装说明。
+- **试用已发布的预览包**：[下载 Apple Silicon 预览版](https://github.com/zhouao010809-code/best-partners/releases/tag/v0.1.1)。该版本发布于 2026-09-26，尚未完成 Developer ID 签名和 Apple 公证，请先阅读 Release 安装说明。
 - **运行最新源码**：本页功能说明对应 `main`，已发布的预览包不包含之后的全部改动。体验最新实现可按下方命令运行。
 
 需要 Apple Silicon Mac、Node.js 22.12+ 和 Xcode Command Line Tools。

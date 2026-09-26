@@ -1,6 +1,6 @@
 {
   "name": "xiaozhao-brain-console",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "imports": {
@@ -63,7 +63,9 @@
     "verify:fast": "npm run check:architecture && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:mcp && npm run test:company-mcp",
     "verify:full": "npm run check:architecture && npm run typecheck && npm run test:all && npm run build:desktop-runtime",
     "verify:release": "npm run verify:full && npm run test:e2e:fixtures && npm run package:mac:built && npm run test:electron && npm run build:company-mcp && npm run build:company-operations",
-    "verify": "npm run verify:full"
+    "verify": "npm run verify:full",
+    "package:update:preview": "tsx scripts/package-update.ts --preview",
+    "package:update": "tsx scripts/package-update.ts"
   },
   "dependencies": {
     "@ai-sdk/deepseek": "3.0.39",

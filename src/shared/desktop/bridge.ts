@@ -1,4 +1,4 @@
-import type { UpdateCheckResult } from './update.js';
+import type { UpdateCheckResult, UpdateSnapshot } from './update.js';
 
 export interface DesktopVaultSelection {
   readonly selected: boolean;
@@ -33,4 +33,9 @@ export interface XiaozhaoDesktopApi {
   getClipperStatus?(test?: boolean): Promise<XiaozhaoClipperStatus>;
   checkForUpdates?(): Promise<UpdateCheckResult>;
   openUpdateDownload?(url: string): Promise<void>;
+  getUpdateState?(): Promise<UpdateSnapshot>;
+  downloadUpdate?(): Promise<void>;
+  cancelUpdate?(): Promise<void>;
+  installUpdate?(): Promise<void>;
+  onUpdateState?(listener: (state: UpdateSnapshot) => void): () => void;
 }

@@ -13,7 +13,7 @@ const releaseSchema = z.object({
   html_url: z.string(),
   body: z.string().nullable().optional(),
   published_at: z.string().nullable().optional(),
-  assets: z.array(z.object({ name: z.string(), browser_download_url: z.string() })),
+  assets: z.array(z.object({ name: z.string(), browser_download_url: z.string(), digest: z.string().nullable().optional(), size: z.number().optional() })),
 });
 const releasesSchema = z.array(releaseSchema);
 
@@ -147,5 +147,15 @@ export async function checkForUpdate(input: UpdateCheckerInput): Promise<UpdateC
     notes: winner.release.body ? cleanNotes(winner.release.body) : '',
   };
   if (winner.release.published_at) result.publishedAt = winner.release.published_at;
+  const digest = /^sha256:([a-f\d]{64})$/u.exec(winner.asset.digest ?? '')?.[1];
+  if (digest && winner.asset.size !== undefined && Number.isSafeInteger(winner.asset.size) && winner.asset.size > 0 && winner.asset.size <= 2 * 1024 ** 3) {
+    result.download = { sha256: digest, size: winner.asset.size };
+  }
+  const officialAssets = winner.release.assets.filter(item => isOfficialUrl(item.browser_download_url,
+    `/zhouao010809-code/best-partners/releases/download/${winner.release.tag_name}/${item.name}`));
+  const manifest = officialAssets.find(item => item.name === 'RELEASES.json');
+  if (manifest && officialAssets.some(item => item.name === `best-partners-${result.version}-arm64.zip`)) {
+    result.automaticUpdateUrl = manifest.browser_download_url;
+  }
   return result;
 }

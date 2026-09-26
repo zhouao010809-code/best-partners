@@ -38,6 +38,29 @@ function expectError(result: UpdateCheckResult, code: string) {
 }
 
 describe('checkForUpdate', () => {
+  it('exposes verified download metadata and an automatic feed only with a same-release ZIP', async () => {
+    const candidate = release();
+    const base = 'https://github.com/zhouao010809-code/best-partners/releases/download/v0.1.2/';
+    const assets = [
+      { ...candidate.assets[0], digest: `sha256:${'a'.repeat(64)}`, size: 1024 },
+      { name: 'RELEASES.json', browser_download_url: `${base}RELEASES.json` },
+      { name: 'best-partners-0.1.2-arm64.zip', browser_download_url: `${base}best-partners-0.1.2-arm64.zip` }
+    ];
+    expect(await checkForUpdate(input('0.1.0', [{ ...candidate, assets }]))).toMatchObject({
+      download: { sha256: 'a'.repeat(64), size: 1024 }, automaticUpdateUrl: `${base}RELEASES.json`
+    });
+    const noZip = await checkForUpdate(input('0.1.0', [{ ...candidate, assets: assets.slice(0, 2) }]));
+    expect(noZip).not.toHaveProperty('automaticUpdateUrl');
+  });
+
+  it('keeps browser download available when the asset digest or size is unusable', async () => {
+    for (const metadata of [{ digest: null, size: 1024 }, { digest: 'sha256:invalid', size: 1024 }, { digest: `sha256:${'a'.repeat(64)}`, size: 0 }]) {
+      const candidate = release();
+      const result = await checkForUpdate(input('0.1.0', [{ ...candidate, assets: [{ ...candidate.assets[0], ...metadata }] }]));
+      expect(result.status).toBe('available');
+      expect(result).not.toHaveProperty('download');
+    }
+  });
   it('exports the stable GitHub feed URLs', () => {
     expect(RELEASES_URL).toBe('https://api.github.com/repos/zhouao010809-code/best-partners/releases?per_page=20');
     expect(RELEASE_PAGE_URL).toBe('https://github.com/zhouao010809-code/best-partners/releases');
