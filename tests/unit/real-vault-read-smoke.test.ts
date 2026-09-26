@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -126,7 +126,10 @@ describe('real vault read smoke safety contracts', () => {
             throw new Error('owned temp was not discoverable');
           }
           replacementPath = join(tmpdir(), created[0]);
-          await rm(replacementPath, { recursive: true, force: false });
+          const retainedOriginalPath = `${replacementPath}-original`;
+          temporaryDirectories.push(retainedOriginalPath, replacementPath);
+          // Keep the original inode allocated so filesystems cannot reuse it for the replacement.
+          await rename(replacementPath, retainedOriginalPath);
           await mkdir(replacementPath);
           await writeFile(join(replacementPath, 'replacement-marker'), 'keep');
         }
@@ -138,7 +141,6 @@ describe('real vault read smoke safety contracts', () => {
     });
 
     if (replacementPath === undefined) throw new Error('replacement path missing');
-    temporaryDirectories.push(replacementPath);
     expect(result).toEqual({ status: 'failed', code: 'TEMP_CLEANUP_FAILED' });
     await expect(readFile(join(replacementPath, 'replacement-marker'), 'utf8'))
       .resolves.toBe('keep');
