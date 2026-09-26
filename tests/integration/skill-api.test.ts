@@ -174,3 +174,49 @@ it('returns a stable readable 503 when the catalog directory is unavailable', as
     message: 'Skill catalog is unavailable.'
   });
 });
+
+it('previews, confirms, lists and restores personal Skill folders through strict protected endpoints', async () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const preview = { id, folderId: folder.id, name: folder.name, skillCount: 1, entryCount: 2, expiresAt: '2026-09-26T12:05:00Z' };
+  const entry = { id, folderId: folder.id, name: folder.name, skillCount: 1, createdAt: '2026-09-26T12:00:00Z', status: 'trashed' as const };
+  const { app, service } = fixture({
+    previewFolderTrash: vi.fn(async () => preview), trashFolder: vi.fn(async () => entry),
+    listFolderTrash: vi.fn(async () => ({ items: [entry] })), restoreFolder: vi.fn(async () => ({ ...entry, status: 'restored' as const }))
+  });
+  const auth = await sessionHeaders(app);
+  const previewUrl = `/api/v1/skills/folders/${folder.id}/trash-preview`;
+  expect((await app.inject({ method: 'POST', url: previewUrl, headers, payload: {} })).statusCode).toBe(401);
+  expect((await app.inject({ method: 'POST', url: previewUrl, headers: { ...auth, 'x-csrf-token': 'bad' }, payload: {} })).statusCode).toBe(403);
+  expect((await app.inject({ method: 'POST', url: previewUrl, headers: auth, payload: { path: '/tmp' } })).statusCode).toBe(400);
+  const response = await app.inject({ method: 'POST', url: previewUrl, headers: auth, payload: {} });
+  expect(response.statusCode).toBe(200); expect(response.json().data).toEqual(preview);
+  expect(service.previewFolderTrash).toHaveBeenCalledExactlyOnceWith(folder.id);
+  const committed = await app.inject({ method: 'POST', url: '/api/v1/skills/folder-trash', headers: auth, payload: { id } });
+  expect(committed.statusCode).toBe(200); expect(committed.json().data).toEqual(entry);
+  expect((await app.inject({ url: '/api/v1/skills/folder-trash', headers: auth })).json().data.items).toEqual([entry]);
+  const restored = await app.inject({ method: 'POST', url: '/api/v1/skills/folder-trash/restore', headers: auth, payload: { id } });
+  expect(restored.json().data.status).toBe('restored');
+  expect((await app.inject({ method: 'POST', url: '/api/v1/skills/folder-trash/restore', headers: auth, payload: { id: '../outside' } })).statusCode).toBe(400);
+});
+
+it('does not expose folder recycling when the catalog lacks the personal capability', async () => {
+  const { app } = fixture(); const auth = await sessionHeaders(app);
+  expect((await app.inject({ method: 'POST', url: `/api/v1/skills/folders/${folder.id}/trash-preview`, headers: auth, payload: {} })).statusCode).toBe(503);
+  expect((await app.inject({ url: '/api/v1/skills/folder-trash', headers: auth })).statusCode).toBe(503);
+});
+
+it('localizes known folder failures across the Electron/server bundle boundary without exposing raw paths', async () => {
+  class ElectronBundleError extends Error {
+    readonly code = 'SKILL_FOLDER_RESTORE_CONFLICT';
+    readonly statusCode = 409;
+  }
+  const id = '11111111-1111-4111-8111-111111111111';
+  const { app } = fixture({
+    previewFolderTrash: vi.fn(), trashFolder: vi.fn(), listFolderTrash: vi.fn(),
+    restoreFolder: vi.fn(async () => { throw new ElectronBundleError('private implementation /private/secret'); })
+  });
+  const response = await app.inject({ method: 'POST', url: '/api/v1/skills/folder-trash/restore', headers: await sessionHeaders(app), payload: { id } });
+  expect(response.statusCode).toBe(409);
+  expect(response.json().error).toMatchObject({ code: 'SKILL_FOLDER_RESTORE_CONFLICT', message: expect.stringContaining('请先重命名或移走同名文件夹') });
+  expect(response.body).not.toContain('/private/secret');
+});

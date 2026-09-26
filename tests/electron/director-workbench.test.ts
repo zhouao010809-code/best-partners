@@ -369,7 +369,10 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(window.getByRole('textbox', { name: '脚本正文', exact: true })).toHaveValue(firstBody);
       const restored = await expectSaved(window, projectId, first.item.id, firstBody);
       expect(restored.item.finalVersionId).toBe(finalVersion.id);
-      expect(restored.versions).toEqual(draftAfterFinal.versions);
+      expect(restored.versions).toHaveLength(draftAfterFinal.versions.length + 1);
+      const previousVersionIds = new Set(draftAfterFinal.versions.map(version => version.id));
+      expect(restored.versions.filter(version => previousVersionIds.has(version.id))).toEqual(draftAfterFinal.versions);
+      expect(restored.versions.find(version => !previousVersionIds.has(version.id))).toMatchObject({ body: laterDraft, referenceSelection: automaticReferences });
       expect(restored.item.referenceSelection).toEqual(selectedReferences);
       await expect(restartedReferences.getByRole('radio', { name: '只用所选资料', exact: true })).toBeChecked();
       await expect(restartedReferences.getByRole('checkbox', { name: '客户资料/项目要求.md', exact: true })).toBeChecked();

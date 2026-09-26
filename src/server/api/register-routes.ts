@@ -100,7 +100,8 @@ export function registerApplicationRoutes(input: ApplicationRouteRegistryInput):
         const done = (async () => {
           active.throwIfAborted();
           const detail = request.itemId ? await creations.get(projectId, request.itemId) : undefined;
-          const suggestion = await writer.generate(projectId, request, detail?.item, active, detail?.messages);
+          if (detail?.item.discardedAt) throw new PublicApiError('CREATION_DISCARDED', '这条创作已丢弃，请先恢复后再继续。', 409);
+          const suggestion = await writer.generate(projectId, request, detail?.item, active, detail?.messages.filter(message => !message.dismissedAt));
           active.throwIfAborted();
           if (request.itemId) await creations.recordExchange(projectId, request.itemId, { instruction: request.instruction, suggestion });
           return suggestion;

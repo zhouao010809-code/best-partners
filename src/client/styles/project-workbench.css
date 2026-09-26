@@ -87,3 +87,24 @@
 .creation-export p,.creation-versions>p{font-size:12px;color:var(--text-muted)}
 @container project-page (max-width:850px){.creation-editor-columns{grid-template-columns:1fr}.creation-manuscript{padding:22px 0}.creation-assistant{border-left:0;border-top:1px solid var(--border-muted);padding:22px 0}.creation-assistant .creation-model{max-width:400px}.creation-editor .creation-body{min-height:390px}.creation-list-heading{align-items:flex-start}}
 @media(max-width:700px){.creation-tabs{gap:19px}.creation-tabs button{font-size:12px}.creation-editor .creation-title-label input{font-size:21px}.creation-editor-toolbar>.creation-actions{width:100%;margin-left:0}.creation-editor .creation-body{padding:12px;font-size:15px}.creation-card{min-height:175px}.creation-list-heading h2{font-size:18px}.creation-list-heading>.creation-actions{width:100%}}
+.creation-card{padding:0;cursor:default;gap:0}
+.creation-card-main{display:flex;flex:1;flex-direction:column;gap:15px;text-align:left;min-width:0;padding:20px;border:0;background:none;color:inherit;font:inherit;cursor:pointer}
+.creation-card-main:disabled{cursor:default;opacity:1}
+.creation-card-tools{padding:0 20px 13px;display:flex;justify-content:flex-end}
+.creation-remove{color:var(--text-muted)}
+.creation-remove:hover{color:#ecd4a9}
+.creation-candidates{margin:0 0 24px;padding:18px 0;border-block:1px solid var(--border-muted)}
+.creation-candidates h3{margin:0 0 6px;font-size:16px}
+.creation-candidates .creation-list-heading{margin-bottom:12px}
+.creation-candidate-list{display:grid;gap:0;margin-bottom:16px}
+.creation-candidate{display:flex;align-items:flex-start;gap:12px;padding:16px 8px;border-bottom:1px solid var(--border-muted);cursor:pointer;font-size:13px;overflow-wrap:anywhere}
+.creation-candidate input{margin-top:5px;width:16px;height:16px;flex:none;accent-color:var(--accent-primary)}
+.creation-candidate strong{font-size:15px;line-height:1.6}
+.creation-candidate p{margin:6px 0;color:var(--text-secondary);line-height:1.7}
+.creation-candidate small{font-size:11px;line-height:1.8;color:var(--text-muted)}
+.creation-dialog-backdrop{position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.65);display:grid;place-items:center;padding:24px}
+.creation-discard-dialog{width:min(480px,100%);box-sizing:border-box;max-height:85vh;overflow:auto;padding:26px;border:1px solid var(--border-muted);border-radius:8px;background:var(--surface-panel,#171b19);color:var(--text-primary);box-shadow:0 15px 60px #0008}
+.creation-discard-dialog h2{font-size:19px;margin:0 0 20px}
+.creation-discard-dialog>strong{font-size:15px;overflow-wrap:anywhere}
+.creation-discard-dialog p{font-size:13px;line-height:1.85;color:var(--text-muted)}
+.creation-discard-dialog .creation-actions{justify-content:flex-end;margin-top:22px}

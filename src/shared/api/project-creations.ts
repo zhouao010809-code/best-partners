@@ -25,14 +25,16 @@ const editableFields = {
 };
 export const projectCreationSchema = z.strictObject({
   ...editableFields, id: z.uuid(), projectId: z.uuid(), revision: revisionSchema,
-  finalVersionId: z.uuid().optional(), createdAt: z.string(), updatedAt: z.string()
+  finalVersionId: z.uuid().optional(), discardedAt: z.string().optional(), createdAt: z.string(), updatedAt: z.string()
 });
 export const creationCreateSchema = z.strictObject({
+  requestId: z.uuid().optional(), expectedProfileRevision: z.number().int().nonnegative().optional(),
   ...editableFields, brief: briefSchema.default(''), body: bodySchema.default(''),
   audience: editableFields.audience.default(''), angle: editableFields.angle.default(''),
   rationale: editableFields.rationale.default(''), sources: sourcesSchema.default([])
 });
 export const creationSaveSchema = z.strictObject({ ...editableFields, expectedRevision: revisionSchema });
+export const creationLifecycleSchema = z.strictObject({ expectedRevision: revisionSchema });
 export const creationSnapshotSchema = z.strictObject({ expectedRevision: revisionSchema, finalize: z.boolean() });
 export const creationVersionSchema = z.strictObject({
   id: z.uuid(), creationId: z.uuid(), number: revisionSchema, title: titleSchema, brief: briefSchema,
@@ -49,7 +51,7 @@ export const creationSuggestionSchema = z.strictObject({
   sources: sourcesSchema, baseRevision: revisionSchema.optional(), profile: creativeProfileFieldsSchema.optional(), profileRevision: z.number().int().nonnegative().optional(), createdAt: z.string()
 });
 export const creationExchangeSchema = z.strictObject({
-  id: z.uuid(), instruction: z.string().min(1).max(4000), suggestion: creationSuggestionSchema, createdAt: z.string()
+  id: z.uuid(), instruction: z.string().min(1).max(4000), suggestion: creationSuggestionSchema, dismissedAt: z.string().optional(), createdAt: z.string()
 });
 export const creationDetailSchema = z.strictObject({ item: projectCreationSchema, versions: z.array(creationVersionSchema), messages: z.array(creationExchangeSchema).max(100) });
 export const creationGenerateRequestSchema = z.strictObject({
@@ -66,6 +68,7 @@ export const creationGenerateRequestSchema = z.strictObject({
 });
 export const creationProjectParamsSchema = z.strictObject({ projectId: z.uuid() });
 export const creationParamsSchema = creationProjectParamsSchema.extend({ creationId: z.uuid() });
+export const creationSuggestionParamsSchema = creationParamsSchema.extend({ suggestionId: z.uuid() });
 export const creationVersionParamsSchema = creationParamsSchema.extend({ versionId: z.uuid() });
 export const creationExportSchema = z.strictObject({ path: projectRelativePathSchema, versionId: z.uuid() });
 export const creationListResponseSchema = successEnvelopeSchema(z.strictObject({ items: z.array(projectCreationSchema) }));
@@ -88,6 +91,10 @@ export interface ProjectCreationService {
   saveProfile(projectId: string, input: CreativeProfileSave): Promise<ProjectCreativeProfile>;
   getProfileContext(projectId: string): Promise<CreativeProfileContext>;
   list(projectId: string): Promise<ProjectCreation[]>;
+  listDiscarded(projectId: string): Promise<ProjectCreation[]>;
+  discard(projectId: string, id: string, input: { expectedRevision: number }): Promise<CreationDetail>;
+  restore(projectId: string, id: string, input: { expectedRevision: number }): Promise<CreationDetail>;
+  dismissSuggestion(projectId: string, id: string, suggestionId: string): Promise<CreationDetail>;
   get(projectId: string, id: string): Promise<CreationDetail>;
   create(projectId: string, input: CreationCreate): Promise<CreationDetail>;
   save(projectId: string, id: string, input: CreationSave): Promise<CreationDetail>;

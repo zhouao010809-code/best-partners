@@ -238,3 +238,102 @@ describe('SkillsPage', () => {
     expect(screen.queryByRole('button', { name: /在 Finder 中打开/ })).not.toBeInTheDocument();
   });
 });
+
+it('previews entire folder recycling, cancels without mutation, and supports confirmed recycle and undo', async () => {
+  const user = userEvent.setup();
+  const folder = { id: 'f'.repeat(64), name: '发布流程', skillCount: 1 };
+  const id = '11111111-1111-4111-8111-111111111111';
+  const entry = { id, folderId: folder.id, name: folder.name, skillCount: 1, createdAt: '2026-09-26T12:00:00Z', status: 'trashed' as const };
+  const previewFolderTrash = vi.fn(async () => ok({ ...entry, entryCount: 3, expiresAt: '2026-09-26T12:05:00Z' }));
+  const trashFolder = vi.fn(async () => { list.mockResolvedValue(ok({ folders: [], items: [] })); return ok(entry); });
+  const listFolderTrash = vi.fn(async () => ok({ items: [entry] }));
+  const restoreFolder = vi.fn(async () => { list.mockResolvedValue(ok({ folders: [folder], items: [{ ...skill, folderId: folder.id, folderName: folder.name }] })); return ok({ ...entry, status: 'restored' as const }); });
+  runtime.api = { skills: { list, get, createFolder, move, previewFolderTrash, trashFolder, listFolderTrash, restoreFolder } };
+  list.mockResolvedValue(ok({ folders: [folder], items: [{ ...skill, folderId: folder.id, folderName: folder.name }] }));
+  renderPage();
+  expect(screen.queryByRole('button', { name: '移到回收站' })).not.toBeInTheDocument();
+  await user.click(await screen.findByRole('button', { name: '发布流程 1' }));
+  await user.click(screen.getByRole('button', { name: '移到回收站' }));
+  expect(await screen.findByRole('dialog', { name: '回收“发布流程”？' })).toHaveTextContent('隐藏文件');
+  expect(trashFolder).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: '取消回收' }));
+  expect(trashFolder).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: '移到回收站' }));
+  await user.click(await screen.findByRole('button', { name: '确认回收整个文件夹' }));
+  expect(trashFolder).toHaveBeenCalledExactlyOnceWith(id, expect.any(AbortSignal));
+  await user.click(await screen.findByRole('button', { name: '撤销回收' }));
+  expect(restoreFolder).toHaveBeenCalledExactlyOnceWith(id, expect.any(AbortSignal));
+  expect(await screen.findByRole('button', { name: '发布流程 1' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('loads persisted recycled folders and retains conflict errors for an explicit restore retry', async () => {
+  const user = userEvent.setup();
+  const entry = { id: '11111111-1111-4111-8111-111111111111', folderId: 'f'.repeat(64), name: '写作', skillCount: 2, createdAt: '2026-09-26T12:00:00Z', status: 'trashed' as const };
+  const restoreFolder = vi.fn(async () => failed<typeof entry>('原位置已有“写作”。请先重命名同名文件夹，再恢复；回收内容仍保留。'));
+  runtime.api = { skills: { list, get, previewFolderTrash: vi.fn(), trashFolder: vi.fn(), listFolderTrash: vi.fn(async () => ok({ items: [entry] })), restoreFolder } };
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: '文件夹回收站' }));
+  await user.click(await screen.findByRole('button', { name: '恢复：写作' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('回收内容仍保留');
+  expect(screen.getByRole('button', { name: '恢复：写作' })).toBeEnabled();
+});
+
+it('discards a late folder preview after the user changes the selected category', async () => {
+  const user = userEvent.setup();
+  const folder = { id: 'f'.repeat(64), name: '旧分类', skillCount: 0 };
+  let finish!: (value: ApiClientResult<any>) => void;
+  const previewFolderTrash = vi.fn(() => new Promise<ApiClientResult<any>>(resolve => { finish = resolve; }));
+  runtime.api = { skills: { list, get, previewFolderTrash, trashFolder: vi.fn(), listFolderTrash: vi.fn(async () => ok({ items: [] })), restoreFolder: vi.fn() } };
+  list.mockResolvedValue(ok({ folders: [folder], items: [] }));
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: '旧分类 0' }));
+  await user.click(screen.getByRole('button', { name: '移到回收站' }));
+  await user.click(screen.getByRole('button', { name: '未分类 0' }));
+  finish(ok({ id: '11111111-1111-4111-8111-111111111111', folderId: folder.id, name: folder.name, skillCount: 0, entryCount: 0, expiresAt: '2026-09-26T12:05:00Z' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+});
+
+it('keeps a failed confirmation visible and clears old undo state when the API scope changes', async () => {
+  const user = userEvent.setup();
+  const folder = { id: 'f'.repeat(64), name: '旧分类', skillCount: 0 };
+  const id = '11111111-1111-4111-8111-111111111111';
+  const entry = { id, folderId: folder.id, name: folder.name, skillCount: 0, createdAt: '2026-09-26T12:00:00Z', status: 'trashed' as const };
+  const trashFolder = vi.fn().mockResolvedValueOnce(failed('目录变化，请重新预览。')).mockResolvedValueOnce(ok(entry));
+  runtime.api = { skills: { list, get, previewFolderTrash: vi.fn(async () => ok({ id, folderId: folder.id, name: folder.name, skillCount: 0, entryCount: 0, expiresAt: '2026-09-26T12:05:00Z' })), trashFolder, listFolderTrash: vi.fn(async () => ok({ items: [] })), restoreFolder: vi.fn() } };
+  list.mockResolvedValue(ok({ folders: [folder], items: [] }));
+  const rendered = renderPage();
+  await user.click(await screen.findByRole('button', { name: '旧分类 0' }));
+  await user.click(screen.getByRole('button', { name: '移到回收站' }));
+  await user.click(await screen.findByRole('button', { name: '确认回收整个文件夹' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('目录变化');
+  expect(screen.getByRole('dialog')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '取消回收' }));
+  await user.click(screen.getByRole('button', { name: '移到回收站' }));
+  await user.click(await screen.findByRole('button', { name: '确认回收整个文件夹' }));
+  expect(await screen.findByRole('button', { name: '撤销回收' })).toBeVisible();
+  runtime.api = { skills: { ...runtime.api.skills!, list: vi.fn(async () => ok({ folders: [], items: [] })) } };
+  rendered.rerender(<SkillsPage />);
+  await waitFor(() => expect(screen.queryByRole('button', { name: '撤销回收' })).not.toBeInTheDocument());
+});
+
+it('keeps the folder mutation mounted by disabling catalog navigation and writes until confirmation completes', async () => {
+  const user = userEvent.setup();
+  const folder = { id: 'f'.repeat(64), name: '处理中分类', skillCount: 1 };
+  const id = '11111111-1111-4111-8111-111111111111';
+  const entry = { id, folderId: folder.id, name: folder.name, skillCount: 1, createdAt: '2026-09-26T12:00:00Z', status: 'trashed' as const };
+  let finish!: (value: ApiClientResult<typeof entry>) => void;
+  const trashFolder = vi.fn(() => new Promise<ApiClientResult<typeof entry>>(resolve => { finish = resolve; }));
+  runtime.api = { skills: { list, get, createFolder, move, previewFolderTrash: vi.fn(async () => ok({ id, folderId: folder.id, name: folder.name, skillCount: 1, entryCount: 1, expiresAt: '2026-09-26T12:05:00Z' })), trashFolder, listFolderTrash: vi.fn(async () => ok({ items: [] })), restoreFolder: vi.fn() } };
+  list.mockResolvedValue(ok({ folders: [folder], items: [{ ...skill, folderId: folder.id, folderName: folder.name }] }));
+  renderPage();
+  await user.click(await screen.findByRole('button', { name: '处理中分类 1' }));
+  await user.click(screen.getByRole('button', { name: '移到回收站' }));
+  await user.click(await screen.findByRole('button', { name: '确认回收整个文件夹' }));
+  expect(screen.getByRole('button', { name: '查看方法：公众号排版发布' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '新建文件夹' })).toBeDisabled();
+  expect(screen.getByRole('combobox', { name: '移动到：公众号排版发布' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '未分类 0' })).toBeDisabled();
+  list.mockResolvedValue(ok({ folders: [], items: [] })); finish(ok(entry));
+  expect(await screen.findByRole('button', { name: '撤销回收' })).toBeVisible();
+  await waitFor(() => expect(screen.queryByRole('button', { name: '处理中分类 1' })).not.toBeInTheDocument());
+});

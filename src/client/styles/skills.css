@@ -564,3 +564,21 @@
     animation: none;
   }
 }
+
+.skills-folder-trash { display: grid; gap: 10px; min-width: 0; }
+.skills-folder-trash__actions,
+.skills-folder-trash__status,
+.skills-folder-trash__list-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.skills-folder-trash button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--border-muted); border-radius: var(--radius-xs); color: var(--text-secondary); background: var(--surface-panel); font-size: 12px; }
+.skills-folder-trash__status { color: var(--accent-primary); font-size: 12px; }
+.skills-folder-trash__confirm { padding: 16px; border: 1px solid var(--border-muted); border-radius: var(--radius-sm); background: var(--surface-panel); }
+.skills-folder-trash h3 { margin: 0; color: var(--text-primary); font-size: 14px; }
+.skills-folder-trash p { margin: 8px 0; color: var(--text-secondary); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.skills-folder-trash .skills-mutation-error { color: #ffb0aa; }
+.skills-folder-trash__list { padding-top: 12px; border-top: 1px solid var(--border-muted); }
+.skills-folder-trash__list-heading { justify-content: space-between; }
+.skills-folder-trash__row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border-muted); }
+.skills-folder-trash__row > div { min-width: 0; }
+.skills-folder-trash__row strong { font-size: 13px; overflow-wrap: anywhere; }
+.skills-folder-trash__row > button { flex-shrink: 0; }
+@media (max-width: 600px) { .skills-folder-trash__confirm { padding: 12px; } .skills-folder-trash__row { align-items: flex-start; gap: 8px; } }

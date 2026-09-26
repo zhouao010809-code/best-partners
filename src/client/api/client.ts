@@ -67,11 +67,17 @@ import {
   skillResponseSchema,
   skillsResponseSchema,
   skillFolderResponseSchema,
+  skillFolderTrashPreviewResponseSchema,
+  skillFolderTrashEntryResponseSchema,
+  skillFolderTrashListResponseSchema,
   skillMoveResponseSchema,
   skillsMatchResponseSchema,
   type SkillDetail,
   type SkillsPage,
   type SkillFolder,
+  type SkillFolderTrashPreview,
+  type SkillFolderTrashEntry,
+  type SkillFolderTrashList,
   type SkillSummary,
   type SkillMatchCandidate
 } from '../../shared/api/skills.js';
@@ -143,6 +149,10 @@ export interface ReadConsoleApi {
     getProfile?(projectId: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectCreativeProfile>>;
     saveProfile?(projectId: string, input: CreativeProfileSave): Promise<ApiClientResult<ProjectCreativeProfile>>;
     list(projectId: string, signal?: AbortSignal): Promise<ApiClientResult<{ items: ProjectCreation[] }>>;
+    listDiscarded?(projectId: string, signal?: AbortSignal): Promise<ApiClientResult<{ items: ProjectCreation[] }>>;
+    discard?(projectId: string, id: string, input: { expectedRevision: number }): Promise<ApiClientResult<CreationDetail>>;
+    restore?(projectId: string, id: string, input: { expectedRevision: number }): Promise<ApiClientResult<CreationDetail>>;
+    dismissSuggestion?(projectId: string, id: string, suggestionId: string): Promise<ApiClientResult<CreationDetail>>;
     get(projectId: string, id: string, signal?: AbortSignal): Promise<ApiClientResult<CreationDetail>>;
     create(projectId: string, input: CreationCreate): Promise<ApiClientResult<CreationDetail>>;
     save(projectId: string, id: string, input: CreationSave): Promise<ApiClientResult<CreationDetail>>;
@@ -156,6 +166,10 @@ export interface ReadConsoleApi {
     match?(message: string, signal?: AbortSignal): Promise<ApiClientResult<{ candidates: SkillMatchCandidate[] }>>;
     createFolder?(name: string, signal?: AbortSignal): Promise<ApiClientResult<SkillFolder>>;
     move?(id: string, folderId: string | null, signal?: AbortSignal): Promise<ApiClientResult<SkillSummary>>;
+    previewFolderTrash?(folderId: string, signal?: AbortSignal): Promise<ApiClientResult<SkillFolderTrashPreview>>;
+    trashFolder?(id: string, signal?: AbortSignal): Promise<ApiClientResult<SkillFolderTrashEntry>>;
+    listFolderTrash?(signal?: AbortSignal): Promise<ApiClientResult<SkillFolderTrashList>>;
+    restoreFolder?(id: string, signal?: AbortSignal): Promise<ApiClientResult<SkillFolderTrashEntry>>;
   };
   attachments?: {
     list(signal?: AbortSignal): Promise<ApiClientResult<{ attachments: Attachment[] }>>;
@@ -477,6 +491,10 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
       getProfile: (p, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(p)}/creative-profile`, creativeProfileResponseSchema, getInit(signal)),
       saveProfile: (p, input) => writeWithCsrf(`/api/v1/projects/${encodeURIComponent(p)}/creative-profile`, creativeProfileResponseSchema, 'PUT', JSON.stringify(input)),
       list: (p, signal) => requestData(fetcher, creationsPath(p), creationListResponseSchema, getInit(signal)),
+      listDiscarded: (p, signal) => requestData(fetcher, `${creationsPath(p)}/discarded`, creationListResponseSchema, getInit(signal)),
+      discard: (p, id, input) => postWithCsrf(`${creationsPath(p, id)}/discard`, creationDetailResponseSchema, input),
+      restore: (p, id, input) => postWithCsrf(`${creationsPath(p, id)}/restore`, creationDetailResponseSchema, input),
+      dismissSuggestion: (p, id, suggestionId) => postWithCsrf(`${creationsPath(p, id)}/suggestions/${encodeURIComponent(suggestionId)}/dismiss`, creationDetailResponseSchema, {}),
       get: (p, id, signal) => requestData(fetcher, creationsPath(p, id), creationDetailResponseSchema, getInit(signal)),
       create: (p, input) => postWithCsrf(creationsPath(p), creationDetailResponseSchema, input),
       save: (p, id, input) => writeWithCsrf(creationsPath(p, id), creationDetailResponseSchema, 'PUT', JSON.stringify(input)),
@@ -489,7 +507,11 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
       get: (id, signal) => requestData(fetcher, `/api/v1/skills/${encodeURIComponent(id)}`, skillResponseSchema, getInit(signal)),
       match: (message, signal) => postWithCsrf('/api/v1/skills/match', skillsMatchResponseSchema, { message }, undefined, signal),
       createFolder: (name, signal) => postWithCsrf('/api/v1/skills/folders', skillFolderResponseSchema, { name }, undefined, signal),
-      move: (id, folderId, signal) => postWithCsrf(`/api/v1/skills/${encodeURIComponent(id)}/move`, skillMoveResponseSchema, { folderId }, undefined, signal)
+      move: (id, folderId, signal) => postWithCsrf(`/api/v1/skills/${encodeURIComponent(id)}/move`, skillMoveResponseSchema, { folderId }, undefined, signal),
+      previewFolderTrash: (folderId, signal) => postWithCsrf(`/api/v1/skills/folders/${encodeURIComponent(folderId)}/trash-preview`, skillFolderTrashPreviewResponseSchema, {}, undefined, signal),
+      trashFolder: (id, signal) => postWithCsrf('/api/v1/skills/folder-trash', skillFolderTrashEntryResponseSchema, { id }, undefined, signal),
+      listFolderTrash: signal => requestData(fetcher, '/api/v1/skills/folder-trash', skillFolderTrashListResponseSchema, getInit(signal)),
+      restoreFolder: (id, signal) => postWithCsrf('/api/v1/skills/folder-trash/restore', skillFolderTrashEntryResponseSchema, { id }, undefined, signal)
     },
     attachments: {
       list: signal => requestData(fetcher, '/api/v1/assistant/attachments', attachmentListResponseSchema, getInit(signal)),

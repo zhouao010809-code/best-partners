@@ -124,6 +124,8 @@ it('saves generated topics with the submitted instructions and reference scope w
   expect(f.suggest.mock.calls[0]![1]).toMatchObject({ instruction: '本次采访找选题', referenceSelection: { mode: 'selected', paths: ['采访/本次采访.md'] } });
   fireEvent.change(screen.getByRole('textbox', { name: '选题要求' }), { target: { value: '下一批新的要求' } });
   await act(async () => pending.resolve(ok({ id: randomUUID(), task: 'topics', reply: '候选角度', topics: [{ title: '从采访出发', audience: '家长', angle: '真实问题', rationale: '采访依据' }], sources: [], createdAt: timestamp })));
+  fireEvent.click(await screen.findByRole('checkbox', { name: '保留选题：从采访出发' }));
+  fireEvent.click(screen.getByRole('button', { name: '保存所选（1）' }));
   await waitFor(() => expect(create).toHaveBeenCalledOnce());
   expect(create.mock.calls[0]![1]).toMatchObject({ brief: '本次采访找选题', referenceSelection: { mode: 'selected', paths: ['采访/本次采访.md'] } });
   fireEvent.click(screen.getByRole('button', { name: '策划选题' }));
@@ -174,7 +176,7 @@ it('shows a selected-passage suggestion without changing the script, then adopts
   await waitFor(() => expect(f.stored.get(firstId)!.item.body).toBe(adopted));
   expect(adopted.startsWith('开场保持原样。\n')).toBe(true);
   expect(adopted.endsWith('\n结尾保持原样。')).toBe(true);
-  expect(f.stored.get(firstId)!.versions).toEqual([]);
+  expect(f.stored.get(firstId)!.versions).toEqual([expect.objectContaining({ body: originalBody })]);
 });
 
 it('locks suggestion adoption during an in-flight snapshot and never replaces the saved body with that suggestion', async () => {
@@ -366,6 +368,8 @@ it('stops the remaining topic saves if the profile changes during an earlier sav
   await user.click(await screen.findByRole('button', { name: '策划选题' }));
   fireEvent.change(screen.getByRole('textbox', { name: '选题要求' }), { target: { value: '策划短视频' } });
   await user.click(screen.getByRole('button', { name: '根据资料策划' }));
+  await user.click(await screen.findByRole('button', { name: '全选' }));
+  await user.click(screen.getByRole('button', { name: '保存所选（2）' }));
   await waitFor(() => expect(create).toHaveBeenCalledOnce());
   await user.click(screen.getByRole('button', { name: /项目创作档案/u }));
   fireEvent.change(screen.getByLabelText('受众'), { target: { value: '新的受众' } });

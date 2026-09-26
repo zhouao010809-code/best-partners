@@ -125,7 +125,7 @@ describe('creation persistence and version export', () => {
   it('exports the chosen immutable version once and keeps same-title versions and creations separate', async () => {
     const f = await fixture(); const sourceBefore = await readFile(join(f.projectRoot, '原始资料.md'));
     const created = await f.service.create(f.project.id, { kind: 'script', title: '相同标题', body: '需要导出的版本一', brief: '创作要求一' });
-    await f.service.recordExchange(f.project.id, created.item.id, { instruction: '讨论背景', suggestion: suggestion() });
+    await f.service.recordExchange(f.project.id, created.item.id, { instruction: '讨论背景', suggestion: suggestion({ baseRevision: created.item.revision }) });
     const versioned = await f.service.snapshot(f.project.id, created.item.id, { expectedRevision: 1, finalize: true });
     const first = versioned.versions[0]!;
     const newer = await f.service.save(f.project.id, created.item.id, savedInput(versioned.item, { body: '不应混入版本一的新正文', brief: '新要求' }));
@@ -333,5 +333,144 @@ describe('creative context profiles and references', () => {
     for (const invalid of [{ ...payload, samples: [repeatedSample, repeatedSample] }, { ...payload, samples: Array.from({ length: 4 }, () => ({ creationId: randomUUID(), versionId: randomUUID() })) }, { ...payload, rootPath: f.otherRoot }, { ...payload, goal: '字'.repeat(2001) }, { ...payload, facts: '字'.repeat(4001) }, { ...payload, expectedRevision: -1 }]) {
       expect((await f.app.inject({ method: 'PUT', url, payload: invalid })).statusCode).toBe(400);
     }
+  });
+});
+
+describe('recoverable creation lifecycle', () => {
+  it('discards and restores the same draft across restart with all history and export bytes intact', async () => {
+    const f = await fixture();
+    const initial = await f.service.create(f.project.id, { kind: 'script', title: '可恢复稿件', body: '原始正文' });
+    await f.service.recordExchange(f.project.id, initial.item.id, { instruction: '保留讨论', suggestion: suggestion({ baseRevision: 1 }) });
+    const finalized = await f.service.snapshot(f.project.id, initial.item.id, { expectedRevision: 1, finalize: true });
+    const exported = await f.service.exportVersion(f.project.id, initial.item.id, finalized.versions[0]!.id);
+    const bytes = await readFile(join(f.projectRoot, exported.path));
+    const receipts = f.database.prepare('SELECT * FROM personal_project_creation_exports').all();
+    const discarded = await f.service.discard(f.project.id, initial.item.id, { expectedRevision: 2 });
+    expect(discarded.item).toMatchObject({ id: initial.item.id, revision: 3, discardedAt: expect.any(String) });
+    expect(discarded.versions).toEqual(finalized.versions); expect(discarded.messages).toEqual(finalized.messages);
+    expect(await f.service.list(f.project.id)).toEqual([]); expect(await f.service.listDiscarded(f.project.id)).toEqual([discarded.item]);
+    f.reopen(); expect(await f.service.get(f.project.id, initial.item.id)).toEqual(discarded);
+    const restored = await f.service.restore(f.project.id, initial.item.id, { expectedRevision: 3 });
+    expect(restored.item.discardedAt).toBeUndefined(); expect(restored.item.revision).toBe(4);
+    expect(restored.versions).toEqual(finalized.versions); expect(restored.messages).toEqual(finalized.messages);
+    expect(await f.service.listDiscarded(f.project.id)).toEqual([]); expect(await f.service.list(f.project.id)).toEqual([restored.item]);
+    expect(await readFile(join(f.projectRoot, exported.path))).toEqual(bytes);
+    expect(f.database.prepare('SELECT * FROM personal_project_creation_exports').all()).toEqual(receipts);
+  });
+
+  it('rejects stale or foreign lifecycle writes and all mutations of discarded creations', async () => {
+    const f = await fixture(); const initial = await f.service.create(f.project.id, { kind: 'script', title: '状态边界' });
+    const final = await f.service.snapshot(f.project.id, initial.item.id, { expectedRevision: 1, finalize: true });
+    await expect(f.service.discard(f.second.id, initial.item.id, { expectedRevision: 2 })).rejects.toMatchObject({ code: 'CREATION_NOT_FOUND' });
+    await expect(f.service.discard(f.project.id, initial.item.id, { expectedRevision: 1 })).rejects.toMatchObject({ code: 'CREATION_REVISION_CONFLICT' });
+    const removed = await f.service.discard(f.project.id, initial.item.id, { expectedRevision: 2 });
+    for (const operation of [
+      () => f.service.save(f.project.id, initial.item.id, savedInput(removed.item)),
+      () => f.service.snapshot(f.project.id, initial.item.id, { expectedRevision: removed.item.revision, finalize: true }),
+      () => f.service.exportVersion(f.project.id, initial.item.id, final.versions[0]!.id),
+      () => f.service.recordExchange(f.project.id, initial.item.id, { instruction: '迟到回复', suggestion: suggestion({ baseRevision: 2 }) })
+    ]) await expect(operation()).rejects.toMatchObject({ code: 'CREATION_DISCARDED', statusCode: 409 });
+    await expect(f.service.restore(f.second.id, initial.item.id, { expectedRevision: 3 })).rejects.toMatchObject({ code: 'CREATION_NOT_FOUND' });
+    await expect(f.service.restore(f.project.id, initial.item.id, { expectedRevision: 2 })).rejects.toMatchObject({ code: 'CREATION_REVISION_CONFLICT' });
+    await f.service.restore(f.project.id, initial.item.id, { expectedRevision: 3 });
+    await expect(f.service.recordExchange(f.project.id, initial.item.id, { instruction: '复活后旧回复', suggestion: suggestion({ baseRevision: 2 }) })).rejects.toMatchObject({ code: 'CREATION_REVISION_CONFLICT' });
+    expect((await f.service.get(f.project.id, initial.item.id)).messages).toEqual([]);
+  });
+
+  it('atomically removes discarded samples and prevents a stale profile from reattaching them', async () => {
+    const f = await fixture(); const initial = await f.service.create(f.project.id, { kind: 'script', title: '样稿' });
+    const final = await f.service.snapshot(f.project.id, initial.item.id, { expectedRevision: 1, finalize: true });
+    const input = { ...blankProfileFields, style: '保留风格', samples: [{ creationId: initial.item.id, versionId: final.versions[0]!.id }], expectedRevision: 0 };
+    const profile = await f.service.saveProfile(f.project.id, input);
+    await f.service.discard(f.project.id, initial.item.id, { expectedRevision: 2 });
+    expect(await f.service.getProfileContext(f.project.id)).toMatchObject({ profile: { style: input.style, revision: 2, samples: [] }, samples: [] });
+    await expect(f.service.saveProfile(f.project.id, { ...input, expectedRevision: profile.revision })).rejects.toMatchObject({ code: 'CREATIVE_PROFILE_REVISION_CONFLICT' });
+    await expect(f.service.saveProfile(f.project.id, { ...input, expectedRevision: 2 })).rejects.toMatchObject({ code: 'CREATIVE_PROFILE_SAMPLE_INVALID' });
+    await f.service.restore(f.project.id, initial.item.id, { expectedRevision: 3 });
+    expect((await f.service.getProfile(f.project.id)).samples).toEqual([]);
+  });
+
+  it('frees active capacity on discard and refuses an over-capacity restore without losing it', async () => {
+    const f = await fixture(); const first = await f.service.create(f.project.id, { kind: 'topic', title: '可回收' });
+    for (let index = 1; index < 200; index++) await f.service.create(f.project.id, { kind: 'topic', title: `选题${index}` });
+    await f.service.discard(f.project.id, first.item.id, { expectedRevision: 1 });
+    const replacement = await f.service.create(f.project.id, { kind: 'topic', title: '腾出的空间' });
+    await expect(f.service.restore(f.project.id, first.item.id, { expectedRevision: 2 })).rejects.toMatchObject({ code: 'CREATION_LIMIT_EXCEEDED' });
+    expect(await f.service.listDiscarded(f.project.id)).toHaveLength(1);
+    await f.service.discard(f.project.id, replacement.item.id, { expectedRevision: 1 });
+    await f.service.restore(f.project.id, first.item.id, { expectedRevision: 2 });
+    expect(await f.service.list(f.project.id)).toHaveLength(200);
+  });
+
+  it('does not discard while an export is running and releases the busy state afterwards', async () => {
+    const f = await fixture(); const initial = await f.service.create(f.project.id, { kind: 'script', title: '正在导出' });
+    const final = await f.service.snapshot(f.project.id, initial.item.id, { expectedRevision: 1, finalize: true });
+    const exporting = f.service.exportVersion(f.project.id, initial.item.id, final.versions[0]!.id);
+    try { await expect(f.service.discard(f.project.id, initial.item.id, { expectedRevision: 2 })).rejects.toMatchObject({ code: 'CREATION_BUSY' }); }
+    finally { await exporting; }
+    expect((await f.service.discard(f.project.id, initial.item.id, { expectedRevision: 2 })).item.discardedAt).toBeDefined();
+  });
+
+  it('persists an idempotent suggestion dismissal without changing the draft or versions', async () => {
+    const f = await fixture(); const initial = await f.service.create(f.project.id, { kind: 'script', title: '明确放弃', body: '保持原稿' });
+    const candidate = suggestion({ baseRevision: 1 });
+    await f.service.recordExchange(f.project.id, initial.item.id, { instruction: '提出建议', suggestion: candidate });
+    await expect(f.service.dismissSuggestion(f.second.id, initial.item.id, candidate.id)).rejects.toMatchObject({ code: 'CREATION_NOT_FOUND' });
+    await expect(f.service.dismissSuggestion(f.project.id, initial.item.id, randomUUID())).rejects.toMatchObject({ code: 'CREATION_SUGGESTION_NOT_FOUND' });
+    const dismissed = await f.service.dismissSuggestion(f.project.id, initial.item.id, candidate.id);
+    expect(dismissed.item).toEqual(initial.item); expect(dismissed.versions).toEqual([]);
+    expect(dismissed.messages[0]).toMatchObject({ suggestion: candidate, dismissedAt: expect.any(String) });
+    expect(await f.service.dismissSuggestion(f.project.id, initial.item.id, candidate.id)).toEqual(dismissed);
+    f.reopen(); expect(await f.service.get(f.project.id, initial.item.id)).toEqual(dismissed);
+  });
+
+  it('exposes strict discard/restore/list/dismiss endpoints and rejects generation for discarded items', async () => {
+    const f = await httpFixture(); const initial = await f.service.create(f.project.id, { kind: 'script', title: '接口回收' });
+    const base = `/api/v1/projects/${f.project.id}/creations`; const itemPath = `${base}/${initial.item.id}`;
+    const candidate = suggestion({ baseRevision: 1 });
+    await f.service.recordExchange(f.project.id, initial.item.id, { instruction: '建议', suggestion: candidate });
+    expect((await f.app.inject({ method: 'POST', url: `${itemPath}/suggestions/${candidate.id}/dismiss`, payload: {} })).statusCode).toBe(200);
+    expect((await f.app.inject({ method: 'POST', url: `${itemPath}/discard`, payload: { expectedRevision: 1, rootPath: 'ignored' } })).statusCode).toBe(400);
+    const discarded = await f.app.inject({ method: 'POST', url: `${itemPath}/discard`, payload: { expectedRevision: 1 } });
+    expect(discarded.statusCode).toBe(200); expect(discarded.headers['cache-control']).toBe('no-store');
+    expect((await f.app.inject({ url: base })).json().data.items).toEqual([]);
+    expect((await f.app.inject({ url: `${base}/discarded` })).json().data.items).toHaveLength(1);
+    const generated = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${f.project.id}/creation-suggestions`, payload: { task: 'script', instruction: '不应发送', itemId: initial.item.id, expectedRevision: 2 } });
+    expect(generated.statusCode).toBe(409); expect(f.generated).toHaveLength(0);
+    expect((await f.app.inject({ method: 'POST', url: `${itemPath}/restore`, payload: { expectedRevision: 2 } })).statusCode).toBe(200);
+  });
+});
+
+describe('idempotent candidate acceptance', () => {
+  it('returns one creation for repeated requests, including after edits or discard, without resurrecting it', async () => {
+    const f = await fixture(); const request = { kind: 'topic' as const, title: '只保存一次', requestId: randomUUID() };
+    const [first, repeated] = await Promise.all([f.service.create(f.project.id, request), f.service.create(f.project.id, request)]);
+    expect(repeated).toEqual(first); expect(await f.service.list(f.project.id)).toHaveLength(1);
+    const changed = await f.service.save(f.project.id, first.item.id, savedInput(first.item, { title: '用户后来改的标题' }));
+    expect(await f.service.create(f.project.id, request)).toEqual(changed);
+    const removed = await f.service.discard(f.project.id, first.item.id, { expectedRevision: changed.item.revision });
+    f.reopen(); expect(await f.service.create(f.project.id, request)).toEqual(removed);
+    expect(await f.service.list(f.project.id)).toEqual([]); expect(await f.service.listDiscarded(f.project.id)).toHaveLength(1);
+  });
+
+  it('rejects reuse for a different payload and scopes request identities to the owning project', async () => {
+    const f = await fixture(); const request = { kind: 'topic' as const, title: '同一请求', requestId: randomUUID() };
+    const first = await f.service.create(f.project.id, request);
+    await expect(f.service.create(f.project.id, { ...request, title: '不同内容' })).rejects.toMatchObject({ code: 'CREATION_REQUEST_CONFLICT', statusCode: 409 });
+    const second = await f.service.create(f.second.id, request); expect(second.item.id).not.toBe(first.item.id);
+    expect((await f.service.create(f.project.id, { ...request, brief: '', referenceSelection: { mode: 'auto', paths: [] } })).item.id).toBe(first.item.id);
+  });
+
+  it('requires the generating profile revision on first acceptance but permits retries after that profile changes', async () => {
+    const f = await fixture(); const request = { kind: 'topic' as const, title: '档案已变化', requestId: randomUUID(), expectedProfileRevision: 1 };
+    await expect(f.service.create(f.project.id, request)).rejects.toMatchObject({ code: 'CREATIVE_PROFILE_REVISION_CONFLICT' });
+    expect(await f.service.list(f.project.id)).toEqual([]);
+    const profile = { ...blankProfileFields, samples: [], expectedRevision: 0 };
+    await f.service.saveProfile(f.project.id, profile);
+    const first = await f.service.create(f.project.id, request);
+    await f.service.saveProfile(f.project.id, { ...profile, expectedRevision: 1, style: '新风格' });
+    await expect(f.service.create(f.project.id, { ...request, requestId: randomUUID() })).rejects.toMatchObject({ code: 'CREATIVE_PROFILE_REVISION_CONFLICT' });
+    expect(await f.service.create(f.project.id, request)).toEqual(first);
+    expect(await f.service.list(f.project.id)).toHaveLength(1);
   });
 });

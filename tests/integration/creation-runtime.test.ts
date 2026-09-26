@@ -113,3 +113,83 @@ it('retains session and CSRF checks for profile saves and keeps personal profile
   expect((await company.inject({ url, headers })).statusCode).toBe(404);
   expect((await company.inject({ method: 'PUT', url, headers: f.auth, payload })).statusCode).toBe(404);
 });
+
+it.each(['discarded', 'restored'] as const)('does not persist a late model reply after the creation was %s', async state => {
+  let release!: () => void; let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = await fixture(async input => {
+    await input.tools.find(tool => tool.name === 'read_project_file')!.execute({ path: '课程.md' });
+    entered(); await gate;
+    input.emit({ type: 'text', text: JSON.stringify({ reply: '迟到建议', topics: [], body: '不可重新出现的正文' }) });
+  });
+  const initial = await f.creations.create(f.project.id, { kind: 'script', title: '迟到回复', body: '用户稿件' });
+  const response = f.app.inject({ method: 'POST', url: `/api/v1/projects/${f.project.id}/creation-suggestions`, headers: f.auth,
+    payload: { task: 'script', instruction: '生成建议', itemId: initial.item.id, expectedRevision: 1 } });
+  await started;
+  try {
+    await f.creations.discard(f.project.id, initial.item.id, { expectedRevision: 1 });
+    if (state === 'restored') await f.creations.restore(f.project.id, initial.item.id, { expectedRevision: 2 });
+  } finally { release(); }
+  const result = await response;
+  expect(result.statusCode).toBe(409);
+  expect(result.json().error.code).toBe(state === 'discarded' ? 'CREATION_DISCARDED' : 'CREATION_REVISION_CONFLICT');
+  expect((await f.creations.get(f.project.id, initial.item.id)).messages).toEqual([]);
+  expect((await f.creations.get(f.project.id, initial.item.id)).item.body).toBe('用户稿件');
+});
+
+it('protects lifecycle and dismissal endpoints with session/CSRF and personal runtime boundaries', async () => {
+  const f = await fixture(); const initial = await f.creations.create(f.project.id, { kind: 'script', title: '权限边界' });
+  const base = `/api/v1/projects/${f.project.id}/creations`;
+  const company = buildServer({ runtimeMode: 'company', projectCreations: f.creations }); cleanup.push(() => company.close());
+  for (const suffix of ['discard', 'restore', `suggestions/${initial.item.id}/dismiss`]) {
+    const url = `${base}/${initial.item.id}/${suffix}`;
+    const payload = suffix.includes('dismiss') ? {} : { expectedRevision: 1 };
+    expect((await f.app.inject({ method: 'POST', url, headers, payload })).statusCode).toBe(401);
+    expect((await f.app.inject({ method: 'POST', url, headers: { ...headers, cookie: f.cookie }, payload })).statusCode).toBe(403);
+    expect((await company.inject({ method: 'POST', url, headers: f.auth, payload })).statusCode).toBe(404);
+  }
+  expect((await company.inject({ url: `${base}/discarded`, headers })).statusCode).toBe(404);
+  expect(await f.creations.get(f.project.id, initial.item.id)).toEqual(initial);
+  expect(f.run).not.toHaveBeenCalled();
+});
+
+it('does not put a permanently dismissed suggestion back into model history', async () => {
+  let captured = '';
+  const f = await fixture(async input => {
+    captured = JSON.stringify(input.messages);
+    await input.tools.find(tool => tool.name === 'read_project_file')!.execute({ path: '课程.md' });
+    input.emit({ type: 'text', text: JSON.stringify({ reply: '新回复', topics: [], body: '新建议' }) });
+  });
+  const initial = await f.creations.create(f.project.id, { kind: 'script', title: '忽略已拒绝建议' });
+  const candidate: CreationSuggestion = { id: initial.item.id, task: 'script', reply: '已拒绝内容哨兵', body: '不要带回', topics: [], sources: [], baseRevision: 1, createdAt: new Date().toISOString() };
+  await f.creations.recordExchange(f.project.id, initial.item.id, { instruction: '旧要求哨兵', suggestion: candidate });
+  const dismissed = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${f.project.id}/creations/${initial.item.id}/suggestions/${candidate.id}/dismiss`, headers: f.auth, payload: {} });
+  expect(dismissed.statusCode).toBe(200);
+  const generated = await f.app.inject({ method: 'POST', url: `/api/v1/projects/${f.project.id}/creation-suggestions`, headers: f.auth,
+    payload: { task: 'script', instruction: '新要求', itemId: initial.item.id, expectedRevision: 1 } });
+  expect(generated.statusCode).toBe(200);
+  expect(captured).not.toContain('已拒绝内容哨兵'); expect(captured).not.toContain('旧要求哨兵');
+});
+
+it('rejects a late candidate whose selected style sample was discarded during generation', async () => {
+  let release!: () => void; let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; }); const gate = new Promise<void>(resolve => { release = resolve; });
+  const f = await fixture(async input => {
+    await input.tools.find(tool => tool.name === 'read_project_file')!.execute({ path: '课程.md' });
+    entered(); await gate;
+    input.emit({ type: 'text', text: JSON.stringify({ reply: '旧样稿风格建议', topics: [], body: '不应继续采用' }) });
+  });
+  const sample = await f.creations.create(f.project.id, { kind: 'script', title: '待丢弃样稿', body: '旧风格' });
+  const finalized = await f.creations.snapshot(f.project.id, sample.item.id, { expectedRevision: 1, finalize: true });
+  await f.creations.saveProfile(f.project.id, { audience: '', goal: '', style: '', facts: '', avoid: '', samples: [{ creationId: sample.item.id, versionId: finalized.item.finalVersionId! }], expectedRevision: 0 });
+  const target = await f.creations.create(f.project.id, { kind: 'script', title: '另一条生成中的稿件' });
+  const response = f.app.inject({ method: 'POST', url: `/api/v1/projects/${f.project.id}/creation-suggestions`, headers: f.auth,
+    payload: { task: 'script', instruction: '参考风格', itemId: target.item.id, expectedRevision: 1 } });
+  await started;
+  try { await f.creations.discard(f.project.id, sample.item.id, { expectedRevision: 2 }); } finally { release(); }
+  const result = await response;
+  expect(result.statusCode).toBe(409);
+  expect(result.json().error.code).toBe('CREATIVE_PROFILE_REVISION_CONFLICT');
+  expect((await f.creations.get(f.project.id, target.item.id)).messages).toEqual([]);
+});

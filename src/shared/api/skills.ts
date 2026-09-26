@@ -38,6 +38,28 @@ export const skillMoveRequestSchema = z.strictObject({
   folderId: skillFolderIdSchema.nullable()
 });
 
+export const skillFolderTrashIdSchema = z.uuid();
+export const skillFolderParamsSchema = z.strictObject({ folderId: skillFolderIdSchema });
+export const skillFolderTrashRequestSchema = z.strictObject({ id: skillFolderTrashIdSchema });
+export const skillFolderTrashPreviewSchema = z.strictObject({
+  id: skillFolderTrashIdSchema, folderId: skillFolderIdSchema,
+  name: z.string().min(1).max(255), skillCount: z.number().int().nonnegative(),
+  entryCount: z.number().int().nonnegative(), expiresAt: z.iso.datetime()
+});
+export const skillFolderTrashEntrySchema = z.strictObject({
+  id: skillFolderTrashIdSchema, folderId: skillFolderIdSchema,
+  name: z.string().min(1).max(255), skillCount: z.number().int().nonnegative(),
+  createdAt: z.iso.datetime(), status: z.enum(['trashed', 'restored', 'needs-review']),
+  restoredAt: z.iso.datetime().optional(), problem: z.string().max(2000).optional()
+});
+export const skillFolderTrashListSchema = z.strictObject({ items: z.array(skillFolderTrashEntrySchema) });
+export const skillFolderTrashPreviewResponseSchema = successEnvelopeSchema(skillFolderTrashPreviewSchema);
+export const skillFolderTrashEntryResponseSchema = successEnvelopeSchema(skillFolderTrashEntrySchema);
+export const skillFolderTrashListResponseSchema = successEnvelopeSchema(skillFolderTrashListSchema);
+export type SkillFolderTrashPreview = z.output<typeof skillFolderTrashPreviewSchema>;
+export type SkillFolderTrashEntry = z.output<typeof skillFolderTrashEntrySchema>;
+export type SkillFolderTrashList = z.output<typeof skillFolderTrashListSchema>;
+
 export const skillMatchRequestSchema = z.strictObject({
   message: z.string().trim().min(1).max(16_000)
 });

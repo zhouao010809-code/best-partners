@@ -39,3 +39,28 @@ it('upgrades old draft/version references without changing immutable version or 
     expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version=23').get()).toEqual({ count: 1 });
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+it('adds lifecycle markers to pre-lifecycle rows without changing drafts, discussions or immutable snapshots', async () => {
+  const database = new Database(':memory:');
+  try {
+    const migrationRoot = new URL('../../src/server/db/migrations/', import.meta.url);
+    const files = (await readdir(migrationRoot)).filter(file => /^\d+_.*\.sql$/u.test(file) && Number(file.slice(0, 3)) <= 23).sort();
+    applyMigrations(database, await Promise.all(files.map(async file => ({ version: Number(file.slice(0, 3)), sql: await readFile(new URL(file, migrationRoot), 'utf8'), requiresForeignKeysOff: file.startsWith('018_') }))));
+    const projectId = randomUUID(); const creationId = randomUUID(); const exchangeId = randomUUID(); const timestamp = '2026-09-26T00:00:00.000Z';
+    database.prepare(`INSERT INTO personal_projects (id,root_path,display_name,source_sha256,availability,created_at,updated_at) VALUES (?,?,'旧项目',?,'ready',?,?)`).run(projectId, '/isolated-fixture-only', 'a'.repeat(64), timestamp, timestamp);
+    database.prepare(`INSERT INTO personal_project_creations (id,project_id,kind,title,brief,body,audience,angle,rationale,sources_json,revision,created_at,updated_at) VALUES (?,?,'script','旧稿','','旧正文','','','','[]',1,?,?)`).run(creationId, projectId, timestamp, timestamp);
+    database.prepare('INSERT INTO personal_project_creation_exchanges (id,creation_id,instruction,suggestion_json,created_at) VALUES (?,?,?,?,?)').run(exchangeId, creationId, '旧讨论', '{}', timestamp);
+    const before = database.prepare('SELECT * FROM personal_project_creations WHERE id=?').get(creationId);
+    const exchangeBefore = database.prepare('SELECT * FROM personal_project_creation_exchanges WHERE id=?').get(exchangeId);
+    applyMigrations(database); applyMigrations(database);
+    const { discarded_at: discarded, request_id: requestId, request_hash: requestHash, ...unchanged } = database.prepare('SELECT * FROM personal_project_creations WHERE id=?').get(creationId) as Record<string, unknown>;
+    const { dismissed_at: dismissed, ...exchangeAfter } = database.prepare('SELECT * FROM personal_project_creation_exchanges WHERE id=?').get(exchangeId) as Record<string, unknown>;
+    expect(discarded).toBeNull(); expect(dismissed).toBeNull();
+    expect(requestId).toBeNull(); expect(requestHash).toBeNull();
+    expect(unchanged).toEqual(before); expect(exchangeAfter).toEqual(exchangeBefore);
+    expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version=24').get()).toEqual({ count: 1 });
+    const service = createProjectCreationService({ database });
+    expect(await service.listDiscarded(projectId)).toEqual([]);
+    expect((await service.list(projectId))[0]!.discardedAt).toBeUndefined();
+  } finally { database.close(); }
+});

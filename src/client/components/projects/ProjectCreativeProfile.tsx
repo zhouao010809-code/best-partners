@@ -29,6 +29,7 @@ export function ProjectCreativeProfile(props: ProjectCreativeProfileProps) {
 function CreativeProfileSession({ api, projectId, onSaved, compact = false }: ProjectCreativeProfileProps) {
   const [open, setOpen] = useState(false);
   const [saved, setSaved] = useState<SavedCreativeProfile>();
+  const savedRef = useRef(saved); savedRef.current = saved;
   const [form, setForm] = useState<Form>(emptyForm);
   const current = useRef(form);
   const [loading, setLoading] = useState(true);
@@ -48,6 +49,13 @@ function CreativeProfileSession({ api, projectId, onSaved, compact = false }: Pr
   const candidateController = useRef<AbortController | undefined>(undefined);
   const sampleController = useRef<AbortController | undefined>(undefined);
   const callback = useRef(onSaved); callback.current = onSaved;
+  const latestRevision = useRef(0);
+  function observeProfile(profile: SavedCreativeProfile): boolean {
+    if (profile.revision < latestRevision.current) {
+      setConflict(true); setError('项目档案已更新，请读取最新档案并核对后再保存；你的填写仍保留。'); return false;
+    }
+    latestRevision.current = profile.revision; callback.current?.(profile); return true;
+  }
   function edit(next: Form) { current.current = next; setForm(next); setNotice(''); }
   useEffect(() => { if (compact) setOpen(false); }, [compact]);
   useEffect(() => {
@@ -62,11 +70,34 @@ function CreativeProfileSession({ api, projectId, onSaved, compact = false }: Pr
       if (controller.signal.aborted) return;
       if (!result.ok) { setError(creationError(result)); return; }
       if (result.value.projectId !== projectId) { setError('项目档案不匹配，请重新读取。'); return; }
-      setSaved(result.value); edit(formOf(result.value)); callback.current?.(result.value);
+      if (!observeProfile(result.value)) return;
+      setSaved(result.value); edit(formOf(result.value));
     }).catch(() => { if (!controller.signal.aborted) setError('项目档案读取失败，请重试；仍可直接创作。'); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [api.creations, projectId, retry]);
+  useEffect(() => {
+    let controller: AbortController | undefined;
+    const refreshAfterLifecycle = (event: Event) => {
+      if ((event as CustomEvent<{ projectId?: string }>).detail?.projectId !== projectId || !api.creations?.getProfile) return;
+      controller?.abort(); const active = new AbortController(); controller = active;
+      void api.creations.getProfile(projectId, active.signal).then(result => {
+        if (active.signal.aborted || !alive.current) return;
+        if (!result.ok) { setConflict(true); setError(creationError(result)); return; }
+        if (result.value.projectId !== projectId) return;
+        if (!observeProfile(result.value)) return;
+        const previous = savedRef.current;
+        if (previous?.revision === result.value.revision) return;
+        if (previous && fingerprint(current.current) !== fingerprint(formOf(previous))) {
+          setConflict(true); setError('创作内容已变化，项目档案已更新。你的填写仍保留，请读取最新档案并核对后再保存。');
+        } else {
+          setSaved(result.value); edit(formOf(result.value)); setConflict(false); setError('');
+        }
+      }).catch(() => { if (!active.signal.aborted && alive.current) { setConflict(true); setError('项目档案刷新失败，请重新读取后再保存。'); } });
+    };
+    window.addEventListener('project-creation-lifecycle', refreshAfterLifecycle);
+    return () => { controller?.abort(); window.removeEventListener('project-creation-lifecycle', refreshAfterLifecycle); };
+  }, [api.creations, projectId]);
   useEffect(() => {
     if (!open || !samplesOpen || !api.creations || !saved) return;
     const controller = new AbortController();
@@ -90,7 +121,7 @@ function CreativeProfileSession({ api, projectId, onSaved, compact = false }: Pr
     return () => controller.abort();
   }, [api.creations, projectId, open, samplesOpen, saved]);
   const dirty = !!saved && fingerprint(form) !== fingerprint(formOf(saved));
-  const staleCandidate = !!pending && (pending.fingerprint !== fingerprint(form) || pending.revision !== saved?.revision
+  const staleCandidate = !!pending && (conflict || pending.fingerprint !== fingerprint(form) || pending.revision !== saved?.revision
     || (pending.suggestion.profileRevision !== undefined && pending.suggestion.profileRevision !== saved?.revision));
   async function save() {
     if (!saved || !api.creations?.saveProfile || saving || conflict) return;
@@ -105,9 +136,10 @@ function CreativeProfileSession({ api, projectId, onSaved, compact = false }: Pr
         return;
       }
       if (result.value.projectId !== projectId) { setError('保存结果与当前项目不匹配，请重新读取。'); return; }
+      if (!observeProfile(result.value)) return;
       setSaved(result.value);
       if (fingerprint(current.current) === sentFingerprint) edit(formOf(result.value));
-      setNotice('项目档案已保存，后续创作会使用这一版。'); callback.current?.(result.value);
+      setNotice('项目档案已保存，后续创作会使用这一版。');
     } catch { if (alive.current) setError('保存没有完成，你填写的内容仍保留，请重试。'); }
     finally { if (alive.current) setSaving(false); }
   }
@@ -119,7 +151,8 @@ function CreativeProfileSession({ api, projectId, onSaved, compact = false }: Pr
       if (!alive.current) return;
       if (!result.ok) { setError(creationError(result)); return; }
       if (result.value.projectId !== projectId) { setError('项目档案不匹配，请重新读取。'); return; }
-      setSaved(result.value); setConflict(false); setError(''); setNotice('已读取最新保存的档案。你的填写仍保留；核对后再保存。'); callback.current?.(result.value);
+      if (!observeProfile(result.value)) return;
+      setSaved(result.value); setConflict(false); setError(''); setNotice('已读取最新保存的档案。你的填写仍保留；核对后再保存。');
     } catch { if (alive.current) setError('最新档案读取失败，请重试。'); }
     finally { if (alive.current) setSaving(false); }
   }
@@ -182,6 +215,7 @@ function CreativeProfileSession({ api, projectId, onSaved, compact = false }: Pr
         {pending.suggestion.sources.length === 0 && <p className="creative-context__hint">本次没有返回参考来源，请核对后再采用。</p>}
         {staleCandidate && <p role="status" className="creation-notice">填写内容或已保存档案已变化，请重新整理，以保留你的最新修改。</p>}
         <button type="button" className="projects-button" disabled={staleCandidate || saving} onClick={() => { if (!pending.suggestion.profile || staleCandidate) return; edit({ ...current.current, ...pending.suggestion.profile }); setPending(undefined); setNotice('已采用到表单；保存项目档案后才会用于创作。'); }}><Check size={14} />采用到表单</button>
+        <button type="button" className="projects-button" disabled={saving} onClick={() => { setPending(undefined); setNotice('已放弃候选，填写内容未变。'); }}>放弃候选</button>
       </section>}
     </div>}
   </section>;

@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { PublicApiError } from '../../shared/api/errors.js';
 import {
-  creationCreateSchema, creationExchangeSchema, creationSaveSchema, creationSnapshotSchema,
+  creationCreateSchema, creationExchangeSchema, creationLifecycleSchema, creationSaveSchema, creationSnapshotSchema,
   projectCreationSchema, creationVersionSchema,
   type CreationDetail, type CreationExchange, type CreationVersion, type ProjectCreation,
   type ProjectCreationService
@@ -15,9 +15,9 @@ import { createCreativeProfileOperations } from './creative-profile.js';
 import { resolveProjectOutputPath } from './project-paths.js';
 
 type ProjectRow = { id: string; root_path: string; availability: string };
-type CreationRow = { id: string; project_id: string; kind: string; title: string; brief: string; body: string; audience: string; angle: string; rationale: string; sources_json: string; reference_selection_json: string; revision: number; final_version_id: string | null; created_at: string; updated_at: string };
+type CreationRow = { id: string; project_id: string; kind: string; title: string; brief: string; body: string; audience: string; angle: string; rationale: string; sources_json: string; reference_selection_json: string; revision: number; final_version_id: string | null; discarded_at: string | null; created_at: string; updated_at: string };
 type VersionRow = { id: string; creation_id: string; number: number; title: string; brief: string; body: string; sources_json: string; reference_selection_json: string; export_content: string; content_sha256: string; created_at: string };
-type ExchangeRow = { id: string; instruction: string; suggestion_json: string; created_at: string };
+type ExchangeRow = { id: string; instruction: string; suggestion_json: string; dismissed_at: string | null; created_at: string };
 type ExportRow = { version_id: string; root_path: string; relative_path: string; content_sha256: string; status: 'pending' | 'completed' };
 type DirectoryIdentity = { path: string; dev: number; ino: number };
 const MAX_CREATIONS = 200;
@@ -32,7 +32,7 @@ function parsed<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
 function publicItem(row: CreationRow): ProjectCreation {
   return projectCreationSchema.parse({ id: row.id, projectId: row.project_id, kind: row.kind, title: row.title, brief: row.brief, body: row.body,
     audience: row.audience, angle: row.angle, rationale: row.rationale, sources: JSON.parse(row.sources_json), referenceSelection: JSON.parse(row.reference_selection_json), revision: row.revision,
-    ...(row.final_version_id ? { finalVersionId: row.final_version_id } : {}), createdAt: row.created_at, updatedAt: row.updated_at });
+    ...(row.discarded_at ? { discardedAt: row.discarded_at } : {}), ...(row.final_version_id ? { finalVersionId: row.final_version_id } : {}), createdAt: row.created_at, updatedAt: row.updated_at });
 }
 function publicVersion(row: VersionRow): CreationVersion {
   return creationVersionSchema.parse({ id: row.id, creationId: row.creation_id, number: row.number, title: row.title,
@@ -81,6 +81,7 @@ async function existingDigest(path: string): Promise<string | undefined> {
 export function createProjectCreationService(input: { database: Database.Database; now?: () => Date; idFactory?: () => string }): ProjectCreationService {
   const database = input.database; const now = input.now ?? (() => new Date()); const makeId = input.idFactory ?? randomUUID;
   const exportLocks = new Map<string, Promise<unknown>>();
+  const exportingCreations = new Map<string, number>();
   function project(id: string): ProjectRow {
     const row = database.prepare('SELECT id,root_path,availability FROM personal_projects WHERE id = ?').get(id) as ProjectRow | undefined;
     if (!row) failure('PROJECT_NOT_FOUND', '项目不存在，请重新打开项目。', 404);
@@ -92,9 +93,18 @@ export function createProjectCreationService(input: { database: Database.Databas
     if (!row) failure('CREATION_NOT_FOUND', '当前项目中找不到这条创作。', 404);
     return row;
   }
+  function active(projectId: string, id: string): CreationRow {
+    const row = owned(projectId, id);
+    if (row.discarded_at) failure('CREATION_DISCARDED', '这条创作已丢弃，请先恢复后再继续。', 409);
+    return row;
+  }
+  function assertCapacity(projectId: string): void {
+    const { count } = database.prepare('SELECT COUNT(*) AS count FROM personal_project_creations WHERE project_id = ? AND discarded_at IS NULL').get(projectId) as { count: number };
+    if (count >= MAX_CREATIONS) failure('CREATION_LIMIT_EXCEEDED', '工作台最多保留 200 条创作，请先丢弃不需要的内容后重试；已有内容仍保留。', 409);
+  }
   function exchanges(id: string): CreationExchange[] {
-    return (database.prepare('SELECT id,instruction,suggestion_json,created_at FROM personal_project_creation_exchanges WHERE creation_id = ? ORDER BY rowid ASC').all(id) as ExchangeRow[])
-      .map(row => creationExchangeSchema.parse({ id: row.id, instruction: row.instruction, suggestion: JSON.parse(row.suggestion_json), createdAt: row.created_at }));
+    return (database.prepare('SELECT id,instruction,suggestion_json,dismissed_at,created_at FROM personal_project_creation_exchanges WHERE creation_id = ? ORDER BY rowid ASC').all(id) as ExchangeRow[])
+      .map(row => creationExchangeSchema.parse({ id: row.id, instruction: row.instruction, suggestion: JSON.parse(row.suggestion_json), ...(row.dismissed_at ? { dismissedAt: row.dismissed_at } : {}), createdAt: row.created_at }));
   }
   function detail(projectId: string, id: string): CreationDetail {
     const row = owned(projectId, id);
@@ -108,25 +118,77 @@ export function createProjectCreationService(input: { database: Database.Databas
     ...createCreativeProfileOperations({ database, now, getCreation: async (projectId, id) => detail(projectId, id) }),
     async list(projectId) {
       project(projectId);
-      return (database.prepare('SELECT * FROM personal_project_creations WHERE project_id = ? ORDER BY updated_at DESC, rowid DESC').all(projectId) as CreationRow[]).map(publicItem);
+      return (database.prepare('SELECT * FROM personal_project_creations WHERE project_id = ? AND discarded_at IS NULL ORDER BY updated_at DESC, rowid DESC').all(projectId) as CreationRow[]).map(publicItem);
+    },
+    async listDiscarded(projectId) {
+      project(projectId);
+      return (database.prepare('SELECT * FROM personal_project_creations WHERE project_id = ? AND discarded_at IS NOT NULL ORDER BY discarded_at DESC, rowid DESC').all(projectId) as CreationRow[]).map(publicItem);
+    },
+    async discard(projectId, id, raw) {
+      const value = parsed(creationLifecycleSchema, raw);
+      database.transaction(() => {
+        const row = active(projectId, id); assertRevision(row, value.expectedRevision);
+        if (exportingCreations.has(id)) failure('CREATION_BUSY', '这条创作正在导出，请等待导出结束后再丢弃。', 409);
+        const timestamp = now().toISOString();
+        const profile = database.prepare('SELECT samples_json FROM personal_project_creative_profiles WHERE project_id=?').get(projectId) as { samples_json: string } | undefined;
+        if (profile) {
+          const samples = JSON.parse(profile.samples_json) as Array<{ creationId: string; versionId: string }>;
+          const remaining = samples.filter(sample => sample.creationId !== id);
+          if (remaining.length !== samples.length) database.prepare('UPDATE personal_project_creative_profiles SET samples_json=?,revision=revision+1,updated_at=? WHERE project_id=?').run(JSON.stringify(remaining), timestamp, projectId);
+        }
+        database.prepare('UPDATE personal_project_creations SET discarded_at=?,revision=revision+1,updated_at=? WHERE id=? AND project_id=? AND revision=?').run(timestamp, timestamp, id, projectId, value.expectedRevision);
+      }).immediate();
+      return detail(projectId, id);
+    },
+    async restore(projectId, id, raw) {
+      const value = parsed(creationLifecycleSchema, raw);
+      database.transaction(() => {
+        const row = owned(projectId, id); assertRevision(row, value.expectedRevision);
+        if (!row.discarded_at) failure('CREATION_NOT_DISCARDED', '这条创作已在工作台中，请重新读取。', 409);
+        assertCapacity(projectId);
+        database.prepare('UPDATE personal_project_creations SET discarded_at=NULL,revision=revision+1,updated_at=? WHERE id=? AND project_id=? AND revision=?').run(now().toISOString(), id, projectId, value.expectedRevision);
+      }).immediate();
+      return detail(projectId, id);
+    },
+    async dismissSuggestion(projectId, id, suggestionId) {
+      parsed(z.uuid(), suggestionId);
+      database.transaction(() => {
+        active(projectId, id);
+        const result = database.prepare("UPDATE personal_project_creation_exchanges SET dismissed_at=COALESCE(dismissed_at,?) WHERE creation_id=? AND json_extract(suggestion_json,'$.id')=?").run(now().toISOString(), id, suggestionId);
+        if (!result.changes) failure('CREATION_SUGGESTION_NOT_FOUND', '这条建议已不存在，请重新读取当前创作。', 404);
+      }).immediate();
+      return detail(projectId, id);
     },
     async get(projectId, id) { return detail(projectId, id); },
     async create(projectId, raw) {
-      const value = parsed(creationCreateSchema, raw); const id = makeId(); const timestamp = now().toISOString();
+      const value = parsed(creationCreateSchema, raw); let id = makeId(); const timestamp = now().toISOString();
+      const { requestId, ...fields } = value;
+      const normalized = { ...fields, referenceSelection: value.referenceSelection ?? { mode: 'auto', paths: [] } };
+      const requestHash = sha256(JSON.stringify(Object.fromEntries(Object.entries(normalized).sort(([a], [b]) => a.localeCompare(b)))));
       database.transaction(() => {
         project(projectId);
-        const { count } = database.prepare('SELECT COUNT(*) AS count FROM personal_project_creations WHERE project_id = ?').get(projectId) as { count: number };
-        if (count >= MAX_CREATIONS) failure('CREATION_LIMIT_EXCEEDED', '每个项目最多保存 200 条创作，现有内容已完整保留。', 409);
+        if (requestId) {
+          const previous = database.prepare('SELECT id,request_hash FROM personal_project_creations WHERE project_id=? AND request_id=?').get(projectId, requestId) as { id: string; request_hash: string } | undefined;
+          if (previous) {
+            if (previous.request_hash !== requestHash) failure('CREATION_REQUEST_CONFLICT', '这次保存请求已用于其他内容，请重新读取并核对。', 409);
+            id = previous.id; return;
+          }
+        }
+        if (value.expectedProfileRevision !== undefined) {
+          const profile = database.prepare('SELECT revision FROM personal_project_creative_profiles WHERE project_id=?').get(projectId) as { revision: number } | undefined;
+          if ((profile?.revision ?? 0) !== value.expectedProfileRevision) failure('CREATIVE_PROFILE_REVISION_CONFLICT', '创作档案或样稿已有更新，未保存这条建议，请重新策划。', 409);
+        }
+        assertCapacity(projectId);
         database.prepare(`INSERT INTO personal_project_creations
-          (id,project_id,kind,title,brief,body,audience,angle,rationale,sources_json,reference_selection_json,revision,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)`).run(id, projectId, value.kind, value.title, value.brief, value.body, value.audience, value.angle, value.rationale, JSON.stringify(value.sources), JSON.stringify(value.referenceSelection ?? { mode: 'auto', paths: [] }), timestamp, timestamp);
+          (id,project_id,kind,title,brief,body,audience,angle,rationale,sources_json,reference_selection_json,revision,created_at,updated_at,request_id,request_hash)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)`).run(id, projectId, value.kind, value.title, value.brief, value.body, value.audience, value.angle, value.rationale, JSON.stringify(value.sources), JSON.stringify(normalized.referenceSelection), timestamp, timestamp, requestId ?? null, requestId ? requestHash : null);
       }).immediate();
       return detail(projectId, id);
     },
     async save(projectId, id, raw) {
       const value = parsed(creationSaveSchema, raw);
       database.transaction(() => {
-        const row = owned(projectId, id); assertRevision(row, value.expectedRevision);
+        const row = active(projectId, id); assertRevision(row, value.expectedRevision);
         database.prepare(`UPDATE personal_project_creations SET kind=?,title=?,brief=?,body=?,audience=?,angle=?,rationale=?,sources_json=?,reference_selection_json=?,revision=revision+1,updated_at=? WHERE id=? AND project_id=? AND revision=?`)
           .run(value.kind, value.title, value.brief, value.body, value.audience, value.angle, value.rationale, JSON.stringify(value.sources), value.referenceSelection === undefined ? row.reference_selection_json : JSON.stringify(value.referenceSelection), now().toISOString(), id, projectId, value.expectedRevision);
       }).immediate();
@@ -135,7 +197,7 @@ export function createProjectCreationService(input: { database: Database.Databas
     async snapshot(projectId, id, raw) {
       const value = parsed(creationSnapshotSchema, raw);
       database.transaction(() => {
-        const row = owned(projectId, id); assertRevision(row, value.expectedRevision);
+        const row = active(projectId, id); assertRevision(row, value.expectedRevision);
         const item = publicItem(row); const versionId = makeId(); const timestamp = now().toISOString();
         const { number } = database.prepare('SELECT COALESCE(MAX(number),0)+1 AS number FROM personal_project_creation_versions WHERE creation_id = ?').get(id) as { number: number };
         const content = exportContent(item, { id: versionId, number, createdAt: timestamp }, exchanges(id));
@@ -149,21 +211,32 @@ export function createProjectCreationService(input: { database: Database.Databas
     async recordExchange(projectId, id, raw) {
       const entry = parsed(creationExchangeSchema, { ...raw, id: makeId(), createdAt: now().toISOString() });
       database.transaction(() => {
-        owned(projectId, id);
+        const row = active(projectId, id);
+        if (entry.suggestion.baseRevision === undefined) failure('CREATION_INVALID', '建议缺少原稿版本，请重新生成。');
+        assertRevision(row, entry.suggestion.baseRevision);
+        if (entry.suggestion.profileRevision !== undefined) {
+          const profile = database.prepare('SELECT revision FROM personal_project_creative_profiles WHERE project_id=?').get(projectId) as { revision: number } | undefined;
+          if ((profile?.revision ?? 0) !== entry.suggestion.profileRevision) failure('CREATIVE_PROFILE_REVISION_CONFLICT', '创作档案或样稿已有更新，未保留本次建议，请重新生成。', 409);
+        }
         database.prepare('INSERT INTO personal_project_creation_exchanges (id,creation_id,instruction,suggestion_json,created_at) VALUES (?,?,?,?,?)').run(entry.id, id, entry.instruction, JSON.stringify(entry.suggestion), entry.createdAt);
         database.prepare('DELETE FROM personal_project_creation_exchanges WHERE creation_id = ? AND id NOT IN (SELECT id FROM personal_project_creation_exchanges WHERE creation_id = ? ORDER BY rowid DESC LIMIT 100)').run(id, id);
       }).immediate();
     },
     async exportVersion(projectId, id, versionId) {
-      owned(projectId, id);
+      const row = active(projectId, id);
       const previous = exportLocks.get(versionId) ?? Promise.resolve();
-      const operation = previous.catch(() => undefined).then(() => exportSnapshot(projectId, id, versionId));
+      const operation = previous.catch(() => undefined).then(() => exportSnapshot(projectId, id, versionId, row.revision));
       exportLocks.set(versionId, operation);
-      try { return await operation; } finally { if (exportLocks.get(versionId) === operation) exportLocks.delete(versionId); }
+      exportingCreations.set(id, (exportingCreations.get(id) ?? 0) + 1);
+      try { return await operation; } finally {
+        if (exportLocks.get(versionId) === operation) exportLocks.delete(versionId);
+        const count = (exportingCreations.get(id) ?? 1) - 1;
+        if (count) exportingCreations.set(id, count); else exportingCreations.delete(id);
+      }
     }
   };
-  async function exportSnapshot(projectId: string, id: string, versionId: string) {
-    owned(projectId, id);
+  async function exportSnapshot(projectId: string, id: string, versionId: string, revision: number) {
+    assertRevision(active(projectId, id), revision);
     const version = database.prepare('SELECT * FROM personal_project_creation_versions WHERE id = ? AND creation_id = ?').get(versionId, id) as VersionRow | undefined;
     if (!version) failure('CREATION_VERSION_NOT_FOUND', '当前创作中找不到这个版本。', 404);
     const owner = project(projectId);
@@ -176,6 +249,7 @@ export function createProjectCreationService(input: { database: Database.Databas
     try {
       const identities = await directories(owner.root_path);
       const digest = await existingDigest(target);
+      assertRevision(active(projectId, id), revision);
       if (digest !== undefined) {
         if (!receipt || digest !== version.content_sha256) failure('CREATION_EXPORT_CONFLICT', '目标文件已存在或被修改，未覆盖。', 409);
         database.prepare("UPDATE personal_project_creation_exports SET status='completed',completed_at=? WHERE version_id=?").run(now().toISOString(), versionId);
@@ -191,6 +265,7 @@ export function createProjectCreationService(input: { database: Database.Databas
       await verifyDirectories(identities);
       const currentOwner = project(projectId);
       if (currentOwner.root_path !== owner.root_path || currentOwner.availability !== 'ready') failure('CREATION_EXPORT_UNAVAILABLE', '项目连接已变化，未继续导出。', 409);
+      assertRevision(active(projectId, id), revision);
       try { await link(temporary, target); }
       catch (error) {
         if (codeOf(error) !== 'EEXIST') throw error;

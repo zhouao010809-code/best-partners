@@ -13,10 +13,14 @@ import { PublicApiError } from '../../shared/api/errors.js';
 import type {
   SkillDetail,
   SkillFolder,
+  SkillFolderTrashPreview,
+  SkillFolderTrashEntry,
+  SkillFolderTrashList,
   SkillSummary,
   SkillsPage
 } from '../../shared/api/skills.js';
 import { parseFrontmatter } from '../rules/frontmatter.js';
+import { createSkillFolderTrashService } from './skill-folder-trash.js';
 
 const MAX_SKILL_BYTES = 256 * 1024;
 const MAX_REFERENCE_COUNT = 1_000;
@@ -32,6 +36,10 @@ export interface SkillCatalogService {
   createFolder(name: string): Promise<SkillFolder>;
   move(skillId: string, folderId: string | null): Promise<SkillSummary>;
   resolveSource(skillId: string): Promise<string>;
+  previewFolderTrash?(folderId: string): Promise<SkillFolderTrashPreview>;
+  trashFolder?(previewId: string): Promise<SkillFolderTrashEntry>;
+  listFolderTrash?(): Promise<SkillFolderTrashList>;
+  restoreFolder?(trashId: string): Promise<SkillFolderTrashEntry>;
 }
 
 export type SkillMatchDocument = Omit<SkillDetail, 'references'>;
@@ -191,6 +199,29 @@ export function createSkillCatalogService(input: {
         if (!stat.isDirectory() || stat.isSymbolicLink()) throw unavailable();
       }
     }
+  }
+
+  async function rootMissing(): Promise<boolean> {
+    // An untouched personal vault has no catalog yet. Absence is an empty list,
+    // while permissions, symlinks and changed parent boundaries remain errors.
+    if (!hasCanonicalNames() || allowNonCanonicalRoot) throw unavailable();
+    try {
+      const vault = await lstat(configuredVault);
+      if (!vault.isDirectory() || vault.isSymbolicLink()) throw unavailable();
+      let canonical = await realpath(configuredVault);
+      for (const path of [configuredParent, configuredRoot]) {
+        try {
+          const status = await lstat(path);
+          if (!status.isDirectory() || status.isSymbolicLink()) throw unavailable();
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+          throw error;
+        }
+        canonical = join(canonical, basename(path));
+        if (await realpath(path) !== canonical) throw unavailable();
+      }
+      return false;
+    } catch { throw unavailable(); }
   }
 
   async function ensureRoot(): Promise<string> {
@@ -568,12 +599,23 @@ export function createSkillCatalogService(input: {
     }
   }
 
+  async function assertRestoreLayout(folderPath: string): Promise<void> {
+    const catalog = await layout(await fixedRoot());
+    const occupied = new Set(catalog.skills.map(skill => skill.directoryName));
+    for (const name of await readdir(folderPath)) {
+      if (occupied.has(name) && await discoverSkill(folderPath, name, null)) {
+        throw failure('SKILL_FOLDER_RESTORE_CONFLICT', `当前 Skill 库已有同名 Skill 目录“${name}”。请先在 Finder 中重命名或移走当前同名 Skill，再恢复；回收内容仍保留。`, 409);
+      }
+    }
+  }
+
   return {
     list,
     get,
     matchDocuments,
     createFolder,
     move,
-    resolveSource
+    resolveSource,
+    ...(!allowNonCanonicalRoot ? createSkillFolderTrashService({ root: fixedRoot, rootMissing, folders: async () => (await list()).folders, isSafeName, assertRestoreLayout }) : {})
   };
 }

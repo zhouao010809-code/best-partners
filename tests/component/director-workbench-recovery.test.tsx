@@ -51,7 +51,7 @@ afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); });
 
 it('deduplicates the optimistic discussion when its persisted exchange has a different outer id', async () => {
   const f = fixture(); const answer = suggestion(); f.suggest.mockResolvedValue(ok(answer));
-  const props = { api: f.api, projectId, draft: original, persistedDraft: original, flush: async () => original, onAdopt: vi.fn(() => true) };
+  const props = { api: f.api, projectId, draft: original, persistedDraft: original, flush: async () => original, onAdopt: vi.fn(async () => true) };
   const view = render(<MemoryRouter><CreationAssistant {...props} messages={[]} /></MemoryRouter>);
   await waitFor(() => expect(screen.getByRole('button', { name: '根据资料起草' })).toBeEnabled());
   fireEvent.change(screen.getByRole('textbox', { name: '给问问的要求' }), { target: { value: '讨论这条内容' } });
@@ -110,31 +110,30 @@ it('refuses local adoption beyond 100 sources and leaves the manuscript saveable
   expect(await screen.findByText('已保存到本机')).toBeVisible();
 });
 
-it('ignores an old planner create response after stopping it and starting a new request', async () => {
-  const f = fixture(); const oldCreate = deferred<ApiClientResult<CreationDetail>>(); const nextPlan = deferred<ApiClientResult<CreationSuggestion>>();
-  const oldTopic = { title: '旧轮已开始保存的选题', audience: '家长', angle: '旧角度', rationale: '旧依据' };
+it('ignores an old planner response after stopping it and starting a new request', async () => {
+  const f = fixture(); const oldPlan = deferred<ApiClientResult<CreationSuggestion>>(); const nextPlan = deferred<ApiClientResult<CreationSuggestion>>();
+  const oldTopic = { title: '旧轮选题', audience: '家长', angle: '旧角度', rationale: '旧依据' };
   const newTopic = { title: '新轮选题', audience: '家长', angle: '新角度', rationale: '新依据' };
-  f.suggest.mockResolvedValueOnce(ok(suggestion({ task: 'topics', reply: '旧轮回复不可覆盖新轮', topics: [oldTopic] }))).mockReturnValueOnce(nextPlan.promise);
-  f.create.mockReturnValueOnce(oldCreate.promise);
+  f.suggest.mockReturnValueOnce(oldPlan.promise).mockReturnValueOnce(nextPlan.promise);
   render(<MemoryRouter><ProjectWorkbench api={f.api} projectId={projectId} files={<p>隔离资料</p>} /></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button', { name: '策划选题' }));
   fireEvent.change(screen.getByRole('textbox', { name: '选题要求' }), { target: { value: '第一轮要求' } });
   fireEvent.click(screen.getByRole('button', { name: '根据资料策划' }));
-  await waitFor(() => expect(f.create).toHaveBeenCalledOnce());
+  await waitFor(() => expect(f.suggest).toHaveBeenCalledOnce());
   fireEvent.click(screen.getByRole('button', { name: '停止策划' }));
   fireEvent.change(screen.getByRole('textbox', { name: '选题要求' }), { target: { value: '第二轮要求，不能被旧结果关闭' } });
   fireEvent.click(screen.getByRole('button', { name: '根据资料策划' }));
   await waitFor(() => expect(f.suggest).toHaveBeenCalledTimes(2));
-  await act(async () => oldCreate.resolve(ok(detail({ ...original, ...oldTopic, id: randomUUID(), kind: 'topic' }))));
+  await act(async () => oldPlan.resolve(ok(suggestion({ task: 'topics', reply: '旧轮回复不可覆盖新轮', topics: [oldTopic] }))));
   expect(screen.getByRole('textbox', { name: '选题要求' })).toHaveValue('第二轮要求，不能被旧结果关闭');
   expect(screen.getByRole('button', { name: '停止策划' })).toBeEnabled();
   expect(screen.queryByText('旧轮回复不可覆盖新轮')).not.toBeInTheDocument();
   expect(screen.getByRole('tab', { name: '创作台' })).toHaveAttribute('aria-selected', 'true');
   await act(async () => nextPlan.resolve(ok(suggestion({ task: 'topics', reply: '新轮已经完成', topics: [newTopic] }))));
   expect(await screen.findByText('新轮已经完成')).toBeVisible();
-  expect(screen.queryByRole('textbox', { name: '选题要求' })).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '打开创作：新轮选题' })).toBeVisible();
-  expect(screen.getByRole('button', { name: '打开创作：旧轮已开始保存的选题' })).toBeVisible();
+  expect(screen.getByRole('checkbox', { name: '保留选题：新轮选题' })).toBeVisible();
+  expect(screen.queryByRole('checkbox', { name: '保留选题：旧轮选题' })).not.toBeInTheDocument();
+  expect(f.create).not.toHaveBeenCalled();
 });
 
 it('keeps the planner open and explains an empty topic result without losing the request', async () => {

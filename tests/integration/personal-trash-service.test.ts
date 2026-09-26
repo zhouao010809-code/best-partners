@@ -29,8 +29,8 @@ it('migrates existing recycle records without losing their recovery data or hidd
   expect(db.prepare('SELECT * FROM personal_trash_entries').get()).toEqual({...before as object,delete_manifest_json:null,deleted_at:null});
   expect(db.prepare('SELECT * FROM personal_queue_visibility').all()).toHaveLength(1);
   const versions = db.prepare('SELECT version FROM schema_migrations ORDER BY version').all();
-  expect(versions.slice(0, -7)).toEqual([1,2,8,9,10,11,12,14,15,16].map((version)=>({version})));
-  expect(versions.slice(-7)).toEqual([{version:17},{version:18},{version:19},{version:20},{version:21},{version:22},{version:23}]);
+  expect(versions.slice(0, -8)).toEqual([1,2,8,9,10,11,12,14,15,16].map((version)=>({version})));
+  expect(versions.slice(-8)).toEqual([{version:17},{version:18},{version:19},{version:20},{version:21},{version:22},{version:23},{version:24}]);
 });
 
 const source = '01图书馆/来自个人/2026-09/原文.md';

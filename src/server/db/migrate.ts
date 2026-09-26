@@ -35,7 +35,8 @@ function initialMigrations(): readonly Migration[] {
     { version: 20, sql: readFileSync(bundledMigrationPath('020_company_platform_metrics.sql'), 'utf8') },
     { version: 21, sql: readFileSync(bundledMigrationPath('021_personal_projects.sql'), 'utf8') },
     { version: 22, sql: readFileSync(bundledMigrationPath('022_project_creations.sql'), 'utf8') },
-    { version: 23, sql: readFileSync(bundledMigrationPath('023_project_creative_context.sql'), 'utf8') }
+    { version: 23, sql: readFileSync(bundledMigrationPath('023_project_creative_context.sql'), 'utf8') },
+    { version: 24, sql: readFileSync(bundledMigrationPath('024_project_creation_lifecycle.sql'), 'utf8') }
   ];
 }
 

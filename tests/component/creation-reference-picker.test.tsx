@@ -41,6 +41,18 @@ it('retains selected files outside the current search and prevents a 21st file',
   expect(changed).not.toHaveBeenCalled();
 });
 
+it('cancels unapplied selection changes and restores the saved scope without saving', async () => {
+  const f = fixture([file('采访.md'), file('补充.md')]); const changed = vi.fn();
+  render(<CreationReferencePicker api={f.api} projectId="project-a" value={{ mode: 'selected', paths: ['采访.md'] }} onChange={changed} />);
+  const user = await expand();
+  await user.click(await screen.findByRole('checkbox', { name: '补充.md' }));
+  await user.click(screen.getByRole('button', { name: '取消选择修改' }));
+  expect(screen.getByRole('checkbox', { name: '采访.md' })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: '补充.md' })).not.toBeChecked();
+  expect(screen.getByRole('button', { name: '应用资料选择' })).toBeDisabled();
+  expect(changed).not.toHaveBeenCalled();
+});
+
 it('keeps missing selected paths visible without silently changing the saved selection', async () => {
   const f = fixture([]); const changed = vi.fn(); f.read.mockResolvedValueOnce({ ok: false, state: { status: 'operation-error', message: '资料不存在' } } as never);
   render(<CreationReferencePicker api={f.api} projectId="project-a" value={{ mode: 'selected', paths: ['已移走.md'] }} onChange={changed} />);

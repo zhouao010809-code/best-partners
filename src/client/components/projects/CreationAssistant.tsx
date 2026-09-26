@@ -16,8 +16,16 @@ type Props = {
   locked?: boolean;
   profileRevision?: number | undefined;
   flush(): Promise<ProjectCreation | undefined>;
-  onAdopt(body: string, suggestion: CreationSuggestion): boolean;
+  onAdopt(body: string, suggestion: CreationSuggestion): boolean | Promise<boolean>;
 };
+function mergeHistory(previous: CreationExchange[], incoming: CreationExchange[]): CreationExchange[] {
+  const entries = new Map(previous.map(message => [message.suggestion.id, message]));
+  for (const message of incoming) {
+    const old = entries.get(message.suggestion.id);
+    entries.set(message.suggestion.id, { ...message, ...(old?.dismissedAt ? { dismissedAt: old.dismissedAt } : {}) });
+  }
+  return [...entries.values()].slice(-100);
+}
 export function CreationAssistant({ api, projectId, draft, persistedDraft, messages, selection, flush, onAdopt, profileRevision, locked = false }: Props) {
   const [provider, setProvider] = useState<AssistantProvider>();
   const [providerError, setProviderError] = useState('');
@@ -25,6 +33,7 @@ export function CreationAssistant({ api, projectId, draft, persistedDraft, messa
   const [instruction, setInstruction] = useCreationInput(`creation-input-v1:${projectId}:${draft.id}`);
   const [task, setTask] = useState<'revise' | 'discuss'>('revise');
   const [busy, setBusy] = useState(false);
+  const [handling, setHandling] = useState(false);
   const [error, setError] = useState('');
   const [pending, setPending] = useState<{ suggestion: CreationSuggestion; fingerprint: string }>();
   const [history, setHistory] = useState<CreationExchange[]>(messages);
@@ -45,16 +54,17 @@ export function CreationAssistant({ api, projectId, draft, persistedDraft, messa
   }
   useEffect(() => { mounted.current = true; void refreshProvider(); return () => { mounted.current = false; controller.current?.abort(); }; }, [api]);
   useEffect(() => {
-    setHistory(previous => [...new Map([...previous, ...messages].map(message => [message.suggestion.id, message])).values()].slice(-100));
+    setHistory(previous => mergeHistory(previous, messages));
     if (!restored.current && messages.length) {
       restored.current = true;
-      const last = messages.at(-1)!.suggestion;
-      if (last.baseRevision === draft.revision && draftFingerprint(draft) === draftFingerprint(persistedDraft)
+      const exchange = messages.at(-1)!;
+      const last = exchange.suggestion;
+      if (!exchange.dismissedAt && !draft.discardedAt && last.baseRevision === draft.revision && draftFingerprint(draft) === draftFingerprint(persistedDraft)
         && (last.body !== undefined || last.replacement)) setPending({ suggestion: last, fingerprint: draftFingerprint(persistedDraft) });
     }
   }, [messages]);
   async function generate(selectedTask: CreationGenerateRequest['task'], text: string, range?: Props['selection']) {
-    if (busy || locked || !api.creations) return;
+    if (busy || handling || locked || !api.creations) return;
     setBusy(true); setError(''); setDismissed(''); setPending(undefined);
     const active = new AbortController(); controller.current = active;
     try {
@@ -76,26 +86,43 @@ export function CreationAssistant({ api, projectId, draft, persistedDraft, messa
   const stale = pending && (pending.fingerprint !== draftFingerprint(draft) || pending.suggestion.baseRevision !== draft.revision || profileStale);
   const suggestion = pending?.suggestion;
   const canAdopt = suggestion && (suggestion.body !== undefined || suggestion.replacement !== undefined);
-  function adopt() {
-    if (!suggestion || stale || locked) return;
+  async function adopt() {
+    if (!suggestion || stale || locked || busy || handling) return;
     const range = suggestion.replacement;
     if (range && draft.body.slice(range.start, range.end) !== range.before) { setError('这段正文已经变化，请重新生成建议。'); return; }
     const body = range ? draft.body.slice(0, range.start) + range.after + draft.body.slice(range.end) : suggestion.body;
     if (body === undefined || body.length > 60000) { setError('稿件超出长度限制，请缩小修改范围。'); return; }
-    if (!onAdopt(body, suggestion)) return;
-    setPending(undefined); setDismissed('已采用到正文，可在版本记录中保留这一稿。');
+    setHandling(true);
+    try {
+      if (!await onAdopt(body, suggestion) || !mounted.current) return;
+      setPending(undefined); setDismissed('已采用到正文，替换前的稿件已保存在版本记录。');
+    } catch { if (mounted.current) setError('采用没有完成，正文未变，请重试。'); }
+    finally { if (mounted.current) setHandling(false); }
+  }
+  async function dismiss() {
+    if (!suggestion || locked || busy || handling) return;
+    if (!api.creations?.dismissSuggestion) { setError('当前连接暂不支持保存放弃操作，请更新连接后重试。'); return; }
+    setHandling(true); setError('');
+    try {
+      const result = await api.creations.dismissSuggestion(projectId, draft.id, suggestion.id);
+      if (!mounted.current) return;
+      if (!result.ok) { setError(creationError(result)); return; }
+      setHistory(previous => mergeHistory(previous, result.value.messages));
+      setPending(undefined); setDismissed('已放弃本次建议，正文未变；讨论记录仍保留。');
+    } catch { if (mounted.current) setError('放弃操作没有保存，请重试；正文未变。'); }
+    finally { if (mounted.current) setHandling(false); }
   }
   return <aside className="creation-assistant" aria-label="本条内容的问问">
     <header><Sparkles size={18} /><div><h3>打磨这篇</h3><small>沿用项目档案，围绕当前稿件修改</small></div></header>
-    <div className="creation-model"><label>创作模型<select aria-label="创作模型" value={model} onChange={event => setModel(event.target.value)} disabled={busy}>{provider?.models.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label><button type="button" onClick={() => void refreshProvider()} disabled={busy}>刷新配置</button></div>
+    <div className="creation-model"><label>创作模型<select aria-label="创作模型" value={model} onChange={event => setModel(event.target.value)} disabled={busy || handling}>{provider?.models.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label><button type="button" onClick={() => void refreshProvider()} disabled={busy || handling}>刷新配置</button></div>
     {!ready && <p className="creation-notice" role="status">{provider?.problem || providerError || (provider ? '请先配置 DeepSeek，再让问问协助创作。' : '正在读取模型配置…')} <Link to="/settings">前往模型设置</Link></p>}
     <div className="creation-ai-tools">
-      <button type="button" className="projects-button" disabled={busy || locked || !ready} onClick={() => void generate('script', '根据项目资料、选题和创作要求起草短视频脚本；事实不够时明确标注待补充。')}>根据资料起草</button>
-      <button type="button" className="projects-button" disabled={busy || locked || !ready || !selection} onClick={() => void generate('revise', instruction.trim() || '优化选中的这段表达，让口播直接、自然，保持原意。', selection)}>修改选中段落</button>
+      <button type="button" className="projects-button" disabled={busy || handling || locked || !ready} onClick={() => void generate('script', '根据项目资料、选题和创作要求起草短视频脚本；事实不够时明确标注待补充。')}>根据资料起草</button>
+      <button type="button" className="projects-button" disabled={busy || handling || locked || !ready || !selection} onClick={() => void generate('revise', instruction.trim() || '优化选中的这段表达，让口播直接、自然，保持原意。', selection)}>修改选中段落</button>
     </div>
     <p className="creation-hint">选中正文可只改这一段；建议经你采用后进入正文。</p>
     <label className="creation-label">给问问的要求<textarea aria-label="给问问的要求" rows={3} maxLength={4000} value={instruction} onChange={event => setInstruction(event.target.value)} placeholder="例如：开头更直接，保留原有案例" /></label>
-    <div className="creation-ai-submit"><select aria-label="处理方式" value={task} onChange={event => setTask(event.target.value as 'revise' | 'discuss')}><option value="revise">改脚本</option><option value="discuss">先讨论</option></select><button type="button" className="projects-button projects-button--primary" disabled={busy || locked || !ready || !instruction.trim()} onClick={() => void generate(task, instruction.trim())}><Send size={14} />发送给问问</button></div>
+    <div className="creation-ai-submit"><select aria-label="处理方式" value={task} onChange={event => setTask(event.target.value as 'revise' | 'discuss')}><option value="revise">改脚本</option><option value="discuss">先讨论</option></select><button type="button" className="projects-button projects-button--primary" disabled={busy || handling || locked || !ready || !instruction.trim()} onClick={() => void generate(task, instruction.trim())}><Send size={14} />发送给问问</button></div>
     {busy && <p role="status" className="creation-progress">正在读取资料、构思内容…<button type="button" onClick={() => { controller.current?.abort(); setBusy(false); setDismissed('已停止本次生成，正文未变。'); }}><Square size={12} />停止</button></p>}
     {error && <p className="creation-notice" role="alert">{error}</p>}
     {dismissed && <p role="status" className="creation-hint">{dismissed}</p>}
@@ -104,8 +131,8 @@ export function CreationAssistant({ api, projectId, draft, persistedDraft, messa
       {suggestion.body !== undefined && <pre>{suggestion.body}</pre>}
       <CreationSources sources={suggestion.sources} api={api} />
       {stale && canAdopt && <p role="status" className="creation-notice">{profileStale ? '项目创作档案已更新，请根据新档案重新生成建议。' : '正文或版本已变化，或参考资料已调整，请重新生成建议，以保留你的最新修改。'}</p>}
-      {canAdopt && <div className="creation-actions"><button type="button" className="projects-button projects-button--primary" disabled={!!stale || locked} onClick={adopt}><Check size={14} />采用到正文</button><button type="button" className="projects-button" onClick={() => { setPending(undefined); setDismissed('已保留原文，建议留在讨论记录中。'); }}>保留原文</button></div>}
+      <div className="creation-actions">{canAdopt && <button type="button" className="projects-button projects-button--primary" disabled={!!stale || locked || handling} onClick={() => void adopt()}><Check size={14} />采用到正文</button>}<button type="button" className="projects-button" disabled={locked || handling} onClick={() => void dismiss()}>放弃建议</button></div>
     </section>}
-    {!!history.length && <details className="creation-history"><summary>本条讨论 · {history.length}</summary>{history.slice().reverse().map(message => <article key={message.id}><strong>{message.instruction}</strong><SafeMarkdown>{message.suggestion.reply}</SafeMarkdown>{(message.suggestion.body || message.suggestion.replacement) && <details><summary>查看当时建议</summary><pre>{message.suggestion.body ?? message.suggestion.replacement?.after}</pre></details>}<CreationSources sources={message.suggestion.sources} api={api} /></article>)}</details>}
+    {!!history.length && <details className="creation-history"><summary>本条讨论 · {history.length}</summary>{history.slice().reverse().map(message => <article key={message.id}><strong>{message.instruction}</strong>{message.dismissedAt && <small> · 已放弃</small>}<SafeMarkdown>{message.suggestion.reply}</SafeMarkdown>{(message.suggestion.body || message.suggestion.replacement) && <details><summary>查看当时建议</summary><pre>{message.suggestion.body ?? message.suggestion.replacement?.after}</pre></details>}<CreationSources sources={message.suggestion.sources} api={api} /></article>)}</details>}
   </aside>;
 }

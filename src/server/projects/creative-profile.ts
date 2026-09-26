@@ -31,7 +31,7 @@ export function createCreativeProfileOperations(input: {
         for (const sample of value.samples) {
           const row = database.prepare(`SELECT c.final_version_id FROM personal_project_creations c
             JOIN personal_project_creation_versions v ON v.creation_id=c.id
-            WHERE c.project_id=? AND c.id=? AND v.id=?`).get(projectId, sample.creationId, sample.versionId) as { final_version_id: string | null } | undefined;
+            WHERE c.project_id=? AND c.id=? AND v.id=? AND c.discarded_at IS NULL`).get(projectId, sample.creationId, sample.versionId) as { final_version_id: string | null } | undefined;
           const alreadySelected = current.samples.some(previous => previous.creationId === sample.creationId && previous.versionId === sample.versionId);
           if (!row || (row.final_version_id !== sample.versionId && !alreadySelected)) failure('CREATIVE_PROFILE_SAMPLE_INVALID', '只能选择当前项目已定稿的样稿，请重新选择。');
         }
@@ -48,6 +48,7 @@ export function createCreativeProfileOperations(input: {
       const profile = getProfile(projectId);
       const samples = await Promise.all(profile.samples.map(async sample => {
         const detail = await getCreation(projectId, sample.creationId);
+        if (detail.item.discardedAt) failure('CREATIVE_PROFILE_SAMPLE_INVALID', '已选样稿已丢弃，请重新读取创作档案。', 409);
         const version = detail.versions.find(candidate => candidate.id === sample.versionId);
         if (!version) failure('CREATIVE_PROFILE_SAMPLE_INVALID', '已选样稿无法读取，请重新选择。', 409);
         return version;

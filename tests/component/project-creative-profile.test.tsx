@@ -11,7 +11,7 @@ const candidate = { id: 'suggestion', task: 'profile', reply: '', topics: [], cr
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 function fixture() {
   const getProfile = vi.fn(async () => ok(blank));
-  const saveProfile = vi.fn(async (_projectId: string, input: Record<string, unknown>) => ok({ ...blank, ...input, revision: 1 }));
+  const saveProfile = vi.fn(async (_projectId: string, input: Record<string, unknown>) => ok({ ...blank, ...input, revision: Number(input.expectedRevision) + 1 }));
   const suggest = vi.fn(async () => ok(candidate));
   const list = vi.fn(async () => ok({ items: [] }));
   const get = vi.fn();
@@ -61,6 +61,61 @@ it('does not adopt a late candidate over edits made while it was generating', as
   await act(async () => late.resolve(ok(candidate)));
   expect(screen.getByRole('button', { name: '采用到表单' })).toBeDisabled();
   expect(screen.getByLabelText('受众')).toHaveValue('新填写不能覆盖');
+});
+
+it('discards a profile candidate without changing or saving typed fields', async () => {
+  const f = fixture(); const user = userEvent.setup();
+  render(<ProjectCreativeProfile api={f.api} projectId="project-a" />);
+  await user.click(screen.getByRole('button', { name: /项目创作档案/u }));
+  await waitFor(() => expect(screen.getByLabelText('受众')).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('受众'), { target: { value: '我的手动填写' } });
+  await user.click(screen.getByRole('button', { name: '从资料整理' }));
+  await user.click(await screen.findByRole('button', { name: '放弃候选' }));
+  expect(screen.queryByRole('region', { name: '档案候选预览' })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('受众')).toHaveValue('我的手动填写');
+  expect(f.saveProfile).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('refreshes profile after lifecycle changes without overwriting dirty fields: %s', async dirty => {
+  const f = fixture(); const onSaved = vi.fn(); const user = userEvent.setup();
+  f.getProfile.mockResolvedValueOnce(ok({ ...blank, audience: '之前的受众', revision: 1 }));
+  render(<ProjectCreativeProfile api={f.api} projectId="project-a" onSaved={onSaved} />);
+  await user.click(screen.getByRole('button', { name: /项目创作档案/u }));
+  await waitFor(() => expect(screen.getByLabelText('受众')).toHaveValue('之前的受众'));
+  if (dirty) {
+    fireEvent.change(screen.getByLabelText('受众'), { target: { value: '未保存的填写' } });
+    await user.click(screen.getByRole('button', { name: '从资料整理' }));
+    expect(await screen.findByRole('button', { name: '采用到表单' })).toBeEnabled();
+  }
+  f.getProfile.mockResolvedValue(ok({ ...blank, audience: '外部更新的受众', revision: 2 }));
+  act(() => window.dispatchEvent(new CustomEvent('project-creation-lifecycle', { detail: { projectId: 'project-a' } })));
+  await waitFor(() => expect(onSaved).toHaveBeenLastCalledWith(expect.objectContaining({ revision: 2 })));
+  expect(screen.getByLabelText('受众')).toHaveValue(dirty ? '未保存的填写' : '外部更新的受众');
+  if (dirty) {
+    expect(screen.getByRole('button', { name: '保存项目档案' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '采用到表单' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: '读取最新档案，保留我的填写' }));
+    await user.click(screen.getByRole('button', { name: '保存项目档案' }));
+    expect(f.saveProfile).toHaveBeenLastCalledWith('project-a', expect.objectContaining({ expectedRevision: 2, audience: '未保存的填写' }));
+  }
+});
+
+it('does not let an older save response replace a newer profile learned from recycling a sample', async () => {
+  const f = fixture(); const user = userEvent.setup(); const onSaved = vi.fn();
+  f.getProfile.mockResolvedValueOnce(ok({ ...blank, revision: 1 }));
+  const pendingSave = deferred<ReturnType<typeof ok<typeof blank>>>(); f.saveProfile.mockReturnValueOnce(pendingSave.promise);
+  render(<ProjectCreativeProfile api={f.api} projectId="project-a" onSaved={onSaved} />);
+  await user.click(screen.getByRole('button', { name: /项目创作档案/u }));
+  await waitFor(() => expect(screen.getByLabelText('受众')).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('受众'), { target: { value: '提交中的填写' } });
+  await user.click(screen.getByRole('button', { name: '保存项目档案' }));
+  f.getProfile.mockResolvedValue(ok({ ...blank, revision: 3, audience: '回收样稿后的新档案' }));
+  act(() => window.dispatchEvent(new CustomEvent('project-creation-lifecycle', { detail: { projectId: 'project-a' } })));
+  await waitFor(() => expect(onSaved).toHaveBeenLastCalledWith(expect.objectContaining({ revision: 3 })));
+  await act(async () => pendingSave.resolve(ok({ ...blank, revision: 2, audience: '提交中的填写' })));
+  expect(onSaved).toHaveBeenLastCalledWith(expect.objectContaining({ revision: 3 }));
+  expect(screen.getByRole('button', { name: '保存项目档案' })).toBeDisabled();
+  expect(screen.getByLabelText('受众')).toHaveValue('提交中的填写');
 });
 
 it('keeps edits made during saving and notifies with the saved profile only', async () => {

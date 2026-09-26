@@ -4,7 +4,7 @@ import { PublicApiError } from '../../../shared/api/errors.js';
 import { creativeProfileResponseSchema, creativeProfileSaveSchema } from '../../../shared/api/creative-profile.js';
 import { API_VERSION } from '../../../shared/api/schemas.js';
 import {
-  creationCreateSchema, creationSaveSchema, creationSnapshotSchema,
+  creationCreateSchema, creationSaveSchema, creationSnapshotSchema, creationLifecycleSchema, creationSuggestionParamsSchema,
   creationProjectParamsSchema, creationParamsSchema, creationVersionParamsSchema,
   creationGenerateRequestSchema, creationListResponseSchema, creationDetailResponseSchema,
   creationSuggestionResponseSchema, creationExportResponseSchema,
@@ -40,6 +40,23 @@ export function registerProjectCreationRoutes(app: FastifyInstance, service?: Pr
     reply.header('cache-control', 'no-store');
     const { projectId } = parse(creationProjectParamsSchema, request.params);
     return parseApiOutput(creationListResponseSchema, { data: { items: await required(service).list(projectId) }, version: API_VERSION });
+  });
+  app.get(`${base}/discarded`, async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { projectId } = parse(creationProjectParamsSchema, request.params);
+    return parseApiOutput(creationListResponseSchema, { data: { items: await required(service).listDiscarded(projectId) }, version: API_VERSION });
+  });
+  for (const action of ['discard', 'restore'] as const) app.post(`${base}/:creationId/${action}`, async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { projectId, creationId } = parse(creationParamsSchema, request.params);
+    const input = parse(creationLifecycleSchema, request.body);
+    return parseApiOutput(creationDetailResponseSchema, { data: await required(service)[action](projectId, creationId, input), version: API_VERSION });
+  });
+  app.post(`${base}/:creationId/suggestions/:suggestionId/dismiss`, async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { projectId, creationId, suggestionId } = parse(creationSuggestionParamsSchema, request.params);
+    parse(z.strictObject({}), request.body ?? {});
+    return parseApiOutput(creationDetailResponseSchema, { data: await required(service).dismissSuggestion(projectId, creationId, suggestionId), version: API_VERSION });
   });
   app.post(base, async (request, reply) => {
     reply.header('cache-control', 'no-store');
@@ -78,6 +95,7 @@ export function registerProjectCreationRoutes(app: FastifyInstance, service?: Pr
     if (!generate) throw new PublicApiError('CREATION_GENERATOR_UNAVAILABLE', '创作助手暂不可用，请检查模型设置。', 503);
     if (input.itemId) {
       const { item } = await creations.get(projectId, input.itemId);
+      if (item.discardedAt) throw new PublicApiError('CREATION_DISCARDED', '这条创作已丢弃，请先恢复后再继续。', 409);
       if (item.revision !== input.expectedRevision) throw new PublicApiError('CREATION_REVISION_CONFLICT', '稿件已有更新，请保存并重新发起讨论。', 409);
       if (input.selection && item.body.slice(input.selection.start, input.selection.end) !== input.selection.text) throw new PublicApiError('CREATION_SELECTION_CONFLICT', '选中的原文已变化，请重新选择后再试。', 409);
     } else {
@@ -91,6 +109,14 @@ export function registerProjectCreationRoutes(app: FastifyInstance, service?: Pr
     reply.raw.once('close', closed);
     try {
       const result = await generate(projectId, input, controller.signal);
+      if (result.profileRevision !== undefined && (await creations.getProfile(projectId)).revision !== result.profileRevision) {
+        throw new PublicApiError('CREATIVE_PROFILE_REVISION_CONFLICT', '创作档案或样稿已有更新，请重新生成建议。', 409);
+      }
+      if (input.itemId) {
+        const { item } = await creations.get(projectId, input.itemId);
+        if (item.discardedAt) throw new PublicApiError('CREATION_DISCARDED', '这条创作已丢弃，未采用本次建议。', 409);
+        if (item.revision !== input.expectedRevision) throw new PublicApiError('CREATION_REVISION_CONFLICT', '稿件已有更新，未采用本次建议，请重新发起。', 409);
+      }
       return parseApiOutput(creationSuggestionResponseSchema, { data: result, version: API_VERSION });
     } finally {
       request.raw.off('aborted', aborted);

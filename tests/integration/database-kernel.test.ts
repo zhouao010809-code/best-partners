@@ -159,7 +159,7 @@ describe('SQLite state kernel', () => {
     const input = makeRoots();
     const first = requireNormal(input);
 
-    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map((version) => ({ version }));
+    const expectedVersions = [1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].map((version) => ({ version }));
     expect(first.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
       .toEqual(expectedVersions);
     const extractionColumns = first.db.pragma('table_info(extraction_runs)') as Array<{ name: string }>;
@@ -273,7 +273,7 @@ describe('SQLite state kernel', () => {
       applyMigrations(db);
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map((version) => ({ version })));
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].map((version) => ({ version })));
       expect(db.prepare('SELECT project_id, state, operation_id FROM company_project_ingestion_runs WHERE id = ?').get('run-1'))
         .toEqual({ project_id: 'project-1', state: 'confirmed', operation_id: 'op-1' });
       // 017 had no event operation_id; 018 derives a traceable migration value from the legacy event id.
@@ -304,7 +304,7 @@ describe('SQLite state kernel', () => {
       applyMigrations(db);
       expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
       expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all())
-        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].map((version) => ({ version })));
+        .toEqual([1, 2, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].map((version) => ({ version })));
     } finally {
       db.close();
     }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { z } from 'zod';
 import { projectCreationSchema, type CreationDetail, type CreationSave, type ProjectCreation } from '../../../shared/api/project-creations.js';
 import type { ApiClientResult, ReadConsoleApi } from '../../api/client.js';
 
@@ -13,6 +14,9 @@ export function editable(item: ProjectCreation): Omit<CreationSave, 'expectedRev
 }
 export const draftFingerprint = (item: ProjectCreation) => JSON.stringify(editable(item));
 const recoveryOwners = new Map<string, symbol>();
+// An unfinished title must not invalidate the only recoverable copy of a body.
+// The server save contract still requires a nonempty title.
+const recoveryDraftSchema = projectCreationSchema.extend({ title: z.string().max(255) });
 
 /** Each mounted editor owns a serialized save queue. Browser recovery is written before debounce. */
 export function useCreationDraft(api: CreationsApi, projectId: string, id: string, onSaved: (item: ProjectCreation) => void) {
@@ -45,8 +49,14 @@ export function useCreationDraft(api: CreationsApi, projectId: string, id: strin
       if (!result.ok) { setStatus('failed'); setError(creationError(result)); return; }
       const data = result.value;
       persisted.current = data.item; current.current = data.item;
+      if (data.item.discardedAt) {
+        // A recovery draft from another window must never revive a recycled item.
+        // Retain that cache for explicit recovery after the item is restored.
+        blocked.current = true; setDetail(data); setDraft(data.item); setStatus('saved');
+        return;
+      }
       let recovered: ProjectCreation | undefined;
-      try { const raw = localStorage.getItem(cacheKey); const parsed = raw && projectCreationSchema.safeParse(JSON.parse(raw));
+      try { const raw = localStorage.getItem(cacheKey); const parsed = raw && recoveryDraftSchema.safeParse(JSON.parse(raw));
         if (parsed && parsed.success && parsed.data.id === id && parsed.data.projectId === projectId) recovered = parsed.data;
       } catch { /* Ignore invalid cache without corrupting server data. */ }
       if (recovered && draftFingerprint(recovered) !== draftFingerprint(data.item)) {

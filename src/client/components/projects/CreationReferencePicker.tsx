@@ -105,6 +105,7 @@ function ReferencePickerSession({ api, projectId, value = automatic, onChange, d
       </>}
       {dirty && <p className="creative-context__hint" role="status">资料选择尚未应用。</p>}
       <button type="button" className="projects-button" disabled={disabled || !dirty || (pending.mode === 'selected' && (pending.paths.length === 0 || pending.paths.length > 20 || invalid))} onClick={() => onChange(copySelection(pending))}><Check size={14} />应用资料选择</button>
+      {dirty && <button type="button" className="projects-button" disabled={disabled} onClick={() => { setPending(copySelection(value)); setSearch(''); setError(''); }}>取消选择修改</button>}
     </div>}
   </section>;
 }
