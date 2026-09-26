@@ -36,4 +36,4 @@
 - [x] Run architecture checks, all typechecks, affected unit/integration/component suites, then broaden required suites if unresolved concerns remain.
 - [x] Extend isolated `tests/electron/director-workbench.test.ts` or new adjacent test for profile/source persistence/restart and 1360/720 layouts; run it with first-run and existing project flows.
 - [x] Bump 0.1.5, update reference and acceptance evidence. Build complete staged tree, package DMG, verify mount contents/version/SHA and development + packaged Electron checks.
-- [ ] Push tested implementation to GitHub main; create draft release, verify hashes/target, publish; run production update checker from 0.1.4. Retain local installer and evidence, remove temporary build files. Do not replace a running app with unsaved work.
+- [x] Push tested implementation to GitHub main; create draft release, verify hashes/target, publish; run production update checker from 0.1.4. Retain local installer and evidence, remove temporary build files. Do not replace a running app with unsaved work.
