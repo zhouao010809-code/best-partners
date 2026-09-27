@@ -1,11 +1,16 @@
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { renameSync } from 'node:fs';
+import { createSkillFolderTrashService } from '../../src/server/services/skill-folder-trash.js';
 import { createSkillCatalogService } from '../../src/server/services/skill-catalog.js';
 
 const roots: string[] = [];
+vi.mock('node:fs/promises', async original => {
+  const fs = await original<typeof import('node:fs/promises')>();
+  return { ...fs, readdir: vi.fn(fs.readdir) };
+});
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>();
   return { ...fs, renameSync: vi.fn(fs.renameSync) };
@@ -240,4 +245,32 @@ it('persists reconciliation when listing a completed restore so later live edits
   expect((await reopened.listFolderTrash!()).items[0]?.status).toBe('restored');
   await writeFile(join(f.path, 'later'), 'a normal edit');
   expect((await reopened.listFolderTrash!()).items[0]?.status).toBe('restored');
+});
+
+// Batch previews must coexist until explicit confirmation; an unrelated preview
+// must never silently invalidate the first selected folder.
+it('keeps 1000 live previews valid and rejects new previews at capacity without evicting older tokens', async () => {
+  const f = await fixture();
+  const folders = Array.from({ length: 1000 }, (_, index) => ({ id: index.toString(16).padStart(64, '0'), name: `folder-${index}`, skillCount: 0 }));
+  for (const folder of folders) await mkdir(join(f.root, folder.name));
+  const service = createSkillFolderTrashService({ root: async () => realpath(f.root), rootMissing: async () => false, folders: async () => folders, isSafeName: (name): name is string => typeof name === 'string', assertRestoreLayout: async () => undefined });
+  const tokens = [];
+  for (const folder of folders) tokens.push(await service.previewFolderTrash(folder.id));
+  for (let index = 1000; index < 5000; index++) await service.previewFolderTrash(folders[index % 1000]!.id);
+  await expect(service.previewFolderTrash(folders[0]!.id)).rejects.toMatchObject({ code: 'SKILL_FOLDER_PREVIEW_LIMIT' });
+  expect((await service.trashFolder(tokens[0]!.id)).status).toBe('trashed');
+  expect((await service.trashFolder(tokens[999]!.id)).status).toBe('trashed');
+}, 15_000);
+
+it('previews a selected folder without scanning unrelated folder contents in a large catalog', async () => {
+  const f = await fixture();
+  const unrelated = Array.from({ length: 1000 }, (_, index) => `other-${index}`);
+  for (const name of unrelated) await mkdir(join(f.root, name));
+  vi.mocked(readdir).mockClear();
+  const preview = await f.catalog.previewFolderTrash!(f.folder.id);
+  expect(preview).toMatchObject({ name: '写作', skillCount: 0, entryCount: 0 });
+  const scanned = vi.mocked(readdir).mock.calls.map(([path]) => String(path));
+  expect(scanned.some(path => path.includes('/other-'))).toBe(false);
+  expect((await f.catalog.trashFolder!(preview.id)).status).toBe('trashed');
+  expect(await readdir(join(f.root, 'other-999'))).toEqual([]);
 });

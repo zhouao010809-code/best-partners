@@ -108,3 +108,20 @@
 .creation-discard-dialog>strong{font-size:15px;overflow-wrap:anywhere}
 .creation-discard-dialog p{font-size:13px;line-height:1.85;color:var(--text-muted)}
 .creation-discard-dialog .creation-actions{justify-content:flex-end;margin-top:22px}
+.creation-batch-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 0;margin:0 0 15px;border-block:1px solid var(--border-muted);font-size:12px;color:var(--text-muted)}
+.creation-batch-toolbar .creation-actions{gap:18px}
+.creation-batch-toolbar .creation-text-action{font-size:12px;min-height:32px}
+.creation-card-select{display:flex;align-items:center;gap:8px;width:fit-content;min-height:34px;margin:9px 13px 0;padding:0 7px;cursor:pointer;color:var(--text-muted);font-size:11px}
+.creation-card-select input{width:16px;height:16px;margin:0;accent-color:var(--accent-primary);cursor:pointer}
+.creation-card-select:has(input:focus-visible){outline:2px solid var(--accent-primary);outline-offset:2px;border-radius:3px}
+.creation-card--selected{border-color:var(--accent-primary);background:rgba(76,242,139,.04)}
+.creation-card-select+.creation-card-main{padding-top:8px}
+.creation-batch-result{border-left:2px solid var(--accent-primary);padding:2px 14px;margin:18px 0;color:var(--text-secondary);font-size:13px;line-height:1.8;overflow-wrap:anywhere}
+.creation-batch-result>p{margin:6px 0}
+.creation-batch-result>.creation-text-action{margin-right:18px}
+.creation-batch-failures,.creation-batch-confirm-list{padding-left:22px;max-height:220px;overflow:auto;overscroll-behavior:contain;line-height:1.9;overflow-wrap:anywhere}
+.creation-batch-failures{color:#ecd4a9;font-size:12px}
+.creation-batch-confirm-list{font-size:14px;border-block:1px solid var(--border-muted);padding-block:12px}
+.project-workbench button:disabled{cursor:default;opacity:.5}
+.project-workbench .creation-card-main:disabled{opacity:1}
+@media(max-width:700px){.creation-batch-toolbar{align-items:flex-start}.creation-batch-toolbar>.projects-button{min-height:38px}.creation-batch-toolbar .creation-actions{min-height:38px}.creation-batch-confirm-list{max-height:28vh}}

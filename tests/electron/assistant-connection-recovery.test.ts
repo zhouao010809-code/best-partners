@@ -95,6 +95,8 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '确认添加项目', exact: true }).click();
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
       const projectId = new URL(window.url()).pathname.split('/').at(-1)!;
+      // The director workbench starts with the assistant collapsed; open the project discussion explicitly.
+      await window.getByRole('button', { name: '讨论项目', exact: true }).click();
       await expect(panel.getByRole('heading', { name: '项目问问', exact: true })).toBeVisible();
       await expect(panel.getByText('项目资料已连接', { exact: true })).toBeVisible();
 

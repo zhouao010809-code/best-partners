@@ -244,7 +244,7 @@ it('previews entire folder recycling, cancels without mutation, and supports con
   const folder = { id: 'f'.repeat(64), name: '发布流程', skillCount: 1 };
   const id = '11111111-1111-4111-8111-111111111111';
   const entry = { id, folderId: folder.id, name: folder.name, skillCount: 1, createdAt: '2026-09-26T12:00:00Z', status: 'trashed' as const };
-  const previewFolderTrash = vi.fn(async () => ok({ ...entry, entryCount: 3, expiresAt: '2026-09-26T12:05:00Z' }));
+  const previewFolderTrash = vi.fn(async () => ok({ ...entry, entryCount: 3, expiresAt: new Date(Date.now() + 300_000).toISOString() }));
   const trashFolder = vi.fn(async () => { list.mockResolvedValue(ok({ folders: [], items: [] })); return ok(entry); });
   const listFolderTrash = vi.fn(async () => ok({ items: [entry] }));
   const restoreFolder = vi.fn(async () => { list.mockResolvedValue(ok({ folders: [folder], items: [{ ...skill, folderId: folder.id, folderName: folder.name }] })); return ok({ ...entry, status: 'restored' as const }); });
@@ -278,7 +278,7 @@ it('loads persisted recycled folders and retains conflict errors for an explicit
   expect(screen.getByRole('button', { name: '恢复：写作' })).toBeEnabled();
 });
 
-it('discards a late folder preview after the user changes the selected category', async () => {
+it('locks category navigation while collecting a preview, then clears it when navigation resumes', async () => {
   const user = userEvent.setup();
   const folder = { id: 'f'.repeat(64), name: '旧分类', skillCount: 0 };
   let finish!: (value: ApiClientResult<any>) => void;
@@ -288,8 +288,10 @@ it('discards a late folder preview after the user changes the selected category'
   renderPage();
   await user.click(await screen.findByRole('button', { name: '旧分类 0' }));
   await user.click(screen.getByRole('button', { name: '移到回收站' }));
+  expect(screen.getByRole('button', { name: '未分类 0' })).toBeDisabled();
+  finish(ok({ id: '11111111-1111-4111-8111-111111111111', folderId: folder.id, name: folder.name, skillCount: 0, entryCount: 0, expiresAt: new Date(Date.now() + 300_000).toISOString() }));
+  await screen.findByRole('dialog');
   await user.click(screen.getByRole('button', { name: '未分类 0' }));
-  finish(ok({ id: '11111111-1111-4111-8111-111111111111', folderId: folder.id, name: folder.name, skillCount: 0, entryCount: 0, expiresAt: '2026-09-26T12:05:00Z' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 });
 
@@ -298,8 +300,8 @@ it('keeps a failed confirmation visible and clears old undo state when the API s
   const folder = { id: 'f'.repeat(64), name: '旧分类', skillCount: 0 };
   const id = '11111111-1111-4111-8111-111111111111';
   const entry = { id, folderId: folder.id, name: folder.name, skillCount: 0, createdAt: '2026-09-26T12:00:00Z', status: 'trashed' as const };
-  const trashFolder = vi.fn().mockResolvedValueOnce(failed('目录变化，请重新预览。')).mockResolvedValueOnce(ok(entry));
-  runtime.api = { skills: { list, get, previewFolderTrash: vi.fn(async () => ok({ id, folderId: folder.id, name: folder.name, skillCount: 0, entryCount: 0, expiresAt: '2026-09-26T12:05:00Z' })), trashFolder, listFolderTrash: vi.fn(async () => ok({ items: [] })), restoreFolder: vi.fn() } };
+  const trashFolder = vi.fn().mockResolvedValueOnce({ ok: false, state: { status: 'operation-error', message: '目录变化，请重新预览。' } }).mockResolvedValueOnce(ok(entry));
+  runtime.api = { skills: { list, get, previewFolderTrash: vi.fn(async () => ok({ id, folderId: folder.id, name: folder.name, skillCount: 0, entryCount: 0, expiresAt: new Date(Date.now() + 300_000).toISOString() })), trashFolder, listFolderTrash: vi.fn(async () => ok({ items: [] })), restoreFolder: vi.fn() } };
   list.mockResolvedValue(ok({ folders: [folder], items: [] }));
   const rendered = renderPage();
   await user.click(await screen.findByRole('button', { name: '旧分类 0' }));
@@ -323,7 +325,7 @@ it('keeps the folder mutation mounted by disabling catalog navigation and writes
   const entry = { id, folderId: folder.id, name: folder.name, skillCount: 1, createdAt: '2026-09-26T12:00:00Z', status: 'trashed' as const };
   let finish!: (value: ApiClientResult<typeof entry>) => void;
   const trashFolder = vi.fn(() => new Promise<ApiClientResult<typeof entry>>(resolve => { finish = resolve; }));
-  runtime.api = { skills: { list, get, createFolder, move, previewFolderTrash: vi.fn(async () => ok({ id, folderId: folder.id, name: folder.name, skillCount: 1, entryCount: 1, expiresAt: '2026-09-26T12:05:00Z' })), trashFolder, listFolderTrash: vi.fn(async () => ok({ items: [] })), restoreFolder: vi.fn() } };
+  runtime.api = { skills: { list, get, createFolder, move, previewFolderTrash: vi.fn(async () => ok({ id, folderId: folder.id, name: folder.name, skillCount: 1, entryCount: 1, expiresAt: new Date(Date.now() + 300_000).toISOString() })), trashFolder, listFolderTrash: vi.fn(async () => ok({ items: [] })), restoreFolder: vi.fn() } };
   list.mockResolvedValue(ok({ folders: [folder], items: [{ ...skill, folderId: folder.id, folderName: folder.name }] }));
   renderPage();
   await user.click(await screen.findByRole('button', { name: '处理中分类 1' }));

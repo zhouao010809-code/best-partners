@@ -82,6 +82,7 @@ export function createSkillFolderTrashService(input: {
   root(): Promise<string>;
   rootMissing(): Promise<boolean>;
   folders(): Promise<SkillFolder[]>;
+  findFolder?(id: string): Promise<SkillFolder | undefined>;
   isSafeName(name: unknown): name is string;
   assertRestoreLayout(folderPath: string): Promise<void>;
 }) {
@@ -156,13 +157,15 @@ export function createSkillFolderTrashService(input: {
     async previewFolderTrash(folderId: string): Promise<SkillFolderTrashPreview> {
       if (!/^[a-f0-9]{64}$/u.test(folderId)) fail('SKILL_FOLDER_INVALID', '文件夹编号无效。', 400);
       const root = await rootPath();
-      const folder = (await input.folders()).find(value => value.id === folderId);
+      const folder = input.findFolder ? await input.findFolder(folderId) : (await input.folders()).find(value => value.id === folderId);
       if (!folder) fail('SKILL_FOLDER_NOT_FOUND', '未找到这个自定义文件夹，请刷新。未分类不能回收。', 404);
       assertRoot(root);
       const snapshot = tree(join(root, folder.name));
       const preview = { id: randomUUID(), folderId, name: folder.name, skillCount: folder.skillCount, entryCount: snapshot.entryCount, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString() };
       for (const [id, pending] of previews) if (Date.parse(pending.preview.expiresAt) <= Date.now()) previews.delete(id);
-      if (previews.size >= 100) previews.delete(previews.keys().next().value!);
+      // One full catalog can contain 1000 folders. Keep several pending batches,
+      // and refuse new previews instead of silently invalidating a user's confirmation.
+      if (previews.size >= 5000) fail('SKILL_FOLDER_PREVIEW_LIMIT', '待确认的回收预览过多，请完成当前确认，或等待 5 分钟后重新预览。', 429);
       previews.set(preview.id, { preview, root: assertRoot(root), folder: snapshot.identity, tree: snapshot.hash });
       return { ...preview };
     },

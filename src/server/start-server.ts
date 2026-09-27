@@ -1,4 +1,5 @@
 import { buildServer } from './app.js';
+import type { Socket } from 'node:net';
 import { registerClientAssets } from './client-assets.js';
 import { createLoopbackPolicy } from './security/loopback-policy.js';
 import { DEVELOPMENT_HTTP_ORIGIN } from './security/origin-host.js';
@@ -20,6 +21,29 @@ export interface StartedServer {
   readonly port: number;
   requestRefresh(): Promise<IndexRefreshAttempt | undefined>;
   close(): Promise<void>;
+}
+
+// Node's HTTP idle-connection cleanup can miss Chromium TCP preconnections
+// that have never sent a request. They otherwise keep Fastify.close() pending
+// after the last window closes. Preserve every connection that has sent bytes:
+// its accepted request (including a write) must drain through Fastify normally.
+function registerPreconnectionDrain(app: ReturnType<typeof buildServer>): void {
+  const sockets = new Set<Socket>();
+  let draining = false;
+  const connected = (socket: Socket) => {
+    if (draining) { socket.destroy(); return; }
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  };
+  app.server.on('connection', connected);
+  app.addHook('preClose', async () => {
+    draining = true;
+    for (const socket of sockets) if (socket.bytesRead === 0) socket.destroy();
+  });
+  app.addHook('onClose', async () => {
+    app.server.off('connection', connected);
+    sockets.clear();
+  });
 }
 
 export async function startServer(config: EmbeddedServerConfig): Promise<StartedServer> {
@@ -46,6 +70,7 @@ export async function startServer(config: EmbeddedServerConfig): Promise<Started
       },
       onClose: () => composition.dispose()
     });
+    registerPreconnectionDrain(app);
     if (config.legacyHealth?.development !== true) await registerClientAssets(app, config.clientRoot);
     await app.listen({ host: config.host, port: config.port });
     const address = app.server.address();

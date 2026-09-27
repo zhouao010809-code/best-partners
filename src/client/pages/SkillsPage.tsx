@@ -57,6 +57,7 @@ export function SkillsPage() {
   const [mutationError, setMutationError] = useState<string>();
   const [folderSubmitting, setFolderSubmitting] = useState(false);
   const [folderTrashBusy, setFolderTrashBusy] = useState(false);
+  const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([]);
   const [movingId, setMovingId] = useState<string>();
   const pendingFolderIdRef = useRef<string | undefined>(undefined);
   const [revealingId, setRevealingId] = useState<string>();
@@ -98,6 +99,8 @@ export function SkillsPage() {
           return;
         }
         setListResource({ status: 'ready', data: result.value });
+        setSelectedFolderIds(current => current.filter(id => result.value.folders.some(folder => folder.id === id)));
+        setFolderId(current => current && !result.value.folders.some(folder => folder.id === current) ? null : current);
         if (pendingFolderIdRef.current !== undefined && (result.value.folders ?? []).some((folder) => folder.id === pendingFolderIdRef.current)) {
           setFolderId(pendingFolderIdRef.current);
           pendingFolderIdRef.current = undefined;
@@ -177,6 +180,12 @@ export function SkillsPage() {
   }
 
   const canWrite = skillsApi?.createFolder !== undefined && skillsApi.move !== undefined;
+  const canRecycle = !!(skillsApi?.previewFolderTrash && skillsApi.trashFolder && skillsApi.listFolderTrash && skillsApi.restoreFolder);
+  const selectableFolders = listData?.folders ?? [];
+  const allFoldersSelected = selectableFolders.length > 0 && selectableFolders.every(folder => selectedFolderIds.includes(folder.id));
+  useEffect(() => { setSelectedFolderIds([]); }, [skillsApi, selected]);
+  function selectFolder(id: string | null) { setFolderId(id); setSelectedFolderIds([]); }
+  function refreshCatalog() { setSelectedFolderIds([]); refresh(); }
   const revealSkill = typeof window !== 'undefined' ? window.xiaozhaoDesktop?.revealSkill : undefined;
 
   function validateFolderName(value: string): string | undefined {
@@ -257,7 +266,7 @@ export function SkillsPage() {
             aria-label="刷新 Skill 库"
             title="刷新 Skill 库"
             disabled={folderTrashBusy || listResource.status === 'loading' || listResource.status === 'refreshing'}
-            onClick={refresh}
+            onClick={refreshCatalog}
           ><RefreshCw size={16} className={listResource.status === 'refreshing' ? 'skills-spin' : undefined} />刷新</button>}
         </div>
       </header>
@@ -298,13 +307,14 @@ export function SkillsPage() {
             <button type="submit" disabled={folderSubmitting || folderTrashBusy}>{folderSubmitting ? '正在保存…' : '保存文件夹'}</button><button type="button" disabled={folderSubmitting || folderTrashBusy} onClick={() => { setFolderFormOpen(false); setFolderName(''); setMutationError(undefined); }}>取消</button>
           </form>}
           {listResource.status === 'ready' && listData !== undefined && <nav className="skills-folders" aria-label="Skill 文件夹">
-            <button type="button" disabled={folderTrashBusy} aria-pressed={folderId === null} onClick={() => setFolderId(null)}>未分类 <span>{listData.items.filter((item) => item.folderId === null).length}</span></button>
-            {(listData.folders ?? []).map((folder) => <button type="button" disabled={folderTrashBusy} key={folder.id} aria-pressed={folderId === folder.id} onClick={() => setFolderId(folder.id)}>{folder.name} <span>{folder.skillCount}</span></button>)}
+            <button type="button" disabled={folderTrashBusy} aria-pressed={folderId === null} onClick={() => selectFolder(null)}>未分类 <span>{listData.items.filter((item) => item.folderId === null).length}</span></button>
+            {(listData.folders ?? []).map((folder) => <div className="skills-folder-choice" key={folder.id}>{canRecycle && <input type="checkbox" aria-label={`选择文件夹：${folder.name}`} checked={selectedFolderIds.includes(folder.id)} disabled={folderTrashBusy || folderSubmitting || movingId !== undefined} onChange={event => setSelectedFolderIds(ids => event.target.checked ? [...ids, folder.id] : ids.filter(id => id !== folder.id))} />}<button type="button" disabled={folderTrashBusy} aria-pressed={folderId === folder.id} onClick={() => selectFolder(folder.id)}>{folder.name} <span>{folder.skillCount}</span></button></div>)}
           </nav>}
-          {skillsApi && <SkillFolderTrash api={skillsApi} folder={listData?.folders.find(folder => folder.id === folderId)} revision={refreshToken} disabled={folderSubmitting || movingId !== undefined || listResource.status !== 'ready'} onChanged={onFolderTrashChanged} onMutationChange={setFolderTrashBusy} />}
+          {canRecycle && selectableFolders.length > 0 && <div className="skills-folder-selection"><span>已选 {selectedFolderIds.length} 个文件夹</span><button type="button" disabled={folderTrashBusy || folderSubmitting || movingId !== undefined || listResource.status !== 'ready'} onClick={() => setSelectedFolderIds(allFoldersSelected ? [] : selectableFolders.map(folder => folder.id))}>{allFoldersSelected ? '取消全选文件夹' : '全选文件夹'}</button><span>勾选分类可批量回收；未分类不在范围内。</span></div>}
+          {skillsApi && <SkillFolderTrash api={skillsApi} selectedFolders={selectableFolders.filter(folder => selectedFolderIds.includes(folder.id))} onSelectionChange={setSelectedFolderIds} folder={listData?.folders.find(folder => folder.id === folderId)} revision={refreshToken} disabled={folderSubmitting || movingId !== undefined || listResource.status !== 'ready'} onChanged={onFolderTrashChanged} onMutationChange={setFolderTrashBusy} />}
           {showListState?.status === 'loading' && <PageState state={{ status: 'loading', message: '正在读取本地 Skill 目录。' }} />}
           {showListState?.status === 'refreshing' && <PageState state={{ status: 'refreshing', message: '正在刷新本地 Skill 目录。' }} />}
-          {showListState?.status === 'failed' && <div className="skills-list__error"><PageState state={showListState.state} /><button type="button" onClick={refresh}>重新读取 Skill 库</button>{showListState.state.message === '当前连接不提供 Skill 库。' && <p>请使用支持本地文件 Skill 的桌面连接。</p>}</div>}
+          {showListState?.status === 'failed' && <div className="skills-list__error"><PageState state={showListState.state} /><button type="button" onClick={refreshCatalog}>重新读取 Skill 库</button>{showListState.state.message === '当前连接不提供 Skill 库。' && <p>请使用支持本地文件 Skill 的桌面连接。</p>}</div>}
           {listResource.status === 'ready' && listData !== undefined && listData.items.filter((item) => (folderId === null ? item.folderId === null : item.folderId === folderId)).length === 0 && <div className="skills-empty"><PageState state={{ status: 'empty', message: folderId === null && listData.items.length === 0 ? '在 .claude/skills 下添加 Skill 文件夹' : '这里还没有 Skill' }} /><h3>{folderId === null && listData.items.length === 0 ? '当前还没有可浏览的 Skill。' : '这里还没有 Skill。'}</h3><p>{folderId === null && listData.items.length === 0 ? <>每个 Skill 文件夹需要包含一个 <code>SKILL.md</code>。</> : '可以把 Skill 移动到这个文件夹。'}</p></div>}
           {listData !== undefined && listData.items.filter((item) => (folderId === null ? item.folderId === null : item.folderId === folderId)).length > 0 && <section className="skills-grid" aria-label="Skill 列表">{listData.items.filter((item) => (folderId === null ? item.folderId === null : item.folderId === folderId)).map((skill) => <article className="skills-card" key={skill.id}>
             <div className="skills-card__topline"><span className="skills-card__dot" aria-hidden="true" /><code>LOCAL SKILL</code></div>

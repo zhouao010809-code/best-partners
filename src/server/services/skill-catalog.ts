@@ -452,6 +452,22 @@ export function createSkillCatalogService(input: {
     };
   }
 
+  // Batch recycling may preview every category. Resolve only this server-owned
+  // directory name and its immediate Skill children, not the full catalog for
+  // each selected folder; the trash service still snapshots the entire tree.
+  async function findFolderForTrash(id: string): Promise<SkillFolder | undefined> {
+    const root = await fixedRoot();
+    const name = (await readdir(root)).find(candidate => isSafeName(candidate) && skillFolderId(candidate) === id);
+    if (!name) return undefined;
+    const directory = await verifyChildDirectory(root, name);
+    if (!directory || await hasDirectSkillMarker(directory.path)) return undefined;
+    const folder: SkillFolder = { id, name, skillCount: 0 };
+    for (const child of await readdir(directory.path)) {
+      if (await discoverSkill(directory.path, child, folder)) folder.skillCount++;
+    }
+    return folder;
+  }
+
   async function list(): Promise<SkillsPage> {
     const root = await fixedRoot();
     const catalog = await layout(root);
@@ -616,6 +632,6 @@ export function createSkillCatalogService(input: {
     createFolder,
     move,
     resolveSource,
-    ...(!allowNonCanonicalRoot ? createSkillFolderTrashService({ root: fixedRoot, rootMissing, folders: async () => (await list()).folders, isSafeName, assertRestoreLayout }) : {})
+    ...(!allowNonCanonicalRoot ? createSkillFolderTrashService({ root: fixedRoot, rootMissing, folders: async () => (await list()).folders, findFolder: findFolderForTrash, isSafeName, assertRestoreLayout }) : {})
   };
 }

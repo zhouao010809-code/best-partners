@@ -582,3 +582,13 @@
 .skills-folder-trash__row strong { font-size: 13px; overflow-wrap: anywhere; }
 .skills-folder-trash__row > button { flex-shrink: 0; }
 @media (max-width: 600px) { .skills-folder-trash__confirm { padding: 12px; } .skills-folder-trash__row { align-items: flex-start; gap: 8px; } }
+
+.skills-folder-choice { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.skills-folder-choice input, .skills-folder-trash__row > input { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--accent-primary); cursor: pointer; }
+.skills-folder-choice input:focus-visible, .skills-folder-trash__row > input:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 3px; }
+.skills-folder-selection { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--text-secondary); font-size: 12px; }
+.skills-folder-selection button { min-height: 32px; padding: 6px 10px; border: 1px solid var(--border-muted); border-radius: var(--radius-xs); color: var(--text-secondary); background: var(--surface-panel); font-size: 12px; }
+.skills-folder-selection button:disabled, .skills-folder-trash button:disabled { opacity: .5; cursor: not-allowed; }
+.skills-folder-trash__preview-items { max-height: 240px; overflow: auto; padding-left: 20px; color: var(--text-secondary); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.skills-folder-trash__row > div { flex: 1; }
+.skills-folder-trash .skills-mutation-error ul { padding-left: 20px; max-height: 240px; overflow: auto; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }

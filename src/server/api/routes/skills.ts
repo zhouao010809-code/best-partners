@@ -30,6 +30,7 @@ const folderErrors: Readonly<Record<string, readonly [number, string]>> = {
   SKILL_FOLDER_TOO_LARGE: [409, '文件夹内容过多，无法完整核验。请先在 Finder 中整理后重试。'],
   SKILL_FOLDER_UNSAFE: [409, '文件夹含符号链接、特殊文件或其他磁盘目录，未移动任何内容。请先在 Finder 中核对。'],
   SKILL_FOLDER_ROOT_CHANGED: [409, '当前 Skill 根目录已变化，未移动文件。请重新打开当前大脑后重试。'],
+  SKILL_FOLDER_PREVIEW_LIMIT: [429, '待确认的回收预览过多，请完成当前确认，或等待 5 分钟后重新预览。'],
   SKILL_FOLDER_PREVIEW_STALE: [409, '文件夹已变化或回收预览已过期，请重新预览后再确认。'],
   SKILL_FOLDER_TRASH_UNSAFE: [409, '文件夹回收区或记录已变化，现有内容已保留。请在 Finder 中核对后重试。'],
   SKILL_FOLDER_TRASH_INVALID: [400, '回收记录编号无效，请刷新回收列表后重试。'],

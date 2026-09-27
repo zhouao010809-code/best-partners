@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { createServer, createConnection } from 'node:net';
+import { once } from 'node:events';
+import * as appModule from '../../src/server/app.js';
+import { createSkillCatalogService } from '../../src/server/services/skill-catalog.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
@@ -264,6 +267,67 @@ describe('embedded runtime with its real allocated listener', () => {
     }
     expect((await fetch(`${server.origin}/unknown`, { headers: { accept: 'application/json' } })).status).toBe(404);
     expect((await fetch(`${server.origin}/unknown`, { headers: { accept: 'text/html;q=0' } })).status).toBe(404);
+  });
+
+  it('closes without waiting for a Chromium-style TCP preconnection that has sent no HTTP bytes', async () => {
+    const build = vi.spyOn(appModule, 'buildServer');
+    const { server } = await launch();
+    const httpServer = build.mock.results[0]!.value.server;
+    const accepted = once(httpServer, 'connection');
+    const socket = createConnection({ host: '127.0.0.1', port: server.port });
+    cleanup.push(() => { socket.destroy(); });
+    const [peer] = await accepted;
+    expect(peer.bytesRead).toBe(0);
+    let closed = false;
+    const closing = server.close().then(() => { closed = true; });
+    try {
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 1_500 });
+    } finally {
+      // Keep the intentionally failing regression from hanging the test runner.
+      socket.destroy(); await closing;
+    }
+    expect(peer.destroyed).toBe(true);
+    await expect(fetch(`${server.origin}/api/v1/health`)).rejects.toThrow();
+  });
+
+  it('drains empty preconnections but lets an accepted folder write finish before closing resources', async () => {
+    const config = await fixture();
+    const catalog = createSkillCatalogService({ skillsRoot: join(config.vaultRealRoot, '.claude', 'skills') });
+    let release!: () => void, entered!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const writing = new Promise<void>(resolve => { entered = resolve; });
+    const actualCreate = catalog.createFolder;
+    vi.spyOn(catalog, 'createFolder').mockImplementation(async name => { entered(); await pending; return actualCreate(name); });
+    const build = vi.spyOn(appModule, 'buildServer');
+    const kernel = vi.spyOn(databaseModule, 'openStateKernel');
+    const server = await startServer({ ...config, skillCatalog: catalog });
+    cleanup.push(() => server.close());
+    const bootstrap = await fetch(`${server.origin}/api/v1/bootstrap`);
+    const cookie = bootstrap.headers.get('set-cookie')!.split(';')[0]!;
+    const csrf = (await bootstrap.json()).data.csrfToken as string;
+    const response = fetch(`${server.origin}/api/v1/skills/folders`, { method: 'POST',
+      headers: { origin: server.origin, cookie, 'content-type': 'application/json', 'x-csrf-token': csrf, connection: 'close' }, body: JSON.stringify({ name: '关停前已确认的文件夹' }) });
+    await writing;
+    const httpServer = build.mock.results[0]!.value.server;
+    const accepted = once(httpServer, 'connection');
+    const socket = createConnection({ host: '127.0.0.1', port: server.port });
+    cleanup.push(() => { release(); socket.destroy(); });
+    const [peer] = await accepted;
+    let closed = false;
+    const closing = server.close().then(() => { closed = true; });
+    try {
+      await vi.waitFor(() => expect(peer.destroyed).toBe(true), { timeout: 1_500 });
+      expect(closed).toBe(false);
+      const state = kernel.mock.results[0]!.value as databaseModule.NormalStateKernel;
+      expect(state.db.open).toBe(true);
+      release();
+      const result = await response;
+      expect(result.status).toBe(200);
+      expect(await result.json()).toMatchObject({ data: { name: '关停前已确认的文件夹' } });
+      await closing;
+      expect((await stat(join(config.vaultRealRoot, '.claude', 'skills', '关停前已确认的文件夹'))).isDirectory()).toBe(true);
+      expect(state.db.open).toBe(false);
+    } finally { release(); socket.destroy(); await response; await closing; }
   });
 
   it('refreshes indexed changes and closes the listener and database idempotently', async () => {
