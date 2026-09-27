@@ -52,7 +52,7 @@ export function SkillRecommendationCard(props: SkillRecommendationCardProps) {
       <p>{selected.description}</p>
       <small>{selected.folderName ? `文件夹：${selected.folderName}` : '未分类'} · {selected.reason}</small>
     </div>
-    <p className="assistant-skill-card__disclosure">确认后才会把这个 Skill 的方法说明交给问问。</p>
+    <p className="assistant-skill-card__disclosure">确认后会把方法说明及按需读取的配套参考文档交给问问。</p>
     <div className="assistant-skill-card__actions">
       <button type="button" className="assistant-skill-card__primary" onClick={() => props.onUse?.()}><Check />使用此 Skill</button>
       <button type="button" className="assistant-skill-card__secondary" onClick={() => props.onSkip?.()}>不用</button>

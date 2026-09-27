@@ -270,6 +270,24 @@ it('restores the historical document instead of silently taking the document cur
   expect(service.send.mock.calls[0]![0]).toMatchObject({ scope: 'current', contextPath: '01图书馆/原资料.md' });
 });
 
+it('lets an open action layer handle Escape before closing the assistant', async () => {
+  const user = userEvent.setup(); render(<Harness />);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  await user.type(screen.getByLabelText('发送给问问的消息'), '保留这段问题');
+  const handleLayerKey = vi.fn();
+  const layer = render(<div data-escape-layer><button type="button" onKeyDown={handleLayerKey}>Skill 操作</button></div>);
+  await user.click(screen.getByRole('button', { name: 'Skill 操作' }));
+  await user.keyboard('{Escape}');
+  expect(handleLayerKey).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('complementary')).toBeVisible();
+  expect(screen.getByLabelText('发送给问问的消息')).toHaveValue('保留这段问题');
+  layer.unmount();
+  await user.keyboard('{Escape}');
+  expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '打开问问 AI' })).toHaveFocus();
+  expect(service.send).not.toHaveBeenCalled();
+});
+
 it('keeps a draft when expanding and closing the focus view, without sending it', async () => {
   const user = userEvent.setup(); render(<Harness />);
   await user.type(screen.getByLabelText('发送给问问的消息'), '留着这段问题');

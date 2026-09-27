@@ -98,7 +98,14 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
     await flush(); return true;
   }, [flush, replace]);
   async function newDraft(text = '', attachments: AssistantDraftFields['attachments'] = []): Promise<boolean> {
-    return select({ ...fresh(), text, attachments });
+    const current = currentRef.current;
+    return select({
+      ...fresh(), text, attachments,
+      ...(projectId ? {
+        scope: 'project', projectId,
+        ...(current.projectId === projectId && current.projectRevision !== undefined ? { projectRevision: current.projectRevision } : {})
+      } : {})
+    });
   }
   const enterProject = useCallback(async (id: string, sourceRevision: number): Promise<boolean> => {
     // A reconnect or confirmed output can arrive while the user is typing.

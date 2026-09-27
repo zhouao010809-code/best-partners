@@ -38,6 +38,7 @@
 .project-files__file strong, .project-files__search-folder strong { font-weight: 540; overflow-wrap: anywhere; line-height: 1.5; }
 .project-files__file small, .project-files__search-folder small { color: var(--text-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .project-files__file .project-files__path { color: var(--text-faint); }
+.project-files__saved { flex: 0 0 auto; margin: 2px 0 0 auto; padding: 2px 6px; border-radius: 4px; color: var(--accent-primary); background: rgba(76,242,139,.07); font-size: 10px; line-height: 1.6; }
 .project-files__folder-empty { margin: 0 8px 8px 33px; color: var(--text-faint); font-size: 12px; line-height: 1.7; }
 .project-files__reader { min-width: 0; min-height: 230px; max-height: 540px; overflow: auto; border-top: 1px solid var(--border-muted); overscroll-behavior: contain; scrollbar-gutter: stable; }
 .project-files__reader-empty { display: flex; min-height: 230px; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 24px; color: var(--text-muted); text-align: center; }
@@ -58,6 +59,10 @@
 .project-files__state h3 { margin: 0; color: var(--text-primary); font-size: 15px; font-weight: 550; }
 .project-files__state p { max-width: 380px; margin: 0; font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
 .project-files__state--error h3 { color: #f0cf94; }
+.project-files__state--retained { min-height: 0; padding: 16px; align-items: flex-start; gap: 8px; text-align: left; border-bottom: 1px solid var(--border-muted); }
+.project-files__refresh-status { display: flex; align-items: center; gap: 8px; padding: 12px 8px; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
+.project-files__refresh-status > svg { flex: 0 0 auto; }
+.project-files__refresh-status p { margin: 0; }
 .project-files__action { min-height: 36px; margin-top: 4px; padding: 8px 13px; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text-primary); background: rgba(255,255,255,.04); font: inherit; font-size: 12px; cursor: pointer; }
 .project-files__action:hover { border-color: var(--accent-primary); }
 .project-files-panel button:focus-visible, .project-files-panel input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }

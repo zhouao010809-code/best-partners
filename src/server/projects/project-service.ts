@@ -20,6 +20,8 @@ import {
 import { scanProjectFolder, type ProjectScanEntry, type ProjectScanResult } from './project-scanner.js';
 import { parseAttachment } from '../attachments/parser.js';
 import { canonicalProjectRoot, resolveProjectPath } from './project-paths.js';
+import { withProjectLock } from './project-lock.js';
+import { createTextSearch } from '../search/text-search.js';
 
 type CodedError = Error & { code: string };
 type ProjectScanFunction = typeof scanProjectFolder;
@@ -443,11 +445,11 @@ export function createProjectService(input: {
 
   async function refresh(id: string, signal?: AbortSignal): Promise<ProjectSummary> {
     freshness.set(id, now().getTime());
-    return withLock(`project:${id}`, () => refreshUnlocked(id, signal));
+    return withProjectLock(database, id, () => refreshUnlocked(id, signal));
   }
 
   async function ensureFresh(id: string, signal?: AbortSignal): Promise<ProjectSummary> {
-    return withLock(`project:${id}`, async () => {
+    return withProjectLock(database, id, async () => {
       signal?.throwIfAborted();
       const timestamp = now().getTime();
       const last = freshness.get(id) ?? 0;
@@ -459,7 +461,7 @@ export function createProjectService(input: {
   }
 
   async function reconnect(id: string, scanId: string, reconnectInput: { sourceSha256: string; displayName?: string }): Promise<ProjectSummary> {
-    return withLock('projects', () => withLock(`project:${id}`, async () => {
+    return withLock('projects', () => withProjectLock(database, id, async () => {
       const project = rowOrThrow(database, id);
       const row = scanRowOrThrow(database, scanId);
       const proposal = parseScan(row);
@@ -506,7 +508,8 @@ export function createProjectService(input: {
   async function listFiles(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }): Promise<ProjectFilePage> {
     const project = rowOrThrow(database, id);
     const limit = Math.min(200, Math.max(1, Math.trunc(query.limit ?? 50)));
-    const tokens = (query.search ?? '').trim().toLocaleLowerCase().split(/\s+/u).filter(Boolean);
+    const search = createTextSearch(query.search);
+    const { tokens } = search;
     const searchClause = tokens.length === 0 ? '' : ` AND ${tokens.map(() => '(lower(relative_path) LIKE ? OR lower(COALESCE(content_text, \'\')) LIKE ?)').join(' AND ')}`;
     const select = tokens.length === 0
       ? 'relative_path, kind, bytes, modified_at, sha256, parse_status, parse_problem, origin, indexed_revision'
@@ -517,15 +520,10 @@ export function createProjectService(input: {
     params.push(MAX_FILE_SEARCH_CANDIDATES);
     const rows = database.prepare(`SELECT ${select} FROM personal_project_files WHERE project_id = ?${query.origin === undefined ? '' : ' AND origin = ?'}${searchClause} ORDER BY relative_path ASC LIMIT ?`)
       .all(...params) as FileRow[];
-    const matched = rows.filter((row) => {
-      if (tokens.length === 0) return true;
-      const haystack = `${row.relative_path}\n${row.content_text ?? ''}`.toLocaleLowerCase();
-      return tokens.every((token) => haystack.includes(token));
-    });
-    matched.sort((a, b) => {
-      const score = (row: FileRow) => tokens.reduce((total, token) => total + (row.relative_path.toLocaleLowerCase().includes(token) ? 2 : 0) + (row.content_text?.toLocaleLowerCase().includes(token) ? 1 : 0), 0);
-      return score(b) - score(a) || a.relative_path.localeCompare(b.relative_path);
-    });
+    const matched = rows.map(row => ({ row, score: search.score(row.relative_path, [row.content_text ?? '']) }))
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score || a.row.relative_path.localeCompare(b.row.relative_path))
+      .map(item => item.row);
     return projectFilePageSchema.parse({ items: matched.slice(0, limit).map(publicFile), total: matched.length, revision: project.source_revision });
   }
 

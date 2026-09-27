@@ -10,9 +10,15 @@ import { ASSISTANT_OUTPUT_RESERVE_TOKENS, assertAssistantContextBudget, deepSeek
 import { deepSeekUsageStep } from './usage.js';
 
 const EFFORTS = ['max', 'high', 'low'];
-const toolLabel = (name: string) => name.startsWith('search_') ? '查找资料' : ({ read_document: '阅读依据', submit_candidates: '保存候选',
+const toolLabel = (name: string, args?: unknown): string => {
+  if (name === 'read_skill_reference') {
+    const path = args && typeof args === 'object' && 'path' in args && typeof args.path === 'string' ? args.path.slice(0, 255) : '';
+    return `读取 Skill 参考文件${path ? ` · ${path}` : ''}`;
+  }
+  return name.startsWith('search_') ? '查找资料' : ({ read_document: '阅读依据', submit_candidates: '保存候选',
   list_attachments: '查看附件', read_attachment: '阅读附件', archive_attachment: '归档附件', prepare_attachment_extraction: '准备附件提炼', prepare_extraction: '准备提炼' } as Record<string, string>)[name] ?? '执行工具';
-const toolActivity = (name: string) => name.startsWith('search_') ? '正在查找相关资料' : ({ read_document: '正在阅读原文', submit_candidates: '正在校验并保存候选',
+};
+const toolActivity = (name: string) => name.startsWith('search_') ? '正在查找相关资料' : ({ read_skill_reference: '正在读取所选 Skill 的参考文档', read_document: '正在阅读原文', submit_candidates: '正在校验并保存候选',
   list_attachments: '正在查看本轮附件', read_attachment: '正在阅读所选附件页码', archive_attachment: '正在保留原件并归档',
   prepare_attachment_extraction: '正在保留原件并准备所选页码的提炼依据', prepare_extraction: '正在准备提炼依据' } as Record<string, string>)[name] ?? '正在执行工具';
 const knownV4 = (model: string) => model === 'deepseek-v4-pro' || model === 'deepseek-v4-flash';
@@ -128,11 +134,11 @@ export function createDeepSeekAssistantAdapter(input: { credentials: ModelCreden
         },
         ...(knownV4(request.model) ? { providerOptions: { deepseek: { thinking: { type: 'enabled' }, reasoningEffort: request.effort ?? 'max' } } } : {}),
         onToolExecutionStart: ({ toolCall }) => {
-          request.emit({ type: 'step', id: toolCall.toolCallId, toolName: toolCall.toolName, label: toolLabel(toolCall.toolName), status: 'running' });
+          request.emit({ type: 'step', id: toolCall.toolCallId, toolName: toolCall.toolName, label: toolLabel(toolCall.toolName, toolCall.input), status: 'running' });
           request.emit({ type: 'activity', text: toolActivity(toolCall.toolName) });
         },
         onToolExecutionEnd: ({ toolCall, toolOutput }) => request.emit({ type: 'step', id: toolCall.toolCallId, toolName: toolCall.toolName,
-          label: toolLabel(toolCall.toolName), status: toolOutput.type === 'tool-error' ? 'failed' : 'completed' })
+          label: toolLabel(toolCall.toolName, toolCall.input), status: toolOutput.type === 'tool-error' ? 'failed' : 'completed' })
       });
       try {
         const stream = await agent.stream({ messages: request.messages, abortSignal: request.signal, timeout: { totalMs: 300_000, chunkMs: 90_000 } });

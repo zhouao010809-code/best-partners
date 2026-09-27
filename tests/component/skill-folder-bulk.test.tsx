@@ -25,7 +25,7 @@ function setup() {
 it('selects folders independently of navigation, toggles all, previews exact selection and cancels without writes', async () => {
   const f = setup(); const user = userEvent.setup(); render(<SkillsPage />);
   await user.click(await screen.findByRole('checkbox', { name: '选择文件夹：写作' }));
-  expect(screen.getByRole('button', { name: '未分类 0' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('button', { name: '全部 0' })).toHaveAttribute('aria-pressed', 'true');
   expect(screen.queryByRole('checkbox', { name: /未分类/ })).not.toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: '全选文件夹' }));
   expect(screen.getByText('已选 3 个文件夹')).toBeVisible();

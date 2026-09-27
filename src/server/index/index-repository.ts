@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
+import { createTextSearch } from '../search/text-search.js';
 import type {
   KnowledgeRecord,
   KnowledgeStatus,
@@ -405,6 +406,7 @@ export function createIndexRepository(
       deleteIssue.run(path);
     },
     listMaterials: (query) => {
+      const search = createTextSearch(query.title);
       const records = (selectRows.all() as SearchRow[])
         .filter((row) => row.kind === 'material')
         .map(materialFromRow)
@@ -414,13 +416,14 @@ export function createIndexRepository(
           || (record.collectedAt !== undefined && record.collectedAt >= query.collectedFrom))
         .filter((record) => query.collectedTo === undefined
           || (record.collectedAt !== undefined && record.collectedAt <= query.collectedTo))
-        .filter((record) => query.title === undefined
-          || record.title.toLocaleLowerCase().includes(query.title.toLocaleLowerCase()))
-        .sort(pathOrder);
+        .map(record => ({ record, score: search.score(record.title) }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score || pathOrder(a.record, b.record))
+        .map(item => item.record);
       return paginated(records, query);
     },
     listKnowledge: (query) => {
-      const search = query.search?.trim().toLocaleLowerCase();
+      const search = createTextSearch(query.search);
       const records = (selectRows.all() as SearchRow[])
         .filter((row) => row.kind === 'knowledge')
         .map(knowledgeFromRow)
@@ -430,22 +433,17 @@ export function createIndexRepository(
         .filter((record) => query.usageStatus === undefined || record.usageStatus === query.usageStatus)
         .filter((record) => query.knowledgeType === undefined || record.knowledgeType === query.knowledgeType)
         .filter((record) => query.topic === undefined || record.recallFields.topics.includes(query.topic))
-        .filter((record) => {
-          if (search === undefined || search.length === 0) return true;
-          return [
-            record.title,
+        .map((record) => ({ record, score: search.score(record.title, [
             ...record.recallFields.topics,
             ...record.recallFields.keywords,
             ...record.recallFields.scenarios,
             record.recallFields.conclusion,
             ...record.recallFields.keyPoints,
             record.recallFields.boundary
-          ]
-            .join('\0')
-            .toLocaleLowerCase()
-            .includes(search);
-        })
-        .sort(pathOrder);
+          ]) }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score || pathOrder(a.record, b.record))
+        .map(item => item.record);
       return paginated(records, query);
     },
     getKnowledge: (path) => {

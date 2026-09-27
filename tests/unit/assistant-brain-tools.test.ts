@@ -6,6 +6,7 @@ import type { AssistantEvent } from '../../src/server/assistant/types.js';
 import { randomUUID } from 'node:crypto';
 import { PublicApiError } from '../../src/shared/api/errors.js';
 import type { AssistantExtractionPreparation } from '../../src/server/services/extraction-service.js';
+import type { KnowledgeRecord } from '../../src/shared/domain/records.js';
 
 const material = '01图书馆/个人/资料.md';
 const knowledge = '02知识库/学习/知识.md';
@@ -31,6 +32,50 @@ it('restricts the current scope on the server and never searches other documents
   expect(await f.execute('search_knowledge', { query: '所有知识' })).toEqual({ items: [], scope: 'current' });
   expect(f.read.listKnowledge).not.toHaveBeenCalled();
   expect(f.read.listMaterials).not.toHaveBeenCalled();
+  expect(f.read.getKnowledgeDetail).not.toHaveBeenCalled();
+});
+
+function currentKnowledgeFixture(usageStatus: KnowledgeRecord['usageStatus'] = 'AI总结') {
+  const f = fixture({ scope: 'current', contextPath: knowledge });
+  const record: KnowledgeRecord = {
+    path: knowledge, title: '短视频创作', rawSha256: 'a'.repeat(64), sourceType: 'AI提炼', usageStatus, knowledgeType: '方法',
+    recallFields: { topics: ['商业'], keywords: ['获客'], scenarios: ['招生咨询'], conclusion: '展示真实案例', keyPoints: ['降低理解成本'], boundary: '避免效果承诺' },
+    sourceMaterials: ['01图书馆/source-only.md']
+  };
+  f.read.getKnowledgeDetail.mockImplementation(async path => ({ path, title: record.title, markdown: 'body-only', record, versionMarker: { rawSha256: record.rawSha256 } }));
+  return f;
+}
+
+it.each(['短视频 获客', '短视频获客', '商业 招生咨询', '真实案例 理解成本 效果承诺'])('matches current knowledge across explicit recall fields with the shared lexical search: %s', async query => {
+  const f = currentKnowledgeFixture();
+  await expect(f.execute('search_knowledge', { query })).resolves.toMatchObject({ items: [{ path: knowledge, title: '短视频创作' }], scope: 'current' });
+  expect(f.read.getKnowledgeDetail).toHaveBeenCalledExactlyOnceWith(knowledge);
+  expect(f.read.listKnowledge).not.toHaveBeenCalled();
+  expect(f.read.listMaterials).not.toHaveBeenCalled();
+  expect(f.read.getDocumentDetail).not.toHaveBeenCalled();
+  expect(f.events.find(event => event.type === 'source')).toMatchObject({ source: { path: knowledge, kind: 'search' } });
+});
+
+it.each(['topics', 'keywords', 'scenarios', 'conclusion', 'keyPoints', 'boundary', 'body-only', 'source-only', '学习'])('does not search property names, body, source links, or paths in current knowledge: %s', async query => {
+  const f = currentKnowledgeFixture();
+  await expect(f.execute('search_knowledge', { query })).resolves.toEqual({ items: [], scope: 'current' });
+  expect(f.read.listKnowledge).not.toHaveBeenCalled();
+  expect(f.events).toEqual([]);
+});
+
+it('still excludes obsolete knowledge from current-scope search', async () => {
+  const f = currentKnowledgeFixture('过时');
+  await expect(f.execute('search_knowledge', { query: '短视频 获客' })).resolves.toEqual({ items: [], scope: 'current' });
+});
+
+it.each(['获客 短视频', '短视频获客'])('matches multiple keywords only in the current material title: %s', async query => {
+  const f = fixture({ scope: 'current', contextPath: material });
+  f.read.getDocumentDetail.mockImplementation(async path => ({ path, title: '短视频创作中的获客方法', markdown: 'body-only', versionMarker: { rawSha256: 'a'.repeat(64) } }));
+  await expect(f.execute('search_materials', { query })).resolves.toMatchObject({ items: [{ path: material, title: '短视频创作中的获客方法' }], scope: 'current' });
+  await expect(f.execute('search_materials', { query: 'body-only' })).resolves.toEqual({ items: [], scope: 'current' });
+  expect(f.read.getDocumentDetail.mock.calls).toEqual([[material], [material]]);
+  expect(f.read.listMaterials).not.toHaveBeenCalled();
+  expect(f.read.listKnowledge).not.toHaveBeenCalled();
   expect(f.read.getKnowledgeDetail).not.toHaveBeenCalled();
 });
 

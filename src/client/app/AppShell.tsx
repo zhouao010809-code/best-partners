@@ -244,7 +244,7 @@ function pageIdentity(pathname: string): PageIdentity {
       return {
         eyebrow: 'SKILLS / LOCAL METHODS',
         title: 'Skill 库',
-        description: '浏览本地可复用的方法说明；可创建文件夹并手动整理，Skill 内容保持只读。'
+        description: '把常用的方法收在一起，随时查阅、按文件夹整理。'
       };
     case '/trash':
       return { eyebrow: 'RECYCLE / LOCAL STORAGE', title: '回收站', description: '收件箱、档案库、提炼队列与知识库的暂存处。' };
@@ -300,7 +300,10 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
   }
   const headingRef = useRef<HTMLHeadingElement>(null);
   const previousPath = useRef<string | undefined>(undefined);
-  const previousProjectRouteId = useRef<string | undefined>(undefined);
+  const previousAssistantProjectId = useRef<string | undefined>(undefined);
+  // Browsing methods is part of the current task. All other global pages
+  // leave project mode, so a later Skills visit cannot revive an old project.
+  const assistantProjectId = projectRouteId ?? (location.pathname.replace(/\/+$/u, '') === '/skills' ? previousAssistantProjectId.current : undefined);
   const mountedRef = useRef(false);
   const healthRef = useRef<Resource<HealthSnapshot>>({ status: 'loading' });
   const healthRequestRef = useRef<Promise<ApiClientResult<HealthSnapshot>> | undefined>(undefined);
@@ -559,11 +562,11 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
     return () => { window.removeEventListener(ASSISTANT_INTENT_EVENT, openAssistant); window.removeEventListener('keydown', keys); };
   }, []);
   useEffect(() => {
-    if (projectRouteId !== undefined && previousProjectRouteId.current !== projectRouteId) {
+    if (assistantProjectId !== undefined && previousAssistantProjectId.current !== assistantProjectId) {
       setAssistantOpen(false);
     }
-    previousProjectRouteId.current = projectRouteId;
-  }, [projectRouteId]);
+    previousAssistantProjectId.current = assistantProjectId;
+  }, [assistantProjectId]);
   useEffect(() => {
     setSelectedPassage('');
     const query = new URLSearchParams(location.search);
@@ -675,7 +678,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
       </section>
       {searchOpen && <GlobalSearch api={api} vault={vaultName} onClose={() => setSearchOpen(false)} />}
       {selectedPassage && !searchOpen && <button type="button" className="selection-ask" onMouseDown={event => event.preventDefault()} onClick={() => { const query = new URLSearchParams(location.search); const path = query.get('materialPath') || query.get('path'); askAssistant({ prompt: `请解释这段原文，并结合上下文说明：\n\n“${selectedPassage}”`, ...(path ? { contextPath: path } : {}) }); setSelectedPassage(''); window.getSelection()?.removeAllRanges(); }}><MessageCircle size={16} />问问这段内容</button>}
-      <AssistantPanel api={api} open={assistantOpen} onClose={closeAssistant} width={assistantWidth} onWidthChange={resizeAssistant} onRunningChange={setAssistantRunning} dataRevision={dataRevision} {...(projectRouteId ? { projectId: projectRouteId } : {})} />
+      <AssistantPanel api={api} open={assistantOpen} onClose={closeAssistant} width={assistantWidth} onWidthChange={resizeAssistant} onRunningChange={setAssistantRunning} dataRevision={dataRevision} {...(assistantProjectId ? { projectId: assistantProjectId } : {})} />
     </div>
   );
 }

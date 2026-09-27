@@ -179,6 +179,7 @@ describe('SkillsPage', () => {
     move.mockResolvedValue(ok({ ...skill, folderId: folder.id, folderName: folder.name }));
     list.mockResolvedValueOnce(ok({ folders: [folder], items: [skill] })).mockResolvedValueOnce(ok({ folders: [folder], items: [] }));
     renderPage();
+    await user.click(await screen.findByRole('button', { name: `更多操作：${skill.name}` }));
     const select = await screen.findByRole('combobox', { name: `移动到：${skill.name}` });
     await user.selectOptions(select, folder.id);
     expect(move).toHaveBeenCalledWith(skill.id, folder.id, expect.any(AbortSignal));
@@ -190,6 +191,7 @@ describe('SkillsPage', () => {
     const revealSkill = vi.fn(async () => undefined);
     vi.stubGlobal('xiaozhaoDesktop', { revealSkill });
     renderPage();
+    await user.click(await screen.findByRole('button', { name: `更多操作：${skill.name}` }));
     await user.click(await screen.findByRole('button', { name: `在 Finder 中打开：${skill.name}` }));
     expect(revealSkill).toHaveBeenCalledWith(skill.id);
   });
@@ -199,6 +201,7 @@ describe('SkillsPage', () => {
     const revealSkill = vi.fn(async () => { throw new Error('bridge failed'); });
     vi.stubGlobal('xiaozhaoDesktop', { revealSkill });
     renderPage();
+    await user.click(await screen.findByRole('button', { name: `更多操作：${skill.name}` }));
     const button = await screen.findByRole('button', { name: `在 Finder 中打开：${skill.name}` });
     await user.click(button);
     expect(await screen.findByRole('status')).toHaveTextContent('无法在 Finder 中打开，请重试。');
@@ -211,6 +214,7 @@ describe('SkillsPage', () => {
     move.mockResolvedValue(failed('移动失败。'));
     list.mockResolvedValue(ok({ folders: [folder], items: [skill] }));
     renderPage();
+    await user.click(await screen.findByRole('button', { name: `更多操作：${skill.name}` }));
     await user.selectOptions(await screen.findByRole('combobox', { name: `移动到：${skill.name}` }), folder.id);
     expect(await screen.findByRole('alert')).toHaveTextContent('移动失败，请刷新后重试。');
     expect(screen.getByRole('heading', { name: skill.name })).toBeVisible();
@@ -236,6 +240,61 @@ describe('SkillsPage', () => {
     expect(screen.queryByRole('button', { name: '新建文件夹' })).not.toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: `移动到：${skill.name}` })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /在 Finder 中打开/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `更多操作：${skill.name}` })).not.toBeInTheDocument();
+  });
+
+  it('searches names and descriptions without case sensitivity, scopes to the selected folder, and retains the query after reading', async () => {
+    const user = userEvent.setup();
+    const folder = { id: 'c'.repeat(64), name: '写作', skillCount: 1 };
+    const rootSkill = { ...skill, name: 'PublisherToolkit', description: 'Newsletter root helper' };
+    const writingSkill = { ...skill, id: 'd'.repeat(64), name: 'Writer Flow', description: 'Publish WEB Newsletter', folderId: folder.id, folderName: folder.name };
+    const otherSkill = { ...skill, id: 'e'.repeat(64), name: 'Camera Flow', description: 'Record video clips' };
+    list.mockResolvedValue(ok({ folders: [folder], items: [rootSkill, writingSkill, otherSkill] }));
+    get.mockResolvedValue(ok({ ...detail, ...writingSkill }));
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: '全部 3' })).toHaveAttribute('aria-pressed', 'true');
+    const search = screen.getByRole('searchbox', { name: '搜索 Skill' });
+    await user.type(search, '  pUbLiShEr  ');
+    expect(screen.getByRole('heading', { name: rootSkill.name })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: writingSkill.name })).not.toBeInTheDocument();
+    await user.clear(search);
+    await user.type(search, 'nEwSlEtTeR');
+    expect(screen.getByRole('heading', { name: rootSkill.name })).toBeVisible();
+    expect(screen.getByRole('heading', { name: writingSkill.name })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: otherSkill.name })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '写作 1' }));
+    await user.type(search, 'nEwSlEtTeR');
+    expect(screen.queryByRole('heading', { name: rootSkill.name })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: `查看方法：${writingSkill.name}` }));
+    expect(await screen.findByText('先检查素材，再生成排版。')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: '返回 Skill 库' }));
+    expect(screen.getByRole('button', { name: `查看方法：${writingSkill.name}` })).toHaveFocus();
+    const restoredSearch = screen.getByRole('searchbox', { name: '搜索 Skill' });
+    expect(restoredSearch).toHaveValue('nEwSlEtTeR');
+    expect(screen.getByRole('button', { name: '写作 1' })).toHaveAttribute('aria-pressed', 'true');
+
+    await user.clear(restoredSearch);
+    await user.type(restoredSearch, 'no-match');
+    expect(screen.getByRole('heading', { name: '没有找到匹配的 Skill' })).toBeVisible();
+    await user.click(screen.getAllByRole('button', { name: '清除搜索' })[0]!);
+    expect(restoredSearch).toHaveValue('');
+    expect(screen.getByRole('heading', { name: writingSkill.name })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: rootSkill.name })).not.toBeInTheDocument();
+  });
+
+  it('closes card actions with Escape and returns keyboard focus to the trigger', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const trigger = await screen.findByRole('button', { name: `更多操作：${skill.name}` });
+    await user.click(trigger);
+    await user.tab();
+    expect(screen.getByRole('combobox', { name: `移动到：${skill.name}` })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('combobox', { name: `移动到：${skill.name}` })).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
   });
 });
 
@@ -333,7 +392,7 @@ it('keeps the folder mutation mounted by disabling catalog navigation and writes
   await user.click(await screen.findByRole('button', { name: '确认回收整个文件夹' }));
   expect(screen.getByRole('button', { name: '查看方法：公众号排版发布' })).toBeDisabled();
   expect(screen.getByRole('button', { name: '新建文件夹' })).toBeDisabled();
-  expect(screen.getByRole('combobox', { name: '移动到：公众号排版发布' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '更多操作：公众号排版发布' })).toBeDisabled();
   expect(screen.getByRole('button', { name: '未分类 0' })).toBeDisabled();
   list.mockResolvedValue(ok({ folders: [], items: [] })); finish(ok(entry));
   expect(await screen.findByRole('button', { name: '撤销回收' })).toBeVisible();

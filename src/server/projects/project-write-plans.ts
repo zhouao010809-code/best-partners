@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, unlink, link, rename } from 'node:fs/promises';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import { projectCategorySchema, projectWriteActionSchema, projectOperationSchema, type ProjectCategory, type ProjectOperation, type ProjectWriteAction, type ProjectWritePlanService } from '../../shared/api/projects.js';
 import { resolveProjectOutputPath } from './project-paths.js';
+import { parseAttachment } from '../attachments/parser.js';
+import { withProjectLock } from './project-lock.js';
 
 type CodedError = Error & { code: string };
 type ProjectRow = { id: string; root_path: string; display_name: string; source_revision: number; availability: string };
@@ -17,6 +20,7 @@ type PlanRow = {
 const MAX_CONTENT_BYTES = 160_000;
 const TTL_MS = 30 * 60 * 1000;
 const SAFE_COMPONENT = /[^\p{L}\p{N} _-]+/gu;
+const OUTPUT_INDEX_PENDING = '文件已保存，但列表尚未更新。请点击“更新资料”后查看。';
 
 function coded(code: string, message: string): CodedError { const error = new Error(message) as CodedError; error.code = code; return error; }
 function sha256(value: Buffer | string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -54,7 +58,7 @@ function publicAction(database: Database.Database, row: PlanRow): ProjectWriteAc
     ...(row.problem === null ? {} : { problem: row.problem })
   });
 }
-async function assertNoSymlinkParents(root: string, targetDirectory: string): Promise<void> {
+async function assertNoSymlinkParents(root: string, targetDirectory: string, createMissing = true): Promise<void> {
   const canonicalRoot = await realpath(root);
   if (canonicalRoot !== root) throw coded('PROJECT_ROOT_RECONNECT_REQUIRED', 'Project root identity changed');
   const target = targetDirectory;
@@ -68,7 +72,7 @@ async function assertNoSymlinkParents(root: string, targetDirectory: string): Pr
       if (info.isSymbolicLink() || !info.isDirectory()) throw coded('PROJECT_OUTPUT_UNAVAILABLE', 'Project output directory is unavailable');
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String((error as CodedError).code) : '';
-      if (code === 'ENOENT') { await mkdir(current, { mode: 0o700 }); continue; }
+      if (code === 'ENOENT' && createMissing) { await mkdir(current, { mode: 0o700 }); continue; }
       throw error;
     }
   }
@@ -106,6 +110,68 @@ export function createProjectWritePlanService(input: {
   ttlMs?: number;
 }): ProjectWritePlanService {
   const database = input.database; const now = input.now ?? (() => new Date()); const makeId = input.idFactory ?? randomUUID; const ttl = input.ttlMs ?? TTL_MS;
+
+  async function indexCompletedOutput(plan: PlanRow): Promise<ProjectWriteAction> {
+    try {
+      const project = rowOrThrow(database, plan.project_id);
+      const target = resolveProjectOutputPath(project.root_path, plan.category, basename(plan.target_path));
+      await assertNoSymlinkParents(project.root_path, dirname(target), false);
+      const before = await lstat(target);
+      if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_CONTENT_BYTES || await realpath(target) !== target) throw coded('PROJECT_FILE_CHANGED', 'Saved output is unavailable');
+      const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let bytes: Buffer;
+      let modifiedAt: string;
+      try {
+        const opened = await handle.stat();
+        if (opened.dev !== before.dev || opened.ino !== before.ino || opened.size > MAX_CONTENT_BYTES) throw coded('PROJECT_FILE_CHANGED', 'Saved output was replaced');
+        const buffer = Buffer.alloc(MAX_CONTENT_BYTES + 1);
+        let length = 0;
+        while (length < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+          if (!bytesRead) break;
+          length += bytesRead;
+        }
+        const after = await handle.stat();
+        const current = await lstat(target);
+        await assertNoSymlinkParents(project.root_path, dirname(target), false);
+        if (length > MAX_CONTENT_BYTES || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs
+          || current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino || await realpath(target) !== target) throw coded('PROJECT_FILE_CHANGED', 'Saved output changed while indexing');
+        bytes = buffer.subarray(0, length);
+        if (sha256(bytes) !== plan.content_sha256) throw coded('PROJECT_FILE_CHANGED', 'Saved output has been edited');
+        modifiedAt = after.mtime.toISOString();
+      } finally { await handle.close(); }
+      const parsed = await parseAttachment(bytes, 'text/markdown', new AbortController().signal);
+      const content = parsed.status === 'ready' ? parsed.pages.map(page => page.text).join('\n') : '';
+      const readable = parsed.status === 'ready' && content.trim().length > 0;
+      const index = database.transaction(() => {
+        const currentProject = rowOrThrow(database, plan.project_id);
+        if (currentProject.root_path !== project.root_path || currentProject.source_revision !== project.source_revision || currentProject.availability !== 'ready') {
+          throw coded('PROJECT_SOURCE_STALE', 'Project context changed while indexing the saved output');
+        }
+        // A confirmed new output is already known. Add that snapshot directly;
+        // rescanning would advance sourceRevision and invalidate sibling plans.
+        const insert = database.prepare(`INSERT INTO personal_project_files
+          (project_id,relative_path,kind,bytes,modified_at,sha256,parse_status,parse_problem,content_text,origin,indexed_revision)
+          VALUES (?,?,?,?,?,?,?,?,?,'output',?) ON CONFLICT(project_id,relative_path) DO UPDATE SET
+          kind=excluded.kind,bytes=excluded.bytes,modified_at=excluded.modified_at,sha256=excluded.sha256,
+          parse_status=excluded.parse_status,parse_problem=excluded.parse_problem,content_text=excluded.content_text,
+          origin='output',indexed_revision=excluded.indexed_revision`);
+        for (const path of ['AI工作区', `AI工作区/${plan.category}`]) {
+          insert.run(plan.project_id, path, 'directory', null, null, null, null, null, null, project.source_revision);
+        }
+        insert.run(plan.project_id, plan.target_path, 'file', bytes.length, modifiedAt, plan.content_sha256,
+          readable ? 'readable' : 'failed', readable ? null : parsed.status === 'ready' ? 'NO_READABLE_TEXT' : 'PARSE_FAILED', readable ? content : null, project.source_revision);
+        database.prepare('UPDATE personal_project_write_plans SET problem = NULL WHERE id = ? AND status = \'completed\'').run(plan.id);
+      });
+      index.immediate();
+    } catch {
+      // The file and successful operation receipt were committed first. Index
+      // failures must not masquerade as failed writes or cause another write.
+      database.prepare('UPDATE personal_project_write_plans SET problem = ? WHERE id = ? AND status = \'completed\'').run(OUTPUT_INDEX_PENDING, plan.id);
+    }
+    return publicAction(database, planRow(database, plan.id));
+  }
+
   async function proposeDraft(value: { projectId: string; conversationId: string; messageId: string; category: ProjectCategory; title: string; summary: string; content: string; expectedRevision: number }): Promise<ProjectWriteAction> {
     const category = projectCategorySchema.safeParse(value.category); if (!category.success) throw coded('PROJECT_CATEGORY_INVALID', 'Project output category is invalid');
     const title = value.title.trim(); if (title.length === 0) throw coded('PROJECT_TITLE_INVALID', 'Project output title is required');
@@ -127,8 +193,15 @@ export function createProjectWritePlanService(input: {
     return publicAction(database, planRow(database, id));
   }
   async function confirm(planId: string, conversationId: string, clientRequestId: string): Promise<ProjectWriteAction> {
+    const plan = planRow(database, planId, conversationId);
+    return withProjectLock(database, plan.project_id, () => confirmUnlocked(planId, conversationId, clientRequestId));
+  }
+  async function confirmUnlocked(planId: string, conversationId: string, clientRequestId: string): Promise<ProjectWriteAction> {
     let plan = planRow(database, planId, conversationId);
-    if (plan.confirm_request_id !== null) { if (plan.confirm_request_id === clientRequestId) return publicAction(database, plan); throw coded('PROJECT_WRITE_PLAN_RESOLVED', 'Project write plan already resolved'); }
+    if (plan.confirm_request_id !== null) {
+      if (plan.confirm_request_id === clientRequestId) return plan.status === 'completed' && plan.problem === OUTPUT_INDEX_PENDING ? indexCompletedOutput(plan) : publicAction(database, plan);
+      throw coded('PROJECT_WRITE_PLAN_RESOLVED', 'Project write plan already resolved');
+    }
     if (plan.status !== 'pending') throw coded('PROJECT_WRITE_PLAN_RESOLVED', 'Project write plan already resolved');
     const project = rowOrThrow(database, plan.project_id);
     if (Date.parse(plan.expires_at) <= now().getTime() || project.availability !== 'ready' || project.source_revision !== plan.source_revision) {
@@ -162,7 +235,7 @@ export function createProjectWritePlanService(input: {
       database.prepare(`INSERT INTO personal_project_operations (id, project_id, plan_id, event_type, target_path, old_sha256, new_sha256, payload_json, created_at) VALUES (?, ?, ?, 'project-write', ?, NULL, ?, ?, ?)`).run(makeId(), plan.project_id, plan.id, plan.target_path, digest, JSON.stringify({ status: 'completed', sourceRevision: plan.source_revision }), timestamp);
     });
     transaction.immediate();
-    return publicAction(database, planRow(database, plan.id, conversationId));
+    return indexCompletedOutput(planRow(database, plan.id, conversationId));
   }
   function cancel(planId: string, conversationId: string, clientRequestId: string): ProjectWriteAction {
     const plan = planRow(database, planId, conversationId);

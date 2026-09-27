@@ -7,7 +7,7 @@ import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js'
 type Fixture = { vault: string; userData: string; project: string };
 const nestedFileName = '非常长但可辨认的项目需求说明与下一阶段内容执行计划.md';
 const nestedPath = `客户资料/${nestedFileName}`;
-const nestedContent = '# 项目需求说明\n合成资料：先核对客户需求，再安排下周的内容计划。\n';
+const nestedContent = '# 项目需求说明\n合成资料：先核对客户需求，再安排下周的内容计划。\n中考美术：录取人数与年度数据。\n';
 
 async function resize(instance: ElectronApplication, window: Page, width: number): Promise<void> {
   await instance.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]!.setSize(size, size === 720 ? 800 : 900), width);
@@ -118,6 +118,31 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(panel.getByRole('button', { name: '发送消息', exact: true })).toBeInViewport();
       await expectNoHorizontalOverflow(window, '.assistant-panel');
       await window.screenshot({ path: info.outputPath('project-assistant-1360.png') });
+
+      // Choosing a method keeps the current project question and its visible
+      // scope; a deliberate visit to the brain leaves that project context.
+      const projectUrl = window.url();
+      await window.getByRole('link', { name: 'Skill 库', exact: true }).click();
+      await expect(window).toHaveURL(/\/skills$/u);
+      await expect(panel.getByRole('heading', { name: '项目问问', exact: true })).toBeVisible();
+      await expect(panel.getByText('A项目', { exact: true })).toBeVisible();
+      await expect(panel.getByRole('region', { name: '项目问问范围', exact: true })).toBeVisible();
+      await expect(composer).toHaveValue('起草下一步计划');
+      await window.goBack();
+      await expect(window).toHaveURL(projectUrl);
+      await expect(panel).toBeVisible();
+      await expect(composer).toHaveValue('起草下一步计划');
+      await expect(panel.getByText('草稿已保留在本机 · 新对话会保留旧记录', { exact: true })).toBeVisible();
+      await window.getByRole('link', { name: '大脑总览', exact: true }).click();
+      await expect(panel.getByLabel('资料范围', { exact: true })).toHaveValue('brain');
+      await expect(panel.getByRole('region', { name: '项目问问范围', exact: true })).toHaveCount(0);
+      await expect(composer).toHaveValue('');
+      await window.goBack();
+      await expect(window).toHaveURL(projectUrl);
+      await ask.click();
+      await expect(panel.getByText('A项目', { exact: true })).toBeVisible();
+      await expect(composer).toHaveValue('起草下一步计划');
+      expect(sendAttempts).toBe(0);
       await panel.getByRole('button', { name: '关闭问问', exact: true }).click();
       await expect(panel).toBeHidden();
 
@@ -153,6 +178,10 @@ for (const mode of ['development', 'packaged'] as const) {
       await search.fill('核对客户需求');
       await expect(nestedFile).toBeVisible();
       await expect(files.getByRole('button', { name: /^(?:展开|收起)文件夹：/u })).toHaveCount(0);
+      await search.fill('美术中考');
+      await expect(nestedFile).toBeVisible();
+      await search.fill('录取数据');
+      await expect(nestedFile).toBeVisible();
       await search.fill('不存在的项目资料xyz');
       await expect(files.getByText(/没有找到/u)).toBeVisible();
       await expect(nestedFile).toHaveCount(0);

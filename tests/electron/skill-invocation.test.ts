@@ -11,12 +11,16 @@ const skills = [
     directory: 'article-structure',
     name: '公众号文章结构',
     marker: 'SKILL_METHOD_STRUCTURE_ONLY',
+    templateMarker: 'SKILL_REFERENCE_STRUCTURE_TEMPLATE_ONLY',
+    workflowMarker: 'SKILL_REFERENCE_STRUCTURE_WORKFLOW_UNREAD',
     method: '先确定唯一核心观点，再组织问题、证据和结论。'
   },
   {
     directory: 'article-polish',
     name: '公众号文章润色',
     marker: 'SKILL_METHOD_POLISH_ONLY',
+    templateMarker: 'SKILL_REFERENCE_POLISH_TEMPLATE_ONLY',
+    workflowMarker: 'SKILL_REFERENCE_POLISH_WORKFLOW_UNREAD',
     method: '先保留原意，再压缩重复表达并改善段落衔接。'
   }
 ] as const;
@@ -56,6 +60,16 @@ async function makeFixture() {
     originals.set(skill.name, bytes);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, bytes);
+    for (const [referencePath, marker] of [
+      ['references/templates.md', skill.templateMarker],
+      ['references/workflow.md', skill.workflowMarker]
+    ] as const) {
+      const referenceBytes = Buffer.from(`\uFEFF# ${skill.name}参考资料\r\n\r\n${marker}\r\n仅在需要此参考文件时读取，不改写原文件。\r\n`, 'utf8');
+      const relativePath = join(skill.directory, referencePath);
+      originals.set(relativePath, referenceBytes);
+      await mkdir(dirname(join(skillsRoot, relativePath)), { recursive: true });
+      await writeFile(join(skillsRoot, relativePath), referenceBytes);
+    }
   }
   return { vault, userData, skillsRoot, originals };
 }
@@ -76,10 +90,11 @@ async function launch(mode: FixtureMode, fixture: Awaited<ReturnType<typeof make
 }
 
 async function installProviderFixture(instance: ElectronApplication): Promise<void> {
-  await instance.evaluate(() => {
+  await instance.evaluate((_electron, fixtureSkills) => {
     const state = globalThis as unknown as { completionCalls: number; completionBodies: string[] };
     state.completionCalls = 0;
     state.completionBodies = [];
+    let selectedSkill: typeof fixtureSkills[number] | undefined;
     globalThis.fetch = async (input, init) => {
       const url = String(input);
       if (url === 'https://api.deepseek.com/models') {
@@ -88,8 +103,25 @@ async function installProviderFixture(instance: ElectronApplication): Promise<vo
       if (url !== 'https://api.deepseek.com/chat/completions') throw new Error('SKILL_INVOCATION_TEST_NETWORK_FORBIDDEN');
       state.completionCalls += 1;
       state.completionBodies.push(String(init?.body ?? ''));
+      const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }> };
+      const messages = JSON.stringify(body.messages ?? []);
       const chunk = (delta: Record<string, unknown>, finishReason: string | null, usage?: Record<string, unknown>) =>
         `data: ${JSON.stringify({ id: 'skill-answer', created: 1, model: 'deepseek-v4-pro', choices: [{ index: 0, delta, finish_reason: finishReason }], ...(usage ? { usage } : {}) })}\n\n`;
+      if (state.completionCalls === 1) {
+        const selected = fixtureSkills.filter(skill => messages.includes(skill.marker));
+        if (selected.length !== 1) throw new Error('SKILL_INVOCATION_TEST_CONFIRMED_SKILL_MISSING');
+        selectedSkill = selected[0];
+        return new Response(
+          chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'skill-reference-call-1', type: 'function', function: { name: 'read_skill_reference', arguments: JSON.stringify({ path: 'references/templates.md' }) } }] }, null)
+          + chunk({}, 'tool_calls', { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 })
+          + 'data: [DONE]\n\n',
+          { headers: { 'content-type': 'text/event-stream' } }
+        );
+      }
+      if (state.completionCalls !== 2 || !selectedSkill) throw new Error('SKILL_INVOCATION_TEST_UNEXPECTED_MODEL_CALL');
+      const referenceMessage = body.messages?.find(message => message.role === 'tool' && message.tool_call_id === 'skill-reference-call-1');
+      if (!referenceMessage || !JSON.stringify(referenceMessage.content).includes(selectedSkill.templateMarker)) throw new Error('SKILL_INVOCATION_TEST_REFERENCE_RESULT_MISSING');
+      if (fixtureSkills.some(skill => messages.includes(skill.workflowMarker) || (skill !== selectedSkill && (messages.includes(skill.marker) || messages.includes(skill.templateMarker))))) throw new Error('SKILL_INVOCATION_TEST_UNREQUESTED_REFERENCE_LEAKED');
       return new Response(
         chunk({ role: 'assistant', content: '已按确认的本地 Skill 完成文章草稿。' }, null)
         + chunk({}, 'stop', { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 })
@@ -97,7 +129,7 @@ async function installProviderFixture(instance: ElectronApplication): Promise<vo
         { headers: { 'content-type': 'text/event-stream' } }
       );
     };
-  });
+  }, skills);
 }
 
 async function providerState(instance: ElectronApplication): Promise<{ completionCalls: number; completionBodies: string[] }> {
@@ -120,7 +152,7 @@ async function configureAndOpenAssistant(window: Page) {
 }
 
 for (const mode of ['development', 'packaged'] as const) {
-  test(`${mode}: confirms one local Skill before the only model call and never rewrites Skill files`, async () => {
+  test(`${mode}: confirms one local Skill before model calls, reads only its requested reference, and preserves Skill files`, async () => {
     test.setTimeout(120_000);
     const fixture = await makeFixture();
     let instance: ElectronApplication | undefined;
@@ -151,17 +183,39 @@ for (const mode of ['development', 'packaged'] as const) {
       await recommendation.getByRole('button', { name: '使用此 Skill', exact: true }).click();
       await expect(panel.getByText('已按确认的本地 Skill 完成文章草稿。', { exact: true })).toBeVisible({ timeout: 45_000 });
       await expect(panel.getByText(new RegExp(`已使用 Skill：${confirmedName}`, 'u'))).toBeVisible();
+      await panel.locator('.assistant-steps > summary').click();
+      await expect(panel.locator('.assistant-steps li').filter({ hasText: '读取 Skill 参考文件' })).toContainText('已完成');
       const captured = await providerState(instance);
-      expect(captured.completionCalls).toBe(1);
-      expect(captured.completionBodies).toHaveLength(1);
+      expect(captured.completionCalls).toBe(2);
+      expect(captured.completionBodies).toHaveLength(2);
       expect(captured.completionBodies[0]).toContain('BEGIN USER-CONFIRMED LOCAL SKILL');
       expect(captured.completionBodies[0]).toContain(confirmedSkill!.marker);
       expect(captured.completionBodies[0]).not.toContain(skippedSkill!.marker);
+      expect(captured.completionBodies[0]).toContain('references/templates.md');
+      expect(captured.completionBodies[0]).toContain('references/workflow.md');
+      for (const skill of skills) {
+        expect(captured.completionBodies[0]).not.toContain(skill.templateMarker);
+        expect(captured.completionBodies[0]).not.toContain(skill.workflowMarker);
+        expect(captured.completionBodies[1]).not.toContain(skill.workflowMarker);
+      }
+      expect(captured.completionBodies[1]).toContain(confirmedSkill!.templateMarker);
+      expect(captured.completionBodies[1]).not.toContain(skippedSkill!.marker);
+      expect(captured.completionBodies[1]).not.toContain(skippedSkill!.templateMarker);
+      const secondRequest = JSON.parse(captured.completionBodies[1]!) as { messages: Array<{ role: string; content: string; tool_call_id?: string }> };
+      const referenceMessage = secondRequest.messages.find(message => message.role === 'tool' && message.tool_call_id === 'skill-reference-call-1');
+      expect(referenceMessage).toBeTruthy();
+      const referenceResult = JSON.parse(referenceMessage!.content);
+      expect(referenceResult).toMatchObject({ path: 'references/templates.md', revision: expect.any(String), content: expect.stringContaining(confirmedSkill!.templateMarker), offset: 0, truncated: false });
+      expect(referenceResult).toHaveProperty('nextOffset');
 
       await instance.close();
       instance = undefined;
       for (const skill of skills) {
         await expect(readFile(join(fixture.skillsRoot, skill.directory, 'SKILL.md'))).resolves.toEqual(fixture.originals.get(skill.name));
+        for (const referencePath of ['references/templates.md', 'references/workflow.md']) {
+          const relativePath = join(skill.directory, referencePath);
+          await expect(readFile(join(fixture.skillsRoot, relativePath))).resolves.toEqual(fixture.originals.get(relativePath));
+        }
       }
     } finally {
       await instance?.close();

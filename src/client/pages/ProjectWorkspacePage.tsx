@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, FolderKanban, MessageCircle, RefreshCw, ShieldCheck } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, Check, FolderKanban, MessageCircle, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import type { ApiClientResult } from '../api/client.js';
 import type { ProjectScanPreview, ProjectSummary } from '../../shared/api/projects.js';
@@ -10,7 +10,7 @@ import { ProjectFilesPanel } from '../components/projects/ProjectFilesPanel.js';
 import { ProjectStatusCard } from '../components/projects/ProjectStatusCard.js';
 import { PageState } from '../components/PageState.js';
 import { isCancelled } from './pageSupport.js';
-import { askAssistant, PROJECT_WORKSPACE_UPDATED_EVENT } from '../components/assistant/assistantIntent.js';
+import { askAssistant, PROJECT_WORKSPACE_UPDATED_EVENT, type ProjectWorkspaceUpdate } from '../components/assistant/assistantIntent.js';
 import '../styles/projects.css';
 
 function resultMessage(result: ApiClientResult<unknown>, fallback: string): string {
@@ -37,14 +37,18 @@ export function ProjectWorkspacePage() {
   const [refreshing, setRefreshing] = useState(false);
   const [staleNotice, setStaleNotice] = useState(false);
   const [filesRefreshVersion, setFilesRefreshVersion] = useState(0);
+  const [savedFiles, setSavedFiles] = useState<Array<NonNullable<ProjectWorkspaceUpdate['savedFile']>>>([]);
+  const savedPaths = useMemo(() => savedFiles.map(file => file.relativePath), [savedFiles]);
   const [editing, setEditing] = useState(false);
   const controllerRef = useRef<AbortController | undefined>(undefined);
+  const loadedProjectIdRef = useRef<string | undefined>(undefined);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (background = false): Promise<void> => {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
-    setState((current) => current === 'ready' ? 'refreshing' : 'loading');
+    const preserve = background && id !== undefined && loadedProjectIdRef.current === id;
+    if (!preserve) setState((current) => current === 'ready' && loadedProjectIdRef.current === id ? 'refreshing' : 'loading');
     setMessage(undefined);
     if (!id || projectsApi === undefined) {
       setState('failed');
@@ -55,15 +59,16 @@ export function ProjectWorkspacePage() {
       const result = await projectsApi.get(id, controller.signal);
       if (controller.signal.aborted || isCancelled(result)) return;
       if (!result.ok) {
-        setState('failed');
+        setState(preserve ? 'ready' : 'failed');
         setMessage(resultMessage(result, '项目工作区暂时无法读取。'));
         return;
       }
-      setProject(result.value);
+      setProject(current => background && current?.id === result.value.id && current.sourceRevision > result.value.sourceRevision ? current : result.value);
+      loadedProjectIdRef.current = result.value.id;
       setState('ready');
     } catch {
       if (!controller.signal.aborted) {
-        setState('failed');
+        setState(preserve ? 'ready' : 'failed');
         setMessage('项目工作区暂时无法读取。');
       }
     }
@@ -75,14 +80,20 @@ export function ProjectWorkspacePage() {
   }, [load]);
 
   useEffect(() => {
+    setSavedFiles([]);
     const refreshFiles = (event: Event) => {
-      const detail = (event as CustomEvent<{ projectId?: string }>).detail;
+      const detail = (event as CustomEvent<ProjectWorkspaceUpdate>).detail;
       if (!id || detail?.projectId !== id) return;
       setFilesRefreshVersion(value => value + 1);
+      const saved = detail.savedFile;
+      if (saved) {
+        setSavedFiles(files => [saved, ...files.filter(file => file.relativePath !== saved.relativePath)].slice(0, 10));
+        void load(true);
+      }
     };
     window.addEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, refreshFiles);
     return () => window.removeEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, refreshFiles);
-  }, [id]);
+  }, [id, load]);
 
   async function refreshProject(): Promise<void> {
     if (!id || projectsApi === undefined || project === undefined || refreshing || reconnecting) return;
@@ -102,7 +113,12 @@ export function ProjectWorkspacePage() {
       }
       setProject(result.value);
       window.dispatchEvent(new CustomEvent(PROJECT_WORKSPACE_UPDATED_EVENT, { detail: { projectId: id } }));
-      setMessage('项目资料已更新。');
+      if (result.value.availability === 'ready') {
+        setSavedFiles(files => files.map(({ problem: _problem, ...file }) => file));
+        setMessage('项目资料已更新。');
+      } else {
+        setMessage(result.value.availability === 'scanning' ? '项目资料仍在更新，请稍后重试。' : '项目资料更新未完成，请刷新或重新连接。');
+      }
     } catch {
       setMessage('项目资料更新未完成，请重试。');
     } finally {
@@ -162,6 +178,7 @@ export function ProjectWorkspacePage() {
       }
       setProject(result.value);
       setReconnectPreview(undefined);
+      setSavedFiles([]);
       setStaleNotice(true);
       // Keep an already-open project AssistantPanel on the same source
       // revision. The panel owns the draft binding, so it must refresh its
@@ -178,7 +195,7 @@ export function ProjectWorkspacePage() {
   if (state === 'failed') {
     return <section className="projects-page" aria-labelledby="project-workspace-title"><Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link><header className="projects-page__heading"><div><h1 id="project-workspace-title">项目资料</h1></div></header><PageState state={{ status: 'operation-error', message: message ?? '项目工作区暂时无法读取。' }} /><button type="button" className="projects-button projects-button--quiet" onClick={() => void load()}><RefreshCw size={15} aria-hidden="true" />重新读取</button></section>;
   }
-  if (state === 'loading' || project === undefined) {
+  if (state === 'loading' || project === undefined || project.id !== id) {
     return <section className="projects-page" aria-labelledby="project-workspace-title"><header className="projects-page__heading"><div><h1 id="project-workspace-title">项目资料</h1></div></header><PageState state={{ status: 'loading', message: '正在读取项目工作区。' }} /></section>;
   }
 
@@ -195,8 +212,12 @@ export function ProjectWorkspacePage() {
       </header>
       {message !== undefined && <p className="projects-inline-message" role="status">{message}</p>}
       {staleNotice && <p className="project-stale-notice" role="status"><ShieldCheck size={15} aria-hidden="true" />重新连接后，旧的项目写入计划不会自动执行；请重新确认当前资料。</p>}
+      {savedFiles.length > 0 && <section className="project-saved-files" aria-label="最近保存的项目文件">
+        <div className="project-saved-files__heading"><strong>最近保存</strong><span>最近 {savedFiles.length} 个文件</span></div>
+        <ul aria-live="polite" aria-relevant="additions text">{savedFiles.map(file => <li key={file.relativePath}><Check size={15} aria-hidden="true" /><span className="project-saved-files__path">{file.relativePath}</span><span className="project-saved-files__status">已保存</span>{file.problem && <p role="status">{file.problem}</p>}</li>)}</ul>
+      </section>}
       {editing && project.availability === 'ready' ? <details className="project-workspace-source-status"><summary>项目资料 · {project.readableFileCount} 份可读{refreshing ? ' · 更新中…' : ''}</summary><ProjectStatusCard project={project} onRefresh={() => void refreshProject()} onReconnect={() => void beginReconnect()} refreshing={refreshing} reconnecting={reconnecting} /></details> : <ProjectStatusCard project={project} onRefresh={() => void refreshProject()} onReconnect={() => void beginReconnect()} refreshing={refreshing} reconnecting={reconnecting} {...(project.availability === 'reconnect-required' ? { message: '请重新选择原项目文件夹或它的新位置。' } : {})} />}
-      <ProjectWorkbench key={project.id} api={api} projectId={project.id} onEditingChange={setEditing} files={<ProjectFilesPanel key={`${project.id}:${filesRefreshVersion}`} api={api} projectId={project.id} revision={project.sourceRevision} onAsk={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })} />} />
+      <ProjectWorkbench key={project.id} api={api} projectId={project.id} onEditingChange={setEditing} files={<ProjectFilesPanel key={project.id} api={api} projectId={project.id} revision={project.sourceRevision} refreshVersion={filesRefreshVersion} savedPaths={savedPaths} onAsk={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })} />} />
     </section>
   );
 }

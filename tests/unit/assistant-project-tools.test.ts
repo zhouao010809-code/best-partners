@@ -50,6 +50,67 @@ it('shares one source allocator with project tools and never exposes a global wr
   expect((second as { markdown: string }).markdown).toBe('# 项目');
 });
 
+it('reads the path returned by project search as the same file and citation as its relative path', async () => {
+  const f = fixture();
+  const result = await f.execute('search_project_files', { query: '获客' }) as { items: { path: string; relativePath: string; sourceId: string }[] };
+  const hit = result.items[0]!;
+  await expect(f.execute('read_project_file', { path: hit.path, length: 4 })).resolves.toMatchObject({
+    relativePath: hit.relativePath, path: hit.path, sourceId: hit.sourceId, markdown: '# 项目'
+  });
+  expect(f.projectService.readFile).toHaveBeenCalledWith(projectId, hit.relativePath);
+  await expect(f.execute('read_project_file', { path: hit.relativePath, length: 4 })).resolves.toMatchObject({ sourceId: hit.sourceId });
+});
+
+it.each([
+  `project:${randomUUID()}/brief.md`,
+  `project:${projectId}`,
+  `project:${projectId}/`,
+  `project:${projectId}//brief.md`,
+  `project:${projectId}/../brief.md`,
+  `project:${projectId}/./brief.md`,
+  `project:${projectId}/C:/brief.md`,
+  `project:${projectId}/brief\\file.md`,
+  `project:${projectId}/project:${projectId}/brief.md`,
+  `Project:${projectId}/brief.md`,
+  `project://${projectId}/brief.md`,
+  `project:/brief.md`,
+  '/private/brief.md',
+  'file:///private/brief.md',
+  'https://example.com/brief.md',
+  'C:/brief.md',
+  '../brief.md',
+  'brief\u0000.md'
+])('rejects a foreign, malformed, or unsafe project read path before reading: %s', async path => {
+  const f = fixture();
+  await expect(f.execute('read_project_file', { path })).rejects.toMatchObject({ code: 'PROJECT_SCOPE_LIMIT' });
+  expect(f.projectService.readFile).not.toHaveBeenCalled();
+});
+
+it('reports matched search entries separately from returned files and does not imply a full inventory', async () => {
+  const f = fixture();
+  vi.mocked(f.projectService.listFiles).mockResolvedValueOnce({
+    items: [
+      { relativePath: 'brief.md', kind: 'file', origin: 'source', parseStatus: 'readable' },
+      { relativePath: 'brief.docx', kind: 'file', origin: 'source', parseStatus: 'unsupported' },
+      { relativePath: 'briefs', kind: 'directory', origin: 'source', parseStatus: 'unsupported' }
+    ], total: 7, revision
+  });
+  await expect(f.execute('search_project_files', { query: 'brief', limit: 3 })).resolves.toMatchObject({
+    items: [{ relativePath: 'brief.md' }, { relativePath: 'brief.docx' }], matchedCount: 7, returnedCount: 2, unsupportedCount: 1, hasMore: true,
+    coverage: 'query-matches',
+    message: expect.stringContaining('不代表项目文件总数'),
+    readHint: expect.stringContaining('relativePath')
+  });
+});
+
+it('keeps project edit proposals restricted to relative paths', async () => {
+  const f = fixture();
+  await expect(f.execute('propose_project_edit', {
+    path: `project:${projectId}/brief.md`, replacement: '替换正文', rationale: '修正错别字'
+  })).rejects.toMatchObject({ code: 'PROJECT_SCOPE_LIMIT' });
+  expect(f.projectService.readFile).not.toHaveBeenCalled();
+});
+
 it('only proposes a project draft after explicit save intent', async () => {
   const f = fixture('帮我分析选题，不要保存到项目');
   await expect(f.execute('save_project_draft', { category: '内容草稿', title: '选题', summary: '摘要', content: '正文' })).rejects.toMatchObject({ code: 'ASSISTANT_INTENT_REQUIRED' });

@@ -225,9 +225,8 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     return () => { disposed = true; projectRequest.current?.abort(); };
   }, [draftStore.enterProject, loadProjectSummary, projectId]);
 
-  // A workspace reconnect (or a confirmed project output) changes the
-  // server-owned project revision. Refresh the summary and rebind the current
-  // draft so an already-open panel cannot keep sending with the old revision.
+  // Reconnects change the source revision; confirmed outputs change file counts.
+  // Refresh the summary and rebind the draft to the server-owned source revision.
   useEffect(() => {
     if (!projectId) return;
     const refreshProject = (event: Event) => {
@@ -368,7 +367,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   useEffect(() => {
     if (!open) return;
     textArea.current?.focus();
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.isComposing && !document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) { event.preventDefault(); event.stopPropagation(); if (expanded) { setExpanded(false); return; } clearSkillRecommendation(); onClose(); document.getElementById('assistant-toggle')?.focus(); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.isComposing && !document.querySelector('dialog[open], [role="dialog"][aria-modal="true"], [data-escape-layer]')) { event.preventDefault(); event.stopPropagation(); if (expanded) { setExpanded(false); return; } clearSkillRecommendation(); onClose(); document.getElementById('assistant-toggle')?.focus(); } };
     window.addEventListener('keydown', escape, true);
     return () => window.removeEventListener('keydown', escape, true);
   }, [open, onClose, expanded]);
@@ -619,7 +618,9 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     const next = result.value;
     const current = conversationRef.current;
     if (current) receive({ ...current, messages: current.messages.map(message => ({ ...message, actions: message.actions.map(item => item.type === 'project-write' && item.id === action.id ? next : item) })) });
-    if (!cancel) window.dispatchEvent(new CustomEvent(PROJECT_WORKSPACE_UPDATED_EVENT, { detail: { projectId: action.projectId } }));
+    if (!cancel && next.status === 'completed') window.dispatchEvent(new CustomEvent(PROJECT_WORKSPACE_UPDATED_EVENT, {
+      detail: { projectId: next.projectId, savedFile: { operationId: next.id, relativePath: next.resultPath ?? next.targetPath, ...(next.problem ? { problem: next.problem } : {}) } }
+    }));
   }
 
   function regenerateAction(action: AssistantPlanAction): void {

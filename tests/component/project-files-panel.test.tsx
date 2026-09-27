@@ -95,7 +95,7 @@ it('clears the old preview on tab changes and discards delayed reads after switc
   expect(screen.queryByText('不应出现的旧正文')).not.toBeInTheDocument();
 });
 
-it('clears and cancels a preview as soon as search changes and when the project revision refreshes', async () => {
+it('clears a preview on search changes and cancels its pending read when the project revision refreshes', async () => {
   const f = fixture();
   const user = userEvent.setup();
   const rendered = render(<ProjectFilesPanel api={f.api} projectId="project-1" revision={1} />);
@@ -112,6 +112,126 @@ it('clears and cancels a preview as soon as search changes and when the project 
   expect(signal.aborted).toBe(true);
   await act(async () => late.resolve(ok({ ...file('brief.md'), content: '已过期的正文' })));
   expect(screen.queryByText('已过期的正文')).not.toBeInTheDocument();
+});
+
+it('refreshes both collections and the selected output while preserving the active range and expanded folders', async () => {
+  const path = 'AI工作区/文案/方案.md';
+  const outputs = [folder('AI工作区'), folder('AI工作区/文案'), file(path)];
+  const f = fixture([file('brief.md')], outputs);
+  const user = userEvent.setup();
+  const view = render(<ProjectFilesPanel api={f.api} projectId="project-1" revision={1} refreshVersion={0} />);
+  await user.click(screen.getByRole('tab', { name: '已保存产出' }));
+  await user.click(await screen.findByRole('button', { name: '展开文件夹：AI工作区' }));
+  await user.click(screen.getByRole('button', { name: '展开文件夹：AI工作区/文案' }));
+  await user.click(screen.getByRole('button', { name: `打开文件：${path}` }));
+  await screen.findByText(`正文：${path}`);
+  const sourceRefresh = deferred<ApiClientResult<ProjectFilePage>>();
+  const outputRefresh = deferred<ApiClientResult<ProjectFilePage>>();
+  const detailRefresh = deferred<ApiClientResult<ProjectFileDetail>>();
+  f.files.mockImplementation((_id, query) => query.origin === 'output' ? outputRefresh.promise : sourceRefresh.promise);
+  f.read.mockReturnValueOnce(detailRefresh.promise);
+  view.rerender(<ProjectFilesPanel api={f.api} projectId="project-1" revision={1} refreshVersion={1} savedPaths={[path]} />);
+  expect(f.files).toHaveBeenCalledTimes(4);
+  expect(f.read).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('tab', { name: '已保存产出' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('button', { name: '收起文件夹：AI工作区/文案' })).toBeVisible();
+  expect(screen.getByRole('button', { name: `打开文件：${path}` })).toHaveAttribute('aria-pressed', 'true');
+  expect(within(screen.getByRole('button', { name: `打开文件：${path}` })).getByText('已保存')).toBeVisible();
+  expect(screen.getByText(`正文：${path}`)).toBeVisible();
+  expect(screen.getByText(/正在更新已保存产出/u)).toBeVisible();
+  expect(screen.getByText(/正在更新文件内容/u)).toBeVisible();
+  await act(async () => {
+    sourceRefresh.resolve(ok({ items: [file('brief.md')], total: 1, revision: 2 }));
+    outputRefresh.resolve(ok({ items: outputs, total: outputs.length, revision: 2 }));
+    detailRefresh.resolve(ok({ ...file(path), content: '已保存的新正文' }));
+  });
+  expect(await screen.findByText('已保存的新正文')).toBeVisible();
+  expect(screen.queryByText(`正文：${path}`)).not.toBeInTheDocument();
+  expect(screen.queryByText(/正在更新文件内容/u)).not.toBeInTheDocument();
+});
+
+it('preserves a search and selection on revision refresh and reports retained stale content until an explicit retry succeeds', async () => {
+  const f = fixture();
+  const user = userEvent.setup();
+  const view = render(<ProjectFilesPanel api={f.api} projectId="project-1" revision={1} />);
+  await screen.findByRole('button', { name: '打开文件：brief.md' });
+  await user.type(screen.getByRole('textbox', { name: '搜索项目文件' }), 'brief');
+  await user.click(await screen.findByRole('button', { name: '打开文件：brief.md' }));
+  await screen.findByText('正文：brief.md');
+  f.files.mockResolvedValue({ ok: false, state: { status: 'operation-error', message: '列表连接中断' } });
+  f.read.mockResolvedValueOnce({ ok: false, state: { status: 'operation-error', message: '正文连接中断' } });
+  view.rerender(<ProjectFilesPanel api={f.api} projectId="project-1" revision={2} />);
+  expect(await screen.findByRole('heading', { name: '项目资料未刷新' })).toBeVisible();
+  expect(await screen.findByRole('heading', { name: '文件内容未刷新' })).toBeVisible();
+  expect(screen.getByText('正文：brief.md')).toBeVisible();
+  expect(screen.getByRole('textbox', { name: '搜索项目文件' })).toHaveValue('brief');
+  expect(screen.getByRole('button', { name: '打开文件：brief.md' })).toHaveAttribute('aria-pressed', 'true');
+  expect(f.files).toHaveBeenLastCalledWith('project-1', { origin: 'output', search: 'brief', limit: 200 }, expect.any(AbortSignal));
+  expect(screen.getByText(/仍显示上次读取的列表/u)).toBeVisible();
+  expect(screen.getByText(/仍显示上次读取的内容/u)).toBeVisible();
+  f.files.mockResolvedValueOnce(ok({ items: [file('brief.md')], total: 1, revision: 2 }));
+  await user.click(screen.getByRole('button', { name: '重新读取项目资料' }));
+  expect(screen.getByText('正文：brief.md')).toBeVisible();
+  f.read.mockResolvedValueOnce(ok({ ...file('brief.md'), content: '重试后的正文' }));
+  await user.click(screen.getByRole('button', { name: '重新读取文件' }));
+  expect(await screen.findByText('重试后的正文')).toBeVisible();
+  expect(screen.queryByRole('heading', { name: '文件内容未刷新' })).not.toBeInTheDocument();
+});
+
+it('aborts a superseded automatic refresh and ignores its late list and preview responses', async () => {
+  const f = fixture();
+  const user = userEvent.setup();
+  const view = render(<ProjectFilesPanel api={f.api} projectId="project-1" refreshVersion={0} />);
+  await user.click(await screen.findByRole('button', { name: '打开文件：brief.md' }));
+  await screen.findByText('正文：brief.md');
+  const staleList = deferred<ApiClientResult<ProjectFilePage>>();
+  const staleDetail = deferred<ApiClientResult<ProjectFileDetail>>();
+  f.files.mockReturnValueOnce(staleList.promise).mockReturnValueOnce(staleList.promise);
+  f.read.mockReturnValueOnce(staleDetail.promise);
+  view.rerender(<ProjectFilesPanel api={f.api} projectId="project-1" refreshVersion={1} />);
+  const signals = [f.files.mock.calls.at(-2)![2]!, f.files.mock.calls.at(-1)![2]!, f.read.mock.calls.at(-1)![2]!];
+  f.read.mockResolvedValueOnce(ok({ ...file('brief.md'), content: '最新保存的正文' }));
+  view.rerender(<ProjectFilesPanel api={f.api} projectId="project-1" refreshVersion={2} />);
+  expect(signals.every(signal => signal.aborted)).toBe(true);
+  await screen.findByText('最新保存的正文');
+  await act(async () => {
+    staleList.resolve(ok({ items: [file('过期列表.md')], total: 1, revision: 1 }));
+    staleDetail.resolve(ok({ ...file('brief.md'), content: '过期保存的正文' }));
+  });
+  expect(screen.queryByRole('button', { name: '打开文件：过期列表.md' })).not.toBeInTheDocument();
+  expect(screen.queryByText('过期保存的正文')).not.toBeInTheDocument();
+  expect(screen.getByText('最新保存的正文')).toBeVisible();
+});
+
+it('cancels refreshes on project changes and unmount without displaying another project’s old content', async () => {
+  const f = fixture();
+  const user = userEvent.setup();
+  const view = render(<ProjectFilesPanel api={f.api} projectId="project-1" refreshVersion={0} />);
+  await user.click(await screen.findByRole('button', { name: '打开文件：brief.md' }));
+  await screen.findByText('正文：brief.md');
+  const staleList = deferred<ApiClientResult<ProjectFilePage>>();
+  const staleDetail = deferred<ApiClientResult<ProjectFileDetail>>();
+  f.files.mockReturnValueOnce(staleList.promise).mockReturnValueOnce(staleList.promise);
+  f.read.mockReturnValueOnce(staleDetail.promise);
+  view.rerender(<ProjectFilesPanel api={f.api} projectId="project-1" refreshVersion={1} />);
+  const oldSignals = [f.files.mock.calls.at(-2)![2]!, f.files.mock.calls.at(-1)![2]!, f.read.mock.calls.at(-1)![2]!];
+  f.files.mockImplementation(async (_id, query) => ok({ items: query.origin === 'source' ? [file('新项目.md')] : [], total: query.origin === 'source' ? 1 : 0, revision: 1 }));
+  view.rerender(<ProjectFilesPanel api={f.api} projectId="project-2" refreshVersion={1} />);
+  expect(oldSignals.every(signal => signal.aborted)).toBe(true);
+  expect(screen.queryByText('正文：brief.md')).not.toBeInTheDocument();
+  await screen.findByRole('button', { name: '打开文件：新项目.md' });
+  await act(async () => {
+    staleList.resolve(ok({ items: [file('旧项目.md')], total: 1, revision: 1 }));
+    staleDetail.resolve(ok({ ...file('brief.md'), content: '旧项目迟到正文' }));
+  });
+  expect(screen.queryByText('旧项目迟到正文')).not.toBeInTheDocument();
+  const pending = deferred<ApiClientResult<ProjectFileDetail>>();
+  f.read.mockReturnValueOnce(pending.promise);
+  await user.click(screen.getByRole('button', { name: '打开文件：新项目.md' }));
+  const newSignal = f.read.mock.calls.at(-1)![2]!;
+  view.unmount();
+  expect(newSignal.aborted).toBe(true);
+  await act(async () => pending.resolve(ok({ ...file('新项目.md'), content: '卸载后正文' })));
 });
 
 it.each(['source', 'output'] as const)('reports a %s failure independently and retries only that collection', async failedOrigin => {

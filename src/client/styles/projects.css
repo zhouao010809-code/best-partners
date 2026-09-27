@@ -246,3 +246,15 @@
 .assistant-panel__header--project > div:first-child { min-width: 0; flex: 1; }
 .assistant-panel__header--project .assistant-panel__tools { flex-shrink: 0; }
 .assistant-project-context--compact > p:not([role]) { margin: 0; color: #b4c7cb; }
+
+.project-saved-files { min-width: 0; padding: 12px 0; border-block: 1px solid var(--border-hairline); }
+.project-saved-files__heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.project-saved-files__heading strong { color: var(--text-primary); font-size: 13px; }
+.project-saved-files__heading span { color: var(--text-muted); font-size: 11px; }
+.project-saved-files ul { display: grid; gap: 7px; max-height: 180px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.project-saved-files li { display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: start; gap: 8px; font-size: 12px; line-height: 1.5; }
+.project-saved-files li > svg, .project-saved-files__status { color: var(--accent-primary); }
+.project-saved-files li > svg { margin-top: 2px; }
+.project-saved-files__path { color: var(--text-secondary); overflow-wrap: anywhere; }
+.project-saved-files__status { white-space: nowrap; }
+.project-saved-files li > p { grid-column: 2 / -1; margin: 0; color: #f0cf94; font-size: 11px; }

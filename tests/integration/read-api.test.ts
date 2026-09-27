@@ -730,7 +730,7 @@ describe('versioned read APIs', () => {
     });
     expect(search.statusCode).toBe(200);
     expect(search.json<{ data: { items: Array<{ path: string }> } }>().data.items.map((item) => item.path))
-      .toEqual(['02知识库/召回命中.md', '02知识库/标题命中.md']);
+      .toEqual(['02知识库/标题命中.md', '02知识库/召回命中.md']);
 
     const sourceOnly = await server.inject({
       method: 'GET', url: '/api/v1/knowledge?search=source-link', headers: requestHeaders()

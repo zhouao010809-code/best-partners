@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   open,
+  opendir,
   readdir,
   realpath,
   rename
@@ -24,6 +25,9 @@ import { createSkillFolderTrashService } from './skill-folder-trash.js';
 
 const MAX_SKILL_BYTES = 256 * 1024;
 const MAX_REFERENCE_COUNT = 1_000;
+const MAX_REFERENCE_PATH_BYTES = 255;
+const MAX_REFERENCE_DIRECTORY_DEPTH = 8;
+const MAX_REFERENCE_SCAN_ENTRIES = 4_096;
 const MAX_ENTRIES = 1_000;
 const SKILL_FILE = 'SKILL.md';
 const DEFAULT_DESCRIPTION = 'No description provided.';
@@ -32,6 +36,7 @@ const RESERVED_DIRECTORY_NAMES = new Set(['env', 'scripts']);
 export interface SkillCatalogService {
   list(): Promise<SkillsPage>;
   get(id: string): Promise<SkillDetail>;
+  readReference?(id: string, referencePath: string, skillRevision: string): Promise<SkillReference>;
   matchDocuments?(): Promise<SkillMatchDocument[]>;
   createFolder(name: string): Promise<SkillFolder>;
   move(skillId: string, folderId: string | null): Promise<SkillSummary>;
@@ -43,6 +48,12 @@ export interface SkillCatalogService {
 }
 
 export type SkillMatchDocument = Omit<SkillDetail, 'references'>;
+
+export interface SkillReference {
+  path: string;
+  revision: string;
+  markdown: string;
+}
 
 type DiscoveredSkill = {
   readonly directoryName: string;
@@ -105,12 +116,13 @@ function normalizeField(value: unknown, fallback: string, maxLength: number): st
   return normalized;
 }
 
-async function readBoundedFile(path: string): Promise<Buffer | undefined> {
+async function readBoundedFile(path: string, expected?: { dev: number; ino: number }): Promise<Buffer | undefined> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > MAX_SKILL_BYTES) return undefined;
+    if (!stat.isFile() || stat.size > MAX_SKILL_BYTES
+      || (expected && (stat.dev !== expected.dev || stat.ino !== expected.ino))) return undefined;
 
     const bytes = Buffer.alloc(stat.size);
     let offset = 0;
@@ -124,6 +136,8 @@ async function readBoundedFile(path: string): Promise<Buffer | undefined> {
       if (result.bytesRead === 0) return undefined;
       offset += result.bytesRead;
     }
+    const after = await handle.stat();
+    if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) return undefined;
     return bytes;
   } catch {
     return undefined;
@@ -401,31 +415,109 @@ export function createSkillCatalogService(input: {
   }
 
   async function references(skill: DiscoveredSkill): Promise<string[]> {
-    try {
-      const names = (await readdir(skill.directoryPath))
-        .sort((a, b) => a.localeCompare(b));
-      const result: string[] = [];
-      for (const name of names) {
-        if (!isSafeName(name) || name === SKILL_FILE || !name.endsWith('.md')) {
-          continue;
+    const result: string[] = [];
+    let scanned = 0;
+    async function scan(directory: string, prefix: string, depth: number): Promise<void> {
+      if (scanned >= MAX_REFERENCE_SCAN_ENTRIES || result.length >= MAX_REFERENCE_COUNT) return;
+      const names: string[] = [];
+      try {
+        // Directory iteration bounds work and memory even when a Skill contains
+        // large generated trees. Only references/ is traversed from its root.
+        const entries = await opendir(directory);
+        for await (const entry of entries) {
+          names.push(entry.name);
+          if (++scanned >= MAX_REFERENCE_SCAN_ENTRIES) break;
         }
-        const path = join(skill.directoryPath, name);
+      } catch { return; }
+      names.sort((a, b) => a.localeCompare(b));
+      for (const name of names) {
+        if (result.length >= MAX_REFERENCE_COUNT) break;
+        if (!isSafeName(name)) continue;
+        const referencePath = prefix ? `${prefix}/${name}` : name;
+        if (Buffer.byteLength(referencePath, 'utf8') > MAX_REFERENCE_PATH_BYTES) continue;
+        const path = join(directory, name);
         try {
           const stat = await lstat(path);
-          if (!stat.isFile() || stat.isSymbolicLink()) continue;
-          const realPath = await realpath(path);
-          if (dirname(realPath) !== skill.directoryRealPath || basename(realPath) !== name) {
+          if (stat.isSymbolicLink()) continue;
+          if (stat.isDirectory()) {
+            if (depth >= MAX_REFERENCE_DIRECTORY_DEPTH || (!prefix && name !== 'references')) continue;
+            const child = await verifyChildDirectory(directory, name);
+            if (child) await scan(child.realPath, referencePath, depth + 1);
             continue;
           }
-          result.push(name);
+          if (!stat.isFile() || !isReferencePath(referencePath)) continue;
+          const realPath = await realpath(path);
+          if (dirname(realPath) !== directory || basename(realPath) !== name) continue;
+          result.push(referencePath);
         } catch {
           // References are optional and never make the skill unavailable.
         }
       }
-      return result.slice(0, MAX_REFERENCE_COUNT);
-    } catch {
-      return [];
     }
+    await scan(skill.directoryRealPath, '', 0);
+    return result.sort((a, b) => a.localeCompare(b));
+  }
+
+  function isReferencePath(path: unknown): path is string {
+    if (typeof path !== 'string' || Buffer.byteLength(path, 'utf8') > MAX_REFERENCE_PATH_BYTES) return false;
+    const parts = path.split('/');
+    return parts.every(isSafeName) && parts.length <= MAX_REFERENCE_DIRECTORY_DEPTH + 1
+      && path.endsWith('.md') && path !== SKILL_FILE
+      && (parts.length === 1 || parts[0] === 'references');
+  }
+
+  async function checkedSkillDirectory(skill: DiscoveredSkill): Promise<string | undefined> {
+    let parent = await fixedRoot();
+    if (skill.folder) {
+      const folder = await verifyChildDirectory(parent, skill.folder.name);
+      if (!folder) return undefined;
+      parent = folder.realPath;
+    }
+    const directory = await verifyChildDirectory(parent, skill.directoryName);
+    return directory?.realPath === skill.directoryRealPath ? directory.realPath : undefined;
+  }
+
+  async function checkedReferenceFile(skill: DiscoveredSkill, referencePath: string) {
+    let parent = await checkedSkillDirectory(skill);
+    if (!parent) return undefined;
+    const parts = referencePath.split('/');
+    for (const name of parts.slice(0, -1)) {
+      const directory = await verifyChildDirectory(parent, name);
+      if (!directory) return undefined;
+      parent = directory.realPath;
+    }
+    const path = join(parent, parts.at(-1)!);
+    try {
+      const stat = await lstat(path);
+      if (!stat.isFile() || stat.isSymbolicLink() || await realpath(path) !== path) return undefined;
+      return { path, stat };
+    } catch { return undefined; }
+  }
+
+  async function readReference(id: string, referencePath: string, skillRevision: string): Promise<SkillReference> {
+    if (!isReferencePath(referencePath)) {
+      throw failure('SKILL_REFERENCE_PATH_INVALID', '只能读取所选 Skill 中列出的 Markdown 参考资料。');
+    }
+    const { skill } = await locate(id);
+    const stale = () => failure('SKILL_REFERENCE_STALE', '所选 Skill 已更新，请重新选择后再读取参考资料。', 409);
+    const missing = () => failure('SKILL_REFERENCE_NOT_FOUND', '参考资料已不存在或无法读取，请刷新 Skill 后重新选择。', 404);
+    const unreadable = () => failure('SKILL_REFERENCE_UNREADABLE', '参考资料必须是有效的 UTF-8 Markdown，且不能超过 256 KiB。请修正文件后重试。', 422);
+    if (digest(skill.bytes) !== skillRevision) throw stale();
+    if (!(await references(skill)).includes(referencePath)) throw missing();
+    const file = await checkedReferenceFile(skill, referencePath);
+    if (!file) throw missing();
+    const bytes = await readBoundedFile(file.path, file.stat);
+    if (!bytes) throw unreadable();
+    // Recheck the ancestors and file identity after the bounded read. A parent
+    // swap must not turn a previously listed path into a filesystem escape.
+    const current = await checkedReferenceFile(skill, referencePath);
+    if (!current || current.stat.dev !== file.stat.dev || current.stat.ino !== file.stat.ino) throw missing();
+    const currentSkill = await readBoundedFile(join(skill.directoryRealPath, SKILL_FILE));
+    if (!currentSkill || digest(currentSkill) !== skillRevision) throw stale();
+    let markdown: string;
+    try { markdown = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { throw unreadable(); }
+    return { path: referencePath, revision: digest(bytes), markdown };
   }
 
   async function locate(
@@ -628,6 +720,7 @@ export function createSkillCatalogService(input: {
   return {
     list,
     get,
+    readReference,
     matchDocuments,
     createFolder,
     move,

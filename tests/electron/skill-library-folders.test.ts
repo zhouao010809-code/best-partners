@@ -66,6 +66,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: /^未分类\s/ }).click();
 
       for (const name of skillNames) {
+        await window.getByRole('button', { name: `更多操作：${name}`, exact: true }).click();
         const select = window.getByRole('combobox', { name: `移动到：${name}` });
         await expect(select).toBeVisible();
         await select.selectOption({ label: folderName });
@@ -76,7 +77,9 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(window.locator('.skills-card')).toHaveCount(skillNames.length);
       for (const name of skillNames) {
         await expect(window.getByRole('heading', { name, exact: true })).toBeVisible();
+        await window.getByRole('button', { name: `更多操作：${name}`, exact: true }).click();
         await expect(window.getByRole('combobox', { name: `移动到：${name}` })).toHaveValue(folderId);
+        await window.keyboard.press('Escape');
       }
 
       const detailCard = window.locator('.skills-card').filter({ has: window.getByRole('heading', { name: 'root-a', exact: true }) });

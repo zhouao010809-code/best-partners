@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AssistantPanel } from '../../src/client/components/assistant/AssistantPanel.js';
 import { askAssistant, PROJECT_WORKSPACE_UPDATED_EVENT } from '../../src/client/components/assistant/assistantIntent.js';
 import type { ReadConsoleApi } from '../../src/client/api/client.js';
-import type { AssistantProvider } from '../../src/shared/api/assistant.js';
+import type { AssistantConversation, AssistantProjectWriteAction, AssistantProvider } from '../../src/shared/api/assistant.js';
 import type { AssistantDraft, AssistantDraftSave } from '../../src/shared/api/assistant-drafts.js';
 import type { ProjectSummary } from '../../src/shared/api/projects.js';
 
@@ -18,7 +18,7 @@ const project: ProjectSummary = {
 const provider: AssistantProvider = { id: 'deepseek', name: 'DeepSeek', status: 'ready', defaultModel: 'deepseek-v4-pro', models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', reasoningEfforts: [] }] };
 const assistant = { providers: vi.fn(), history: vi.fn(), get: vi.fn(), send: vi.fn(), stop: vi.fn() };
 const skills = { match: vi.fn() };
-const projects = { get: vi.fn(), confirmWritePlan: vi.fn(), reconnect: vi.fn() };
+const projects = { get: vi.fn(), confirmWritePlan: vi.fn(), cancelWritePlan: vi.fn(), reconnect: vi.fn() };
 const api = { assistant, skills, projects } as unknown as ReadConsoleApi;
 const onRunningChange = vi.fn();
 function open(path = `/projects/${project.id}`, client = api) {
@@ -58,6 +58,23 @@ it('names the project once and explains reading and confirmed saving in ordinary
   expect(screen.queryByText(/项目语料：|全局知识库：|写入范围：/u)).not.toBeInTheDocument();
   expect(screen.getByText('当前项目资料', { exact: true })).toBeVisible();
   expect(screen.getByLabelText('发送给问问的消息')).toHaveAttribute('placeholder', '想了解这个项目的什么？');
+});
+
+it.each([false, true])('starts a sendable new conversation bound to the current project (persistent drafts: %s)', async (persistent) => {
+  const user = userEvent.setup();
+  const assistantDrafts = draftService();
+  open(undefined, persistent ? { ...api, assistantDrafts } as ReadConsoleApi : api);
+  await screen.findByText(project.displayName, { exact: true });
+  await user.type(screen.getByLabelText('发送给问问的消息'), '留在旧草稿的项目问题');
+  await user.click(screen.getByRole('button', { name: '新对话' }));
+  await waitFor(() => expect(screen.getByLabelText('发送给问问的消息')).toHaveValue(''));
+  if (persistent) expect(assistantDrafts.save.mock.calls.every(([, input]) => input.scope === 'project' && input.projectId === project.id && input.projectRevision === project.sourceRevision)).toBe(true);
+  await user.type(screen.getByLabelText('发送给问问的消息'), '新对话查找中考美术');
+  await waitFor(() => expect(screen.getByRole('button', { name: '发送消息' })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: '发送消息' }));
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledOnce());
+  expect(assistant.send.mock.calls[0]?.[0]).toMatchObject({ scope: 'project', projectId: project.id, projectRevision: project.sourceRevision, message: '新对话查找中考美术' });
+  expect(assistant.send.mock.calls[0]?.[0]).not.toHaveProperty('conversationId');
 });
 
 it.each(['梳理项目重点', '找资料回答问题', '起草下一步计划'])('fills the %s task as an editable draft without sending or saving a project result', async (task) => {
@@ -200,4 +217,37 @@ it('keeps the general brain welcome, suggestions and input wording unchanged', a
   expect(screen.getByRole('button', { name: '整理资料时，你能帮我做什么？' })).toBeVisible();
   await waitFor(() => expect(screen.getByLabelText('发送给问问的消息')).toHaveAttribute('placeholder', '问问你的大脑…'));
   expect(screen.queryByRole('region', { name: '项目问问范围' })).not.toBeInTheDocument();
+});
+
+it.each(['completed', 'failed', 'stale', 'cancelled', 'running'] as const)('notifies the workspace only for a completed write receipt, not %s alone', async status => {
+  const action: AssistantProjectWriteAction = {
+    id: '22c7a1d4-7cbf-4e92-9c64-ad175aa17d19', type: 'project-write', label: '保存计划', status: 'pending',
+    projectId: project.id, projectName: project.displayName, category: '周计划', targetPath: 'AI工作区/周计划.md',
+    contentSha256: 'a'.repeat(64), sourceRevision: 7, summary: '已核对的计划', createdAt: '2026-09-27', expiresAt: '2026-09-28'
+  };
+  const conversation: AssistantConversation = {
+    id: '11c7a1d4-7cbf-4e92-9c64-ad175aa17d18', title: '项目计划', createdAt: '2026-09-27', updatedAt: '2026-09-27',
+    status: 'idle', providerId: provider.id, model: provider.defaultModel!, scope: 'project', projectId: project.id, projectRevision: 7,
+    messages: [{ id: 'answer', role: 'assistant', text: '请确认保存计划。', sources: [], actions: [action] }]
+  };
+  assistant.send.mockResolvedValue(ok(conversation));
+  const next = { ...action, status, ...(status === 'completed' ? { resultPath: 'AI工作区/实际结果.md', problem: '文件已保存，列表更新需要重试。' } : {}) };
+  projects.confirmWritePlan.mockResolvedValue(ok(next));
+  const updates = vi.fn();
+  window.addEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, updates);
+  try {
+    const user = userEvent.setup(); open();
+    await screen.findByText(project.displayName, { exact: true });
+    await user.type(screen.getByLabelText('发送给问问的消息'), '保存下周计划');
+    await user.click(screen.getByRole('button', { name: '发送消息' }));
+    await user.click(await screen.findByRole('button', { name: '确认写入' }));
+    expect(updates).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: '最终确认' }));
+    await waitFor(() => expect(projects.confirmWritePlan).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '确认写入项目' })).not.toBeInTheDocument());
+    if (status === 'completed') {
+      expect(updates).toHaveBeenCalledOnce();
+      expect((updates.mock.calls[0]![0] as CustomEvent).detail).toEqual({ projectId: project.id, savedFile: { operationId: action.id, relativePath: 'AI工作区/实际结果.md', problem: next.problem } });
+    } else expect(updates).not.toHaveBeenCalled();
+  } finally { window.removeEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, updates); }
 });

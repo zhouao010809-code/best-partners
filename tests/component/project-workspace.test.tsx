@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -129,5 +129,93 @@ describe('ProjectWorkspacePage', () => {
     } finally {
       window.removeEventListener('xiaozhao:project-workspace-updated', updates);
     }
+  });
+
+  it('shows completed files together, deduplicates receipts and ignores another project', async () => {
+    renderPage();
+    await screen.findByText('A项目');
+    const notify = (projectId: string, relativePath: string) => window.dispatchEvent(new CustomEvent('xiaozhao:project-workspace-updated', { detail: { projectId, savedFile: { operationId: relativePath, relativePath } } }));
+    await act(async () => { notify('another-project', '不属于这里.md'); });
+    expect(screen.queryByRole('region', { name: '最近保存的项目文件' })).not.toBeInTheDocument();
+    await act(async () => { notify(id, 'AI工作区/第一份.md'); notify(id, 'AI工作区/第二份.md'); notify(id, 'AI工作区/第一份.md'); });
+    const receipts = screen.getByRole('region', { name: '最近保存的项目文件' });
+    expect(within(receipts).getAllByRole('listitem')).toHaveLength(2);
+    expect(receipts).toHaveTextContent('AI工作区/第一份.md');
+    expect(receipts).toHaveTextContent('AI工作区/第二份.md');
+    expect(within(receipts).getAllByText('已保存')).toHaveLength(2);
+    expect(receipts).not.toHaveTextContent('不属于这里');
+  });
+
+  it('refreshes the existing preview without resetting the search after a saved-file notification', async () => {
+    const read = vi.fn().mockResolvedValue(ok({ ...files.items[0], content: '原来的正文' }));
+    runtime.api = { ...runtime.api, projects: { ...runtime.api.projects!, file: read } };
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(await screen.findByRole('textbox', { name: '搜索项目文件' }), 'brief');
+    await user.click(await screen.findByRole('button', { name: '打开文件：brief.md' }));
+    await screen.findByText('原来的正文');
+    read.mockResolvedValue(ok({ ...files.items[0], content: '最新的正文' }));
+    await act(async () => { window.dispatchEvent(new CustomEvent('xiaozhao:project-workspace-updated', { detail: { projectId: id, savedFile: { operationId: 'saved-1', relativePath: 'AI工作区/输出.md' } } })); });
+    expect(await screen.findByText('最新的正文')).toBeVisible();
+    expect(screen.getByRole('textbox', { name: '搜索项目文件' })).toHaveValue('brief');
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps the work surface mounted during consecutive background summary updates and a failure', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const search = await screen.findByRole('textbox', { name: '搜索项目文件' });
+    await user.type(search, '尚在查看的文件');
+    const pending: Array<(value: unknown) => void> = [];
+    get.mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+    const notify = (path: string) => window.dispatchEvent(new CustomEvent('xiaozhao:project-workspace-updated', { detail: { projectId: id, savedFile: { operationId: path, relativePath: path } } }));
+    await act(async () => { notify('AI工作区/一.md'); });
+    await act(async () => { notify('AI工作区/二.md'); });
+    expect(screen.getByRole('textbox', { name: '搜索项目文件' })).toBe(search);
+    expect(search).toHaveValue('尚在查看的文件');
+    await act(async () => { pending[1]!({ ok: false, state: { status: 'operation-error', message: '统计暂时不可用' } }); });
+    expect(await screen.findByText('统计暂时不可用')).toBeVisible();
+    expect(screen.getByRole('textbox', { name: '搜索项目文件' })).toBe(search);
+    await act(async () => { pending[0]!(ok({ ...project, displayName: '不应回来的旧标题' })); });
+    expect(screen.queryByText('不应回来的旧标题')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: '最近保存的项目文件' })).getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it.each(['unavailable', 'reconnect-required', 'scanning'] as const)('keeps the saved-file indexing warning when refresh returns %s', async availability => {
+    const user = userEvent.setup();
+    get.mockResolvedValue(ok({ ...project, availability: 'ready' }));
+    refresh.mockResolvedValueOnce(ok({ ...project, availability })).mockResolvedValueOnce(ok(reconnected));
+    renderPage();
+    await screen.findByText('资料已连接');
+    const problem = '文件已保存，但列表尚未更新。请点击“更新资料”后查看。';
+    await act(async () => { window.dispatchEvent(new CustomEvent('xiaozhao:project-workspace-updated', { detail: {
+      projectId: id, savedFile: { operationId: 'saved-with-warning', relativePath: 'AI工作区/输出.md', problem }
+    } })); });
+    const receipts = screen.getByRole('region', { name: '最近保存的项目文件' });
+    await user.click(screen.getByRole('button', { name: '更新资料' }));
+    expect(receipts).toHaveTextContent(problem);
+    expect(screen.queryByText('项目资料已更新。')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '更新资料' }));
+    expect(await screen.findByText('项目资料已更新。')).toBeVisible();
+    expect(receipts).not.toHaveTextContent(problem);
+    expect(receipts).toHaveTextContent('已保存');
+  });
+
+  it('offers a retry if a save notification supersedes the unfinished first load and then fails', async () => {
+    let finishInitial!: (value: unknown) => void;
+    get.mockImplementationOnce(() => new Promise(resolve => { finishInitial = resolve; }))
+      .mockResolvedValueOnce({ ok: false, state: { status: 'operation-error', message: '同步读取失败' } });
+    renderPage();
+    await screen.findByText('正在读取项目工作区。');
+    await act(async () => { window.dispatchEvent(new CustomEvent('xiaozhao:project-workspace-updated', { detail: {
+      projectId: id, savedFile: { operationId: 'first-save', relativePath: 'AI工作区/输出.md' }
+    } })); });
+    expect(await screen.findByRole('button', { name: '重新读取' })).toBeVisible();
+    expect(screen.getByText('同步读取失败')).toBeVisible();
+    await act(async () => { finishInitial(ok(project)); });
+    expect(screen.getByRole('button', { name: '重新读取' })).toBeVisible();
+    await userEvent.setup().click(screen.getByRole('button', { name: '重新读取' }));
+    expect(await screen.findByRole('heading', { name: 'A项目', level: 1 })).toBeVisible();
+    expect(screen.getByRole('region', { name: '最近保存的项目文件' })).toHaveTextContent('AI工作区/输出.md');
   });
 });

@@ -207,12 +207,18 @@ function paginateByPath<T extends { path: string }>(
   records: readonly T[],
   requestedLimit: number | undefined,
   context: PaginationContext,
-  cursorSecret: Uint8Array
+  cursorSecret: Uint8Array,
+  relevanceOrder = false
 ): Page<T> {
   const limit = requestedLimit ?? DEFAULT_API_PAGE_SIZE;
+  const anchor = relevanceOrder && context.afterPath !== undefined
+    ? records.findIndex(record => record.path === context.afterPath) : -1;
+  if (relevanceOrder && context.afterPath !== undefined && anchor < 0) throw cursorVersionConflict();
   const eligible = context.afterPath === undefined
     ? records
-    : records.filter((record) => record.path > context.afterPath!);
+    : relevanceOrder
+      ? records.slice(anchor + 1)
+      : records.filter((record) => record.path > context.afterPath!);
   const items = eligible.slice(0, limit);
   const finalItem = items.at(-1);
   return {
@@ -566,7 +572,7 @@ export function createReadService(input: {
         || record.knowledgeStatus === '未提炼'
         || record.knowledgeStatus === '部分入库'));
       assertIndexVersionUnchanged(context.indexVersion, input.currentIndexVersion);
-      return paginateByPath(records, query.limit, context, cursorSecret);
+      return paginateByPath(records, query.limit, context, cursorSecret, Boolean(query.title?.trim()));
     },
 
     listKnowledge: (query) => {
@@ -588,7 +594,7 @@ export function createReadService(input: {
       });
       const records = collectKnowledge(input.repository, filters).filter(record => !trashed.has(record.path));
       assertIndexVersionUnchanged(context.indexVersion, input.currentIndexVersion);
-      return paginateByPath(records, query.limit, context, cursorSecret);
+      return paginateByPath(records, query.limit, context, cursorSecret, Boolean(query.search?.trim()));
     },
 
     getKnowledgeDetail: async (requestedPath) => {

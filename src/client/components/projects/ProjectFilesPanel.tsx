@@ -9,6 +9,8 @@ interface ProjectFilesPanelProps {
   readonly api: ReadConsoleApi;
   readonly projectId: string;
   readonly revision?: number;
+  readonly refreshVersion?: number;
+  readonly savedPaths?: readonly string[];
   readonly onAsk?: () => void;
 }
 
@@ -16,7 +18,8 @@ type FileOrigin = 'source' | 'output';
 interface FileCollection {
   readonly items: readonly ProjectFile[];
   readonly total: number;
-  readonly status: 'loading' | 'ready' | 'failed';
+  readonly status: 'loading' | 'refreshing' | 'ready' | 'failed';
+  readonly loaded?: boolean;
   readonly message?: string;
 }
 interface FileNode {
@@ -24,6 +27,7 @@ interface FileNode {
   readonly children: Map<string, FileNode>;
 }
 const FILE_LIMIT = 200;
+const NO_SAVED_PATHS: readonly string[] = [];
 const LABELS: Record<FileOrigin, string> = { source: '项目资料', output: '已保存产出' };
 const emptyCollection = (): FileCollection => ({ items: [], total: 0, status: 'loading' });
 const basename = (path: string): string => path.split('/').at(-1) ?? path;
@@ -70,7 +74,7 @@ function sortedNodes(nodes: Map<string, FileNode>): FileNode[] {
   });
 }
 
-export function ProjectFilesPanel({ api, projectId, revision, onAsk }: ProjectFilesPanelProps) {
+export function ProjectFilesPanel({ api, projectId, revision, refreshVersion = 0, savedPaths = NO_SAVED_PATHS, onAsk }: ProjectFilesPanelProps) {
   const projectsApi = api.projects;
   const panelId = useId();
   const [origin, setOrigin] = useState<FileOrigin>('source');
@@ -81,28 +85,38 @@ export function ProjectFilesPanel({ api, projectId, revision, onAsk }: ProjectFi
   const [collections, setCollections] = useState<Record<FileOrigin, FileCollection>>({ source: emptyCollection(), output: emptyCollection() });
   const [selectedPath, setSelectedPath] = useState<string>();
   const [detail, setDetail] = useState<ProjectFileDetail>();
-  const [detailState, setDetailState] = useState<'idle' | 'loading' | 'failed'>('idle');
+  const [detailState, setDetailState] = useState<'idle' | 'loading' | 'refreshing' | 'failed'>('idle');
   const [detailMessage, setDetailMessage] = useState<string>();
   const listControllers = useRef<Partial<Record<FileOrigin, AbortController>>>({});
   const detailController = useRef<AbortController | undefined>(undefined);
+  const selectedPathRef = useRef<string | undefined>(undefined);
+  const detailRef = useRef<ProjectFileDetail | undefined>(undefined);
+  const requestContext = useRef<{ projectId: string; projectsApi: typeof projectsApi; query: string } | undefined>(undefined);
+  const savedPathSet = useMemo(() => new Set(savedPaths), [savedPaths]);
 
   const clearPreview = useCallback(() => {
     detailController.current?.abort();
     detailController.current = undefined;
+    selectedPathRef.current = undefined;
+    detailRef.current = undefined;
     setSelectedPath(undefined);
     setDetail(undefined);
     setDetailState('idle');
     setDetailMessage(undefined);
   }, []);
 
-  const loadCollection = useCallback(async (target: FileOrigin): Promise<void> => {
+  const loadCollection = useCallback(async (target: FileOrigin, preserve = false): Promise<void> => {
     listControllers.current[target]?.abort();
     const controller = new AbortController();
     listControllers.current[target] = controller;
     const current = () => !controller.signal.aborted && listControllers.current[target] === controller;
-    setCollections(value => ({ ...value, [target]: emptyCollection() }));
+    setCollections(value => ({ ...value, [target]: preserve && value[target].loaded
+      ? { items: value[target].items, total: value[target].total, loaded: true, status: 'refreshing' }
+      : emptyCollection() }));
     const fail = (message: string) => {
-      if (current()) setCollections(value => ({ ...value, [target]: { items: [], total: 0, status: 'failed', message } }));
+      if (current()) setCollections(value => ({ ...value, [target]: preserve && value[target].loaded
+        ? { ...value[target], status: 'failed', message }
+        : { items: [], total: 0, status: 'failed', message } }));
     };
     if (projectsApi === undefined) {
       fail('当前连接不提供个人项目。');
@@ -115,51 +129,38 @@ export function ProjectFilesPanel({ api, projectId, revision, onAsk }: ProjectFi
         fail(result.state.message || '暂时无法读取，请重试。');
         return;
       }
-      setCollections(value => ({ ...value, [target]: { items: result.value.items, total: result.value.total, status: 'ready' } }));
+      setCollections(value => ({ ...value, [target]: { items: result.value.items, total: result.value.total, loaded: true, status: 'ready' } }));
     } catch {
       fail('暂时无法读取，请检查连接后重试。');
     }
   }, [projectId, projectsApi, query]);
-
-  useEffect(() => {
-    clearPreview();
-    setCollections({ source: emptyCollection(), output: emptyCollection() });
-    const load = () => { void loadCollection('source'); void loadCollection('output'); };
-    const timer = query ? window.setTimeout(load, 180) : undefined;
-    if (!query) load();
-    return () => {
-      window.clearTimeout(timer);
-      listControllers.current.source?.abort();
-      listControllers.current.output?.abort();
-      detailController.current?.abort();
-    };
-  }, [clearPreview, loadCollection, query, revision]);
-
-  useEffect(() => { setExpanded(new Set()); }, [projectId]);
 
   const active = collections[origin];
   const visibleFiles = useMemo(() => active.items.filter(file => showHidden || !isHidden(file.relativePath)), [active.items, showHidden]);
   const tree = useMemo(() => buildTree(visibleFiles), [visibleFiles]);
   const outputEmpty = origin === 'output' && !query && !active.items.some(file => file.kind === 'file') && active.total <= active.items.length;
 
-  const openFile = useCallback(async (file: ProjectFile): Promise<void> => {
-    if (file.kind !== 'file' || projectsApi === undefined) return;
+  const readDetail = useCallback(async (path: string, preserve = false): Promise<void> => {
+    if (projectsApi === undefined) return;
     detailController.current?.abort();
     const controller = new AbortController();
     detailController.current = controller;
     const current = () => !controller.signal.aborted && detailController.current === controller;
-    setSelectedPath(file.relativePath);
-    setDetail(undefined);
-    setDetailState('loading');
+    const hasPrevious = preserve && detailRef.current?.relativePath === path;
+    selectedPathRef.current = path;
+    setSelectedPath(path);
+    if (!hasPrevious) { detailRef.current = undefined; setDetail(undefined); }
+    setDetailState(hasPrevious ? 'refreshing' : 'loading');
     setDetailMessage(undefined);
     try {
-      const result = await projectsApi.file(projectId, file.relativePath, controller.signal);
+      const result = await projectsApi.file(projectId, path, controller.signal);
       if (!current() || isCancelled(result)) return;
       if (!result.ok) {
         setDetailState('failed');
         setDetailMessage(result.state.message || '文件正文暂时无法读取。');
         return;
       }
+      detailRef.current = result.value;
       setDetail(result.value);
       setDetailState('idle');
     } catch {
@@ -170,12 +171,39 @@ export function ProjectFilesPanel({ api, projectId, revision, onAsk }: ProjectFi
     }
   }, [projectId, projectsApi]);
 
+  useEffect(() => {
+    const previous = requestContext.current;
+    const contextChanged = !previous || previous.projectId !== projectId || previous.projectsApi !== projectsApi || previous.query !== query;
+    requestContext.current = { projectId, projectsApi, query };
+    if (contextChanged) {
+      clearPreview();
+      setCollections({ source: emptyCollection(), output: emptyCollection() });
+    }
+    if (!previous || previous.projectId !== projectId) setExpanded(new Set());
+    const load = () => {
+      void loadCollection('source', !contextChanged);
+      void loadCollection('output', !contextChanged);
+      if (!contextChanged && selectedPathRef.current !== undefined) void readDetail(selectedPathRef.current, true);
+    };
+    const timer = contextChanged && query ? window.setTimeout(load, 180) : undefined;
+    if (timer === undefined) load();
+    return () => {
+      window.clearTimeout(timer);
+      listControllers.current.source?.abort();
+      listControllers.current.output?.abort();
+      detailController.current?.abort();
+    };
+  }, [clearPreview, loadCollection, projectId, projectsApi, query, readDetail, revision, refreshVersion]);
+
+  const openFile = (file: ProjectFile): void => { if (file.kind === 'file') void readDetail(file.relativePath); };
+
   const selectOrigin = (next: FileOrigin) => {
     if (next !== origin) { clearPreview(); setOrigin(next); }
   };
-  const fileRow = (file: ProjectFile, showDirectory: boolean) => <button type="button" className={`project-files__file${selectedPath === file.relativePath ? ' is-selected' : ''}`} onClick={() => void openFile(file)} aria-label={`打开文件：${file.relativePath}`} aria-pressed={selectedPath === file.relativePath}>
+  const fileRow = (file: ProjectFile, showDirectory: boolean) => <button type="button" className={`project-files__file${selectedPath === file.relativePath ? ' is-selected' : ''}`} onClick={() => openFile(file)} aria-label={`打开文件：${file.relativePath}`} aria-description={savedPathSet.has(file.relativePath) ? '最近已保存' : undefined} aria-pressed={selectedPath === file.relativePath}>
     <FileText size={17} aria-hidden="true" />
     <span className="project-files__file-label"><strong>{basename(file.relativePath)}</strong>{showDirectory && directory(file.relativePath) && <small className="project-files__path">{directory(file.relativePath)}</small>}<small>{fileStatus(file)}{fileSize(file.bytes)}</small></span>
+    {savedPathSet.has(file.relativePath) && <span className="project-files__saved">已保存</span>}
   </button>;
   const renderNodes = (nodes: Map<string, FileNode>): ReactNode => sortedNodes(nodes).map(node => {
     const path = node.file.relativePath;
@@ -204,10 +232,11 @@ export function ProjectFilesPanel({ api, projectId, revision, onAsk }: ProjectFi
     <div className="project-files__options"><label><input type="checkbox" checked={showHidden} onChange={event => { clearPreview(); setShowHidden(event.target.checked); }} />显示隐藏文件</label></div>
     <div id={`${panelId}-content`} role="tabpanel" aria-labelledby={`${panelId}-${origin}`} className="project-files__panel">
       {active.status === 'loading' && <div className="project-files__state" role="status"><LoaderCircle size={20} className="project-files__spinner" aria-hidden="true" /><p>正在读取{LABELS[origin]}…</p></div>}
-      {active.status === 'failed' && <div className="project-files__state project-files__state--error" role="alert"><h3>{LABELS[origin]}读取失败</h3><p>{active.message}</p><button type="button" className="project-files__action" aria-label={`重新读取${LABELS[origin]}`} onClick={() => { clearPreview(); void loadCollection(origin); }}>重新读取</button></div>}
-      {active.status === 'ready' && <>
+      {active.status === 'refreshing' && <div className="project-files__refresh-status" role="status"><LoaderCircle size={16} className="project-files__spinner" aria-hidden="true" /><p>正在更新{LABELS[origin]}，当前仍显示上次读取的列表。</p></div>}
+      {active.status === 'failed' && <div className={`project-files__state project-files__state--error${active.loaded ? ' project-files__state--retained' : ''}`} role="alert"><h3>{LABELS[origin]}{active.loaded ? '未刷新' : '读取失败'}</h3><p>{active.message}{active.loaded && ' 仍显示上次读取的列表，可重试更新。'}</p><button type="button" className="project-files__action" aria-label={`重新读取${LABELS[origin]}`} onClick={() => void loadCollection(origin, true)}>重新读取</button></div>}
+      {active.loaded && <>
         {active.total > FILE_LIMIT && <p className="project-files__limit" role="status">仅显示前 200 项中的可见文件与文件夹。请搜索文件名或内容，查找更多资料。</p>}
-        {(outputEmpty || visibleFiles.length === 0) ? <div className="project-files__state">
+        {(outputEmpty || visibleFiles.length === 0) && selectedPath === undefined ? <div className="project-files__state">
           <Folder size={26} aria-hidden="true" />
           <h3>{outputEmpty ? '还没有已保存的产出' : query ? '没有找到匹配文件' : '暂无可显示的文件'}</h3>
           <p>{outputEmpty ? (api.creations ? '在创作台定稿后，点击“查看并导出定稿”；确认导出的文件会显示在这里，保存在项目的 AI工作区 文件夹。项目讨论中确认保存的产出也会显示在这里。' : '项目讨论中确认保存的产出会显示在这里，保存在项目的 AI工作区 文件夹。') : query ? '试试其他关键词，也可以开启“显示隐藏文件”继续查找。' : '添加项目资料后，在页面上方更新资料；也可以开启“显示隐藏文件”查看。'}</p>
@@ -215,11 +244,13 @@ export function ProjectFilesPanel({ api, projectId, revision, onAsk }: ProjectFi
         </div> : <div className="project-files__layout">
           <div className="project-files__browser"><ul className="project-files__list" aria-label={origin === 'output' ? '已保存产出文件' : '项目源文件'}>
             {query ? visibleFiles.map(file => <li key={file.relativePath}>{file.kind === 'file' ? fileRow(file, true) : <div className="project-files__search-folder"><Folder size={17} aria-hidden="true" /><span><strong>{basename(file.relativePath)}</strong><small>{directory(file.relativePath) || '项目根目录'} · 文件夹</small></span></div>}</li>) : renderNodes(tree)}
+            {visibleFiles.length === 0 && <li className="project-files__notice">{query ? '当前列表没有匹配文件。' : '当前列表没有可显示的文件。'}</li>}
           </ul></div>
           <div className="project-files__reader" aria-live="polite">
             {selectedPath === undefined && <div className="project-files__reader-empty"><FileText size={27} aria-hidden="true" /><p>选择文件，查看内容</p><small>展开文件夹，找到需要的资料。</small></div>}
             {selectedPath !== undefined && detailState === 'loading' && <div className="project-files__state" role="status"><LoaderCircle size={20} className="project-files__spinner" aria-hidden="true" /><p>正在读取文件内容…</p></div>}
-            {selectedPath !== undefined && detailState === 'failed' && <div className="project-files__state project-files__state--error" role="alert"><h3>文件预览失败</h3><p>{detailMessage}</p><button type="button" className="project-files__action" onClick={() => void openFile({ relativePath: selectedPath, kind: 'file' })}>重新读取文件</button></div>}
+            {selectedPath !== undefined && detailState === 'refreshing' && <div className="project-files__refresh-status" role="status"><LoaderCircle size={16} className="project-files__spinner" aria-hidden="true" /><p>正在更新文件内容，当前仍显示上次读取的内容。</p></div>}
+            {selectedPath !== undefined && detailState === 'failed' && <div className={`project-files__state project-files__state--error${detail ? ' project-files__state--retained' : ''}`} role="alert"><h3>{detail ? '文件内容未刷新' : '文件预览失败'}</h3><p>{detailMessage}{detail && ' 仍显示上次读取的内容，可重试更新。'}</p><button type="button" className="project-files__action" onClick={() => void readDetail(selectedPath, true)}>重新读取文件</button></div>}
             {selectedPath !== undefined && detail !== undefined && <article className="project-files__content"><header><div><h3>{basename(detail.relativePath)}</h3><p>{detail.relativePath}</p></div><button type="button" className="project-files__close" aria-label="关闭文件预览" onClick={clearPreview}><X size={17} aria-hidden="true" /></button></header>{detail.content === undefined ? <p className="project-files__notice">{fileStatus(detail)}。{detail.problem}</p> : <pre>{detail.content}</pre>}{detail.truncated && <p className="project-files__notice">文件较长，当前仅预览部分内容。</p>}</article>}
           </div>
         </div>}
