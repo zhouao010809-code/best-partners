@@ -14,7 +14,7 @@ const title = (path: string) => path.split('/').at(-1)!.slice(0, -3);
 async function resize(app: ElectronApplication, page: Page, width: number) {
   await app.evaluate(({BrowserWindow}, width) => {const win = BrowserWindow.getAllWindows()[0]!; win.setMinimumSize(320,600); win.setSize(width, 980);}, width);
   await expect.poll(() => page.evaluate(() => innerWidth)).toBe(width);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 }
 
 for (const mode of ['development', 'packaged'] as const) {
