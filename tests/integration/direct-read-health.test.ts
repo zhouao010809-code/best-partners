@@ -99,3 +99,16 @@ it('bounds probe duration and does not spawn more probes while an aborted probe 
   await service.getSnapshot();
   expect(probe).toHaveBeenCalledTimes(1);
 });
+
+it('invalidates cached readiness when the wall clock moves backwards', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(2_000);
+  const probe = vi.fn().mockResolvedValueOnce({ status: 'ready' }).mockResolvedValueOnce({ status: 'unavailable', reason: 'VAULT_RULES_MISSING' });
+  const service = createDirectReadHealthService({
+    stateKernel: { mode: 'recovery-only', reason: 'database-corrupt', recovery: { entries: [], count: 0 } },
+    indexState: { snapshot: () => { throw new Error('must not inspect index'); } }, displayName: 'fixture', probeReadiness: probe
+  });
+  expect((await service.getSnapshot()).vaultSource.status).toBe('ready');
+  vi.setSystemTime(1_000);
+  expect((await service.getSnapshot()).vaultSource).toEqual({ status: 'unavailable', reason: 'VAULT_RULES_MISSING' });
+  expect(probe).toHaveBeenCalledTimes(2);
+});

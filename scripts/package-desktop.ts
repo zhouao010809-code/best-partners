@@ -2,10 +2,13 @@ import { packager } from '@electron/packager';
 import { rebuild } from '@electron/rebuild';
 import { cp, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { verifyBuildManifest, verifyPackagedDesktop } from './build-provenance.js';
 
 if (process.platform !== 'darwin' || process.arch !== 'arm64') {
   throw new Error('This personal build targets the current arm64 Mac only');
 }
+
+await verifyBuildManifest();
 
 const paths = await packager({
   ...(process.env.XIAOZHAO_ELECTRON_ZIP_DIR ? { electronZipDir: resolve(process.env.XIAOZHAO_ELECTRON_ZIP_DIR) } : {}),
@@ -30,5 +33,7 @@ for (const path of paths) {
   await cp(resolve('browser-extension'), join(resources, 'clipper-extension'), { recursive: true });
   const zip = resolve('dist/best-partners-clipper.zip');
   await cp(zip, join(resources, 'best-partners-clipper.zip'));
+  await cp(resolve('dist/build-manifest.json'), join(resources, 'build-manifest.json'));
+  await verifyPackagedDesktop(join(path, '最佳拍档.app'));
   process.stdout.write(`${path}/最佳拍档.app\n`);
 }

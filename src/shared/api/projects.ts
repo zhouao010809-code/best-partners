@@ -240,6 +240,8 @@ export interface ProjectWritePlanService {
   cancelForProject(planId: string, projectId: string, clientRequestId: string): ProjectWriteAction;
   project(planId: string, conversationId?: string): ProjectWriteAction | undefined;
   operations(projectId: string): Promise<readonly ProjectOperation[]>;
+  /** Startup reconciliation of persisted confirmations; never executes pending plans. */
+  recoverConfirmedPlans(): Promise<void>;
 }
 
 export type PersonalProjectService = ProjectService & ProjectWritePlanService;

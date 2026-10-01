@@ -18,6 +18,8 @@ import type { RuntimeCapabilities } from './capabilities.js';
 import { createDirectReadHealthService, createHealthService, type HealthService } from '../services/health-service.js';
 import { createIndexComposition } from './index-composition.js';
 import { createArchiveComposition } from './archive-composition.js';
+import { loadRuleBundle } from '../rules/rule-bundle.js';
+import { PublicApiError } from '../../shared/api/errors.js';
 
 export interface PersonalRuntimeConfig {
   readonly appDataDir: string;
@@ -62,7 +64,6 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
       projectService = createProjectService({ database: kernel.db, vaultRoot: config.vaultRealRoot, stateRoot: config.appDataDir });
       const ownedProject = projectService;
       disposer.add(() => ownedProject.close());
-      projectWritePlans = createProjectWritePlanService({ database: kernel.db });
       projectCreations = createProjectCreationService({ database: kernel.db });
     }
     // Register lifecycle phases before acquiring their resources. On both
@@ -114,6 +115,18 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
             : { status: 'unconfigured', providerHost: settings.providerHost } };
       }
     };
+    if (kernel.mode === 'normal' && config.adapter === 'filesystem' && projectService) {
+      const getRuleFingerprint = async () => {
+        if ((await healthService.getSnapshot()).status !== 'ready') throw new PublicApiError('RECOVERY_REQUIRED', '请先恢复或重新连接大脑，再保存项目输出。', 409);
+        return (await loadRuleBundle(config.gateway)).fingerprint;
+      };
+      projectWritePlans = createProjectWritePlanService({ database: kernel.db, getRuleFingerprint });
+      // Project outputs use their own new-output-confirmed policy. The legacy
+      // vault writeGate remains blocked and does not authorize this operation.
+      // Readiness and the current complete rule bundle are still prerequisites.
+      const recoveryReady = await getRuleFingerprint().then(() => true, () => false);
+      if (recoveryReady) await projectWritePlans.recoverConfirmedPlans();
+    }
     const refreshIndex = async () => {
       const result = await scheduler?.requestFocusRefresh();
       return result?.outcome === 'succeeded' && result.refresh.status === 'ready';

@@ -8,18 +8,20 @@ import { createTextPdf, createPasswordPdf, createChinesePdf } from '../helpers/p
 import { createPersonalIntakeFixture } from '../helpers/personal-intake-fixture.js';
 import { openPersonalArchive } from '../../src/server/archive/sandbox-native.js';
 import { createIntakeService } from '../../src/server/services/intake-service.js';
-import { readFileSync, unlinkSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, unlinkSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseLibraryNote } from '../../src/server/rules/library-schema.js';
 // The macOS full CI gate covers real native archive transactions; parsing stays cross-platform.
 const itWithNativeArchive = it.runIf(process.platform === 'darwin' && process.arch === 'arm64');
+const fixtureNow = () => new Date('2026-09-14T00:00:00.000Z');
+const attachmentService: typeof createAttachmentService = input => createAttachmentService({ now: fixtureNow, ...input });
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 async function fixture() {
   const parent = await mkdtemp(join(tmpdir(), 'xiaozhao-attachments-test-')); const directory = join(parent, 'attachments');
   cleanups.push(() => rm(parent, { recursive: true }));
-  const service = createAttachmentService({ directory }); await service.ready(); cleanups.push(() => service.close());
+  const service = attachmentService({ directory }); await service.ready(); cleanups.push(() => service.close());
   return { service, directory, upload: (name: string, bytes: Buffer, uploadId = randomUUID(), groupId = randomUUID()) => service.upload({ name, bytes, uploadId, groupId }) };
 }
 it('persists exact TXT original and parsed text across restart, without archiving it', async () => {
@@ -27,7 +29,7 @@ it('persists exact TXT original and parsed text across restart, without archivin
   await f.service.waitForParsing(item.id); expect(f.service.get(item.id).status).toBe('ready');
   expect(f.service.readOriginal(item.id).bytes).toEqual(bytes); expect(f.service.readPages({ id: item.id }).pages[0]?.text).toContain('中文\r\n第二行');
   expect(f.service.get(item.id).archive).toBeUndefined(); await f.service.close();
-  const reopened = createAttachmentService({ directory: f.directory }); await reopened.ready(); cleanups.push(() => reopened.close());
+  const reopened = attachmentService({ directory: f.directory }); await reopened.ready(); cleanups.push(() => reopened.close());
   expect(reopened.readOriginal(item.id).bytes).toEqual(bytes); expect(reopened.get(item.id).status).toBe('ready');
 });
 it('extracts real PDF pages locally and reports the exact selected range', async () => {
@@ -64,7 +66,7 @@ it('reports password protection separately and preserves the encrypted PDF', asy
 });
 it('resumes a parse interrupted by closing the service and retains its stable upload ID', async () => {
   const f = await fixture(), item = await f.upload('resume.pdf', createTextPdf()); await f.service.close();
-  const reopened = createAttachmentService({ directory: f.directory }); cleanups.push(() => reopened.close()); await reopened.ready(); await reopened.waitForParsing(item.id);
+  const reopened = attachmentService({ directory: f.directory }); cleanups.push(() => reopened.close()); await reopened.ready(); await reopened.waitForParsing(item.id);
   expect(reopened.get(item.id).status).toBe('ready'); expect(reopened.list().map(item => item.id)).toEqual([item.id]);
 });
 itWithNativeArchive('archives a real PDF through native intake, preserves pages and reuses the operation after reopening', async () => {
@@ -72,7 +74,7 @@ itWithNativeArchive('archives a real PDF through native intake, preserves pages 
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
   await f.service.close();
-  const service = createAttachmentService({ directory: f.directory, archive: { port, intakeService } }); await service.ready(); cleanups.push(() => service.close());
+  const service = attachmentService({ directory: f.directory, archive: { port, intakeService } }); await service.ready(); cleanups.push(() => service.close());
   const pdf = createTextPdf(['ARCHIVED FIRST', 'ARCHIVED SECOND']); const uploaded = await service.upload({ name: 'source.pdf', bytes: pdf, uploadId: randomUUID(), groupId: randomUUID() }); await service.waitForParsing(uploaded.id);
   const result = await service.archive({ id: uploaded.id }); expect(result.state).toBe('archived');
   const markdown = readFileSync(join(vault.root, result.materialPath));
@@ -80,7 +82,7 @@ itWithNativeArchive('archives a real PDF through native intake, preserves pages 
   expect(markdown.toString()).toContain(`<!-- xiaozhao-page:${uploaded.sha256}:2 -->`);
   expect(readFileSync(join(vault.root, result.target, '附件/原件.pdf'))).toEqual(pdf);
   const journals = port.listRecovery(); expect((await service.archive({ id: uploaded.id })).operationId).toBe(result.operationId);
-  await service.close(); const reopened = createAttachmentService({ directory: f.directory, archive: { port, intakeService } }); await reopened.ready(); cleanups.push(() => reopened.close());
+  await service.close(); const reopened = attachmentService({ directory: f.directory, archive: { port, intakeService } }); await reopened.ready(); cleanups.push(() => reopened.close());
   expect((await reopened.archive({ id: uploaded.id })).operationId).toBe(result.operationId); expect(port.listRecovery()).toEqual(journals);
   const duplicate = await reopened.upload({ name: 'a second name.pdf', bytes: pdf, uploadId: randomUUID(), groupId: randomUUID() }); await reopened.waitForParsing(duplicate.id);
   expect(await reopened.preview({ id: duplicate.id })).toMatchObject({ attachmentId: duplicate.id, duplicate: true, target: result.target, existing: { id: duplicate.id, operationId: result.operationId } });
@@ -102,7 +104,7 @@ itWithNativeArchive('previews an archive without changing the ledger, staging, v
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
   await f.service.close();
-  const service = createAttachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => service.close());
+  const service = attachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => service.close());
   const original = Buffer.from('preview me\n');
   const uploaded = await service.upload({ name: 'preview.txt', bytes: original, uploadId: randomUUID(), groupId: randomUUID() });
   await service.waitForParsing(uploaded.id);
@@ -123,11 +125,31 @@ itWithNativeArchive('previews an archive without changing the ledger, staging, v
   await expect(service.archive({ id: uploaded.id }, undefined, first)).rejects.toThrow('重新生成预览');
   expect(service.get(uploaded.id).archive).toBeUndefined(); expect(port.listRecovery()).toEqual(beforeRecovery); expect(port.stat(first.target)).toBeNull();
 });
+itWithNativeArchive('previews into a new month without creating that month or changing persistent bytes', async () => {
+  const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
+  const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
+  const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
+  await f.service.close();
+  const service = attachmentService({ directory: f.directory, archive: { port, intakeService }, now: () => new Date('2026-10-01T00:00:00.000Z') }); cleanups.push(() => service.close());
+  const original = Buffer.from('new month preview\n');
+  const uploaded = await service.upload({ name: 'new-month.txt', bytes: original, uploadId: randomUUID(), groupId: randomUUID() }); await service.waitForParsing(uploaded.id);
+  function tree(directory: string) {
+    return readdirSync(directory, { recursive: true }).map(String).sort().map(path => ({
+      path, bytes: statSync(join(directory, path)).isFile() ? readFileSync(join(directory, path)).toString('base64') : null
+    }));
+  }
+  const beforeVault = tree(vault.root), beforeLedger = tree(f.directory), beforeRecovery = tree(vault.recovery);
+  expect(existsSync(join(vault.root, '01图书馆/来自个人/2026-10'))).toBe(false);
+  const preview = await service.preview({ id: uploaded.id });
+  expect(preview).toMatchObject({ archiveFields: { collectedAt: '2026-10-01' }, target: expect.stringContaining('01图书馆/来自个人/2026-10/'), duplicate: false });
+  expect(tree(vault.root)).toEqual(beforeVault); expect(tree(f.directory)).toEqual(beforeLedger); expect(tree(vault.recovery)).toEqual(beforeRecovery);
+  expect(service.get(uploaded.id).archive).toBeUndefined(); expect(service.readOriginal(uploaded.id).bytes).toEqual(original);
+});
 itWithNativeArchive('retains uploaded Markdown bytes and its source metadata when creating the derived archive note', async () => {
   const f = await fixture(), vault = createPersonalIntakeFixture(); cleanups.push(async () => vault.cleanup());
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
-  await f.service.close(); const service = createAttachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => service.close());
+  await f.service.close(); const service = attachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => service.close());
   const bytes = Buffer.from('\uFEFF---\r\ntitle: 原始标题\r\nauthor: 原始作者\r\nsource: https://example.test/article\r\nclipped: 2026-08-01\r\n---\r\n原始正文\r\n');
   const uploaded = await service.upload({ name: 'document.md', bytes, uploadId: randomUUID(), groupId: randomUUID() }); await service.waitForParsing(uploaded.id);
   const result = await service.archive({ id: uploaded.id }); expect(result.state).toBe('archived');
@@ -139,10 +161,10 @@ itWithNativeArchive('recovers the existing intake operation when the archive res
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
   await f.service.close();
-  const service = createAttachmentService({ directory: f.directory, archive: { port, intakeService: { ...intakeService, commit: async (token, signal) => { await intakeService.commit(token, signal); throw Error('simulated response loss'); } } } }); cleanups.push(() => service.close());
+  const service = attachmentService({ directory: f.directory, archive: { port, intakeService: { ...intakeService, commit: async (token, signal) => { await intakeService.commit(token, signal); throw Error('simulated response loss'); } } } }); cleanups.push(() => service.close());
   const uploaded = await service.upload({ name: 'lost.txt', bytes: Buffer.from('KEPT ORIGINAL'), uploadId: randomUUID(), groupId: randomUUID() }); await service.waitForParsing(uploaded.id);
   await expect(service.archive({ id: uploaded.id })).rejects.toThrow('simulated response loss'); const journals = port.listRecovery(); expect(journals.length).toBeGreaterThan(0); await service.close();
-  const reopened = createAttachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => reopened.close()); await reopened.ready();
+  const reopened = attachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => reopened.close()); await reopened.ready();
   const result = await reopened.archive({ id: uploaded.id }); expect(result.state).toBe('archived'); expect(port.listRecovery()).toEqual(journals);
   expect(readFileSync(join(vault.root, result.target, '附件/原件.txt'), 'utf8')).toBe('KEPT ORIGINAL');
 });
@@ -151,7 +173,7 @@ itWithNativeArchive('does not begin an intake transaction if stopped while commi
   const port = openPersonalArchive(vault.root, vault.recovery, resolve('dist/native/personal-archive.node')); cleanups.push(async () => port.close());
   let rulesCalls = 0, release!: () => void, reached!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; }), inCommit = new Promise<void>(resolve => { reached = resolve; });
   const intakeService = createIntakeService({ port, ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => { if (++rulesCalls === 2) { reached(); await blocked; } return 'a'.repeat(64); }, refreshIndex: async () => true });
-  await f.service.close(); const service = createAttachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => service.close());
+  await f.service.close(); const service = attachmentService({ directory: f.directory, archive: { port, intakeService } }); cleanups.push(() => service.close());
   const uploaded = await service.upload({ name: 'stop.txt', bytes: Buffer.from('KEPT'), uploadId: randomUUID(), groupId: randomUUID() }); await service.waitForParsing(uploaded.id);
   const controller = new AbortController(), pending = service.archive({ id: uploaded.id }, controller.signal); await inCommit; controller.abort(); release(); await expect(pending).rejects.toThrow();
   expect(port.listRecovery()).toEqual([]); expect(port.stat(`01图书馆/小兆clipper/${uploaded.id}`)).not.toBeNull();

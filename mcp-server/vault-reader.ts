@@ -1,4 +1,5 @@
-import { readFile, readdir, realpath, stat } from 'node:fs/promises';
+import fs from 'node:fs/promises';
+import { constants, type BigIntStats } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { sha256Bytes } from '../src/server/vault/raw-bytes.js';
 import {
@@ -176,12 +177,12 @@ async function resolveRoot(root: string): Promise<string> {
   if (typeof root !== 'string' || !isAbsolute(root) || root.includes('\0')) fail('INVALID_ROOT');
   let canonical: string;
   try {
-    canonical = await realpath(root);
-    const rootStat = await stat(canonical);
+    canonical = await fs.realpath(root);
+    const rootStat = await fs.stat(canonical);
     if (!rootStat.isDirectory()) fail('INVALID_ROOT');
     for (const required of REQUIRED_ROOTS) {
-      const requiredPath = await realpath(join(canonical, required));
-      const requiredStat = await stat(requiredPath);
+      const requiredPath = await fs.realpath(join(canonical, required));
+      const requiredStat = await fs.stat(requiredPath);
       if (!requiredStat.isDirectory() || !isWithin(canonical, requiredPath)) fail('INVALID_ROOT');
     }
   } catch (error) {
@@ -198,31 +199,41 @@ function toRelative(root: string, absolutePath: string): string {
 async function createReader(root: string): Promise<VaultReader> {
   const canonicalRoot = await resolveRoot(root);
 
-  async function resolveFile(input: string): Promise<{ section: Section; absolute: string; relativePath: string }> {
-    const { section, parts } = validateRelativePath(input);
-    const absolute = join(canonicalRoot, ...parts);
-    let canonicalFile: string;
-    let fileSize = 0;
+  async function resolveSection(section: Section): Promise<string> {
     try {
-      canonicalFile = await realpath(absolute);
-      const fileStat = await stat(canonicalFile);
-      if (!fileStat.isFile()) fail('PATH_NOT_ALLOWED');
-      fileSize = fileStat.size;
+      const sectionRoot = await fs.realpath(join(canonicalRoot, section));
+      if (!isWithin(canonicalRoot, sectionRoot) || !(await fs.stat(sectionRoot)).isDirectory()) {
+        fail('PATH_NOT_ALLOWED');
+      }
+      return sectionRoot;
     } catch (error) {
       if (error instanceof VaultReaderError) throw error;
       fail(fsFailureCode(error));
     }
-    let sectionRoot: string;
+  }
+
+  async function resolveFile(input: string): Promise<{ section: Section; absolute: string; relativePath: string; identity: BigIntStats }> {
+    const { section, parts } = validateRelativePath(input);
+    const absolute = join(canonicalRoot, ...parts);
+    let canonicalFile: string;
+    let identity: BigIntStats;
+    let fileSize = 0;
     try {
-      sectionRoot = await realpath(join(canonicalRoot, section));
+      canonicalFile = await fs.realpath(absolute);
+      const fileStat = await fs.stat(canonicalFile, { bigint: true });
+      if (!fileStat.isFile()) fail('PATH_NOT_ALLOWED');
+      identity = fileStat;
+      fileSize = Number(fileStat.size);
     } catch (error) {
+      if (error instanceof VaultReaderError) throw error;
       fail(fsFailureCode(error));
     }
+    const sectionRoot = await resolveSection(section);
     if (!isWithin(sectionRoot, canonicalFile)) fail('PATH_NOT_ALLOWED');
     if (fileSize > MAX_PHYSICAL_BYTES) fail('FILE_TOO_LARGE');
     const realParts = toRelative(canonicalRoot, canonicalFile).split('/');
     if (realParts.some((part) => part.startsWith('.'))) fail('PATH_NOT_ALLOWED');
-    return { section, absolute: canonicalFile, relativePath: toRelative(canonicalRoot, canonicalFile) };
+    return { section, absolute: canonicalFile, relativePath: toRelative(canonicalRoot, canonicalFile), identity };
   }
 
   function makeRaw(relativePath: string, bytes: Uint8Array, limit: number): RawMarkdown {
@@ -239,14 +250,40 @@ async function createReader(root: string): Promise<VaultReader> {
     };
   }
 
-  async function readResolved(resolved: { absolute: string; relativePath: string }, limit: number): Promise<{ bytes: Uint8Array; raw: RawMarkdown }> {
-    let bytes: Uint8Array;
+  async function readResolved(resolved: { section: Section; absolute: string; relativePath: string; identity: BigIntStats }, limit: number): Promise<{ bytes: Uint8Array; raw: RawMarkdown }> {
+    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
-      bytes = await readFile(resolved.absolute);
+      handle = await fs.open(resolved.absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const opened = await handle.stat({ bigint: true });
+      if (!opened.isFile() || opened.dev !== resolved.identity.dev || opened.ino !== resolved.identity.ino) fail('PATH_NOT_ALLOWED');
+      if (opened.size > BigInt(MAX_PHYSICAL_BYTES)) fail('FILE_TOO_LARGE');
+      if (opened.size !== resolved.identity.size || opened.mtimeNs !== resolved.identity.mtimeNs || opened.ctimeNs !== resolved.identity.ctimeNs) fail('READ_FAILED');
+      // Reading through the verified descriptor avoids reopening a path after
+      // validation. One extra byte detects growth without an unbounded read.
+      const buffer = Buffer.alloc(Number(opened.size) + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+        if (bytesRead === 0) break;
+        length += bytesRead;
+      }
+      const after = await handle.stat({ bigint: true });
+      const section = await resolveSection(resolved.section);
+      const currentPath = await fs.realpath(resolved.absolute);
+      const current = await fs.stat(currentPath, { bigint: true });
+      if (!isWithin(section, currentPath) || !isWithin(canonicalRoot, currentPath)
+        || current.dev !== opened.dev || current.ino !== opened.ino) fail('PATH_NOT_ALLOWED');
+      if (after.size > BigInt(MAX_PHYSICAL_BYTES)) fail('FILE_TOO_LARGE');
+      if (length !== Number(opened.size) || after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs
+        || current.size !== opened.size || current.mtimeNs !== opened.mtimeNs || current.ctimeNs !== opened.ctimeNs) fail('READ_FAILED');
+      const bytes = buffer.subarray(0, length);
+      return { bytes, raw: makeRaw(resolved.relativePath, bytes, limit) };
     } catch (error) {
-      fail(fsFailureCode(error));
+      if (error instanceof VaultReaderError) throw error;
+      return fail(fsFailureCode(error));
+    } finally {
+      await handle?.close().catch(() => undefined);
     }
-    return { bytes, raw: makeRaw(resolved.relativePath, bytes, limit) };
   }
 
   async function readMarkdown(path: string, maxBytes?: number): Promise<RawMarkdown> {
@@ -319,7 +356,7 @@ async function createReader(root: string): Promise<VaultReader> {
   }
 
   async function listKnowledgeFiles(): Promise<string[]> {
-    const root = await realpath(join(canonicalRoot, KNOWLEDGE_ROOT));
+    const root = await resolveSection(KNOWLEDGE_ROOT);
     const output: string[] = [];
     const visited = new Set<string>();
     async function walk(directory: string): Promise<void> {
@@ -327,7 +364,7 @@ async function createReader(root: string): Promise<VaultReader> {
       visited.add(directory);
       let entries;
       try {
-        entries = await readdir(directory, { withFileTypes: true });
+        entries = await fs.readdir(directory, { withFileTypes: true });
       } catch (error) {
         fail(fsFailureCode(error));
       }
@@ -336,7 +373,7 @@ async function createReader(root: string): Promise<VaultReader> {
         const candidate = join(directory, entry.name);
         let candidateReal: string;
         try {
-          candidateReal = await realpath(candidate);
+          candidateReal = await fs.realpath(candidate);
         } catch (error) {
           const code = typeof error === 'object' && error !== null && 'code' in error
             ? (error as { code?: unknown }).code
@@ -349,7 +386,7 @@ async function createReader(root: string): Promise<VaultReader> {
         if (candidateParts.some((part) => part.startsWith('.'))) continue;
         let candidateStat;
         try {
-          candidateStat = await stat(candidateReal);
+          candidateStat = await fs.stat(candidateReal);
         } catch (error) {
           fail(fsFailureCode(error));
         }

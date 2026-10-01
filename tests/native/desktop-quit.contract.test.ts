@@ -17,6 +17,8 @@ it('keeps the backend alive when an unsaved editor cancels quit, then closes it 
       const { app, BrowserWindow } = require('electron');
       app.setPath('userData', ${JSON.stringify(join(directory, 'user-data'))});
       let quitState = 'idle';
+      const installRequested = false;
+      const autoUpdater = { quitAndInstall: () => { throw Error('Unexpected update install during normal quit'); } };
       let closeCount = 0;
       let closeFinished = false;
       const started = { close: async () => {

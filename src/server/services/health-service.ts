@@ -337,7 +337,8 @@ export function createDirectReadHealthService(input: {
   let pending: Promise<VaultReadiness> | undefined;
   function probe(): Promise<VaultReadiness> {
     if (pending !== undefined) return pending;
-    if (cached !== undefined && Date.now() - cached.at < 1_000) return Promise.resolve(cached.value);
+    const age = cached === undefined ? undefined : Date.now() - cached.at;
+    if (cached !== undefined && age !== undefined && age >= 0 && age < 1_000) return Promise.resolve(cached.value);
     const controller = new AbortController();
     let settled = false;
     let complete!: (value: VaultReadiness) => void;

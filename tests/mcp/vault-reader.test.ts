@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from 'node:fs/promises';
+import fs, { mkdir, mkdtemp, readFile, rename, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createVaultReader } from '../../mcp-server/vault-reader.js';
 import {
   createBrainFixture,
@@ -11,6 +11,7 @@ import {
 
 const fixtures: Array<Awaited<ReturnType<typeof createBrainFixture>>> = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(fixtures.splice(0).map((fixture) => fixture.cleanup()));
 });
 
@@ -50,6 +51,44 @@ describe('VaultReader safety and bounded reads', () => {
     expect(result.rawSha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(result.lineCount).toBeGreaterThan(0);
     expect(result.truncated).toBe(false);
+  });
+
+  it('rejects a section replaced by an outside symlink after startup', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const outside = await mkdtemp(join(tmpdir(), 'xiaozhao-brain-mcp-replaced-'));
+    try {
+      const reader = await createVaultReader(fixture.root);
+      await writeFile(join(outside, 'outside.md'), 'synthetic private note');
+      await rm(join(fixture.root, '02知识库'), { recursive: true });
+      await symlink(outside, join(fixture.root, '02知识库'), 'dir');
+      await expect(reader.listKnowledgeFiles()).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+      await expect(reader.readMarkdown('02知识库/outside.md')).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('does not return outside bytes when the section changes between resolution and read', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    const outside = await mkdtemp(join(tmpdir(), 'xiaozhao-brain-mcp-during-read-'));
+    try {
+      await mkdir(join(outside, '决策'));
+      await writeFile(join(outside, '决策/证据方法.md'), 'synthetic private bytes');
+      const reader = await createVaultReader(fixture.root);
+      const originalStat = fs.stat;
+      let replaced = false;
+      vi.spyOn(fs, 'stat').mockImplementation(async (...args) => {
+        const result = await originalStat(...args);
+        if (args[0] === join(reader.root, '02知识库') && !replaced) {
+          replaced = true;
+          await rename(join(fixture.root, '02知识库'), join(fixture.root, 'old-knowledge'));
+          await symlink(outside, join(fixture.root, '02知识库'), 'dir');
+        }
+        return result;
+      });
+      await expect(reader.readMarkdown(KNOWLEDGE_PATH)).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+      expect(replaced).toBe(true);
+    } finally { await rm(outside, { recursive: true, force: true }); }
   });
 
   it.each([

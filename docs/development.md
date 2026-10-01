@@ -21,7 +21,7 @@ Node.js 需要 `22.22.3+`。日常提交前运行：
 npm run verify:fast
 ```
 
-这会依次检查共享、客户端、服务端、Electron 和 MCP 的层边界与类型，再运行单元、集成和两套 MCP 测试。需要验证浏览器 fixture 时运行：
+这会依次检查共享、客户端、服务端、Electron 和 MCP 的层边界与类型，再运行单元、集成和两套 MCP 测试。macOS arm64 在检查前准备个人归档原生模块；Linux 保留适用范围。CI 与本地共用 `scripts/run-verification.ts`，无需另猜构建前置。需要验证浏览器 fixture 时运行：
 
 ```sh
 npm run test:e2e:fixtures
@@ -35,13 +35,15 @@ fixture runner 会按配置串行启动各自的 Vite 端口，避免直接运�
 npm run verify:full
 ```
 
-它会加入组件、安全、原生、归档、公司 MCP 和桌面运行时构建检查，需要 macOS arm64 与 Xcode 命令行工具。`npm run verify:release` 还会执行 E2E fixture、重新打包当前源码、Electron 开发版/打包版验收，以及公司 MCP/运维工具构建；真实 Obsidian 合同探针需要单独配置外部环境后运行 `npm run test:contract:all`。只读扫描正式大脑的元数据时，使用：
+它先准备三个原生模块，加入组件、安全、公司 MCP 和桌面运行时构建检查，并通过配置发现整个 `tests/native`、`tests/archive`，需要 macOS arm64 与 Xcode 命令行工具。专项测试入口继续用于定位。`npm run verify:release` 还会执行 E2E fixture、重新打包当前源码、Electron 开发版/打包版验收，以及公司 MCP/运维工具构建；真实 Obsidian 合同探针需要单独配置外部环境后运行 `npm run test:contract:all`。只读扫描正式大脑的元数据时，使用：
 
 ```sh
 VAULT_ROOT=/absolute/path/to/vault npm run vault:lint
 ```
 
 该命令只读取 `01图书馆` 和 `02知识库`，把严格通过、历史兼容和硬错误分开统计，不会改写笔记。存在硬错误时退出码为 `2`。
+
+统一健康检查及个人冷备份的用法见 [个人备份与健康检查](operations/personal-backup-and-health.md)。健康检查只读，来源缺失、歧义与指向知识笔记分别报告，不自动迁移或补造来源。个人快照涵盖 vault 与整个持久 `userData`；离线校验分别报告快照、SQLite 和应用恢复状态。迁移合同及当前未实现的身份重绑定见 [个人迁移恢复合同](operations/personal-restore-contract.md)。
 
 生产构建会执行客户端入口预算检查。当前首屏入口预算为 900 KiB，个人和公司页面在生产环境按路由懒加载；组件测试通过专用 eager route map 保持同步测试语义。
 
@@ -83,4 +85,4 @@ npm run test:electron
 
 ## 当前验收记录
 
-以上带日期的测试数字保留当时的验证范围，不代表当前总量。当前结果及未验证项以 [2026-09-25 架构与基建验收](reviews/2026-09-25-architecture-foundation-acceptance.md) 为准。
+以上带日期的测试数字保留当时的验证范围，不代表当前总量。本轮基础设施审查见 [2026-10-01 全量盘点](reviews/2026-10-01-infrastructure-audit.md)，实施及实际验证结果见 [2026-10-01 基建稳固验收](reviews/2026-10-01-foundation-hardening-acceptance.md)。

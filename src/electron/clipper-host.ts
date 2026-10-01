@@ -116,7 +116,19 @@ export async function handleClipperMessage(message: unknown, configInput: Clippe
       if ((error as NodeJS.ErrnoException)?.code === 'EEXIST' && await findDuplicate(inbox, m.payload.packetId, contentHash)) return { ok: true, packetId: m.payload.packetId, duplicate: true, contentHash };
       throw error;
     }
-  } finally { await lockHandle?.close().catch(() => undefined); await fs.unlink(lock).catch((error) => { if (!isMissing(error)) throw error; }); }
+  } finally {
+    // A failed exclusive open owns nothing. Keep the descriptor open until the
+    // path identity is checked so a replaced lock is never released as ours.
+    if (lockHandle) {
+      try {
+        const owned = await lockHandle.stat({ bigint: true });
+        const current = await fs.lstat(lock, { bigint: true }).catch((error) => { if (isMissing(error)) return undefined; throw error; });
+        if (current && current.dev === owned.dev && current.ino === owned.ino) {
+          await fs.unlink(lock).catch((error) => { if (!isMissing(error)) throw error; });
+        }
+      } finally { await lockHandle.close().catch(() => undefined); }
+    }
+  }
 }
 export async function runClipperHost(opts: { configPath: string; input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }) {
   await assertPrivateConfig(opts.configPath); const config = parseClipperHostConfig(JSON.parse(await fs.readFile(opts.configPath, 'utf8'))); const input = opts.input ?? process.stdin; const output = opts.output ?? process.stdout;

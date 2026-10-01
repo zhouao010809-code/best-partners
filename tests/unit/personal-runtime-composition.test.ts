@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -14,6 +14,7 @@ import { IndexScheduler } from '../../src/server/index/index-scheduler.js';
 import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js';
 import { createPersonalRuntimeComposition } from '../../src/server/runtime/personal-composition.js';
 import { FakeVaultGateway } from '../../src/server/vault/FakeVaultGateway.js';
+import { loadRuleBundle } from '../../src/server/rules/rule-bundle.js';
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -73,6 +74,43 @@ async function fixture() {
 function containedErrors(error: unknown): unknown[] {
   return error instanceof AggregateError ? [error, ...error.errors.flatMap(containedErrors)] : [error];
 }
+
+it.each(['absent', 'published', 'rules-changed', 'unavailable', 'rules-missing'] as const)('checks confirmed project writes during a file-backed runtime restart: %s', async scenario => {
+  const f = await fixture();
+  const first = await createPersonalRuntimeComposition(f.config);
+  cleanups.push(() => first.dispose());
+  const kernel = f.openKernel.mock.results[0]!.value as databaseModule.NormalStateKernel;
+  const projects = first.capabilities.personal!.projectService!;
+  const plans = first.capabilities.personal!.projectWritePlans!;
+  const projectRoot = join(f.config.vaultRealRoot, '..', 'project');
+  await mkdir(projectRoot); await writeFile(join(projectRoot, 'README.md'), '# Isolated project');
+  const scan = await projects.scan(projectRoot); const project = await projects.bind(scan.scanId, { sourceSha256: scan.sourceSha256 });
+  kernel.db.prepare('INSERT INTO assistant_conversations (id,updated_at,payload) VALUES (?,?,?)').run('startup-conversation', new Date().toISOString(), '{}');
+  const propose = () => plans.proposeDraft({ projectId: project.id, conversationId: 'startup-conversation', messageId: 'startup-message', category: '内容草稿', title: '重启恢复', summary: '保存已确认输出', content: '# Exactly once', expectedRevision: 1 });
+  const running = await propose(); const pending = await propose();
+  kernel.db.exec("CREATE TRIGGER interrupt_project_receipt BEFORE UPDATE OF status ON personal_project_write_plans WHEN NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'receipt interrupted'); END;");
+  await expect(plans.confirm(running.id, 'startup-conversation', '2c0ce1ae-511b-4bf4-9a9d-444444444465')).rejects.toThrow('receipt interrupted');
+  kernel.db.exec('DROP TRIGGER interrupt_project_receipt');
+  const operation = kernel.db.prepare('SELECT id,payload_json FROM personal_project_operations WHERE plan_id = ?').get(running.id) as { id: string; payload_json: string };
+  const payload = JSON.parse(operation.payload_json);
+  expect(payload.confirmation.ruleFingerprint).toBe((await loadRuleBundle(f.config.gateway)).fingerprint);
+  const target = join(projectRoot, running.targetPath); const before = await stat(target);
+  if (scenario === 'absent') await unlink(target);
+  else if (scenario === 'rules-changed') f.config.gateway.mutateFixture(RULE_BUNDLE_SOURCE_PATHS[0]!, 'changed rules');
+  else if (scenario === 'unavailable') Object.assign(f.config.gateway, { probeReadiness: async () => ({ status: 'unavailable', reason: 'VAULT_UNAVAILABLE' }) });
+  else if (scenario === 'rules-missing') f.config.gateway.deleteFixture(RULE_BUNDLE_SOURCE_PATHS[0]!);
+  await first.dispose();
+  const restarted = await createPersonalRuntimeComposition(f.config);
+  cleanups.push(() => restarted.dispose());
+  const restartedPlans = restarted.capabilities.personal!.projectWritePlans!;
+  expect(restartedPlans.project(running.id)?.status).toBe(scenario === 'rules-changed' ? 'stale' : scenario === 'unavailable' || scenario === 'rules-missing' ? 'running' : 'completed');
+  expect(restartedPlans.project(pending.id)?.status).toBe('pending');
+  await expect(readFile(join(projectRoot, pending.targetPath))).rejects.toThrow();
+  expect(await readFile(target, 'utf8')).toBe('# Exactly once');
+  if (scenario !== 'absent') { const after = await stat(target); expect([after.ino, after.mtimeMs, after.ctimeMs]).toEqual([before.ino, before.mtimeMs, before.ctimeMs]); }
+  const restartedKernel = f.openKernel.mock.results[1]!.value as databaseModule.NormalStateKernel;
+  expect(restartedKernel.db.prepare('SELECT COUNT(*) AS count FROM personal_project_operations WHERE plan_id = ?').get(running.id)).toEqual({ count: 1 });
+});
 
 it('releases every acquired resource when later capability construction fails', async () => {
   const f = await fixture();
