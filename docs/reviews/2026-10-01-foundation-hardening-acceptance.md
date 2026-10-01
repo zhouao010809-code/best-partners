@@ -53,7 +53,7 @@
 
 ## 当前构建
 
-- Git commit：`3f8354c38e191292c79ec1105f0d3428ac92d26d`，`dirty: true`，本轮未提交 Git。
+- 验收构建的 Git 基线：`3f8354c38e191292c79ec1105f0d3428ac92d26d`，构建时 `dirty: true`。实现随后按用户要求同步到 GitHub；构建清单保留实际构建时身份，不随后续 Git 提交重录。
 - 构建来源：`9285cf9608322647919d574acc5af140ce684a4d598548838807acc4ca67b2d7`；构建时间：`2026-09-30T17:56:19.840Z`（UTC）。
 - `dist/build-manifest.json`：415 个来源记录、101 个发布资源记录；App 内 `Contents/Resources/build-manifest.json` 完全一致。
 - App：`dist/desktop/最佳拍档-darwin-arm64/最佳拍档.app`。

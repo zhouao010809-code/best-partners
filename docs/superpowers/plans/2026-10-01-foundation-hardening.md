@@ -10,7 +10,7 @@
 
 **Tech Stack:** TypeScript、Node.js 22.22.3、Electron、Fastify、SQLite、Vitest、Playwright、macOS 原生 helper。
 
-实施位置：应用仓库根目录（`desktop-read` 工作树）。不处理用户既有 `.superpowers/`，不修改真实库原文或核心规则，不执行外部发布。
+实施位置：应用仓库根目录（`desktop-read` 工作树）。不处理用户既有 `.superpowers/`，不修改真实库原文或核心规则，不执行文章外发；GitHub 同步按用户后续授权进行。
 
 ## 1. 文件操作与构建修复
 
