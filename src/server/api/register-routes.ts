@@ -1,3 +1,5 @@
+import { createLearningNotesService } from '../learning/notes-service.js';
+import { registerLearningNotesRoutes } from './routes/learning-notes.js';
 import { registerProjectCreationRoutes } from './routes/project-creations.js';
 import { createCreationAssistant } from '../projects/creation-assistant.js';
 import { PublicApiError } from '../../shared/api/errors.js';
@@ -56,6 +58,13 @@ export function registerApplicationRoutes(input: ApplicationRouteRegistryInput):
       projectExists: projectId => options.readApi!.database.prepare('SELECT 1 AS present FROM personal_projects WHERE id = ?').get(projectId) !== undefined
     })
   } : {}) });
+  // Desktop gateways carry the captured filesystem identity. Never accept a
+  // browser-provided vault or silently fall back to a shared default identity.
+  const gateway = options.readApi?.gateway;
+  const vaultId = gateway && 'cacheKey' in gateway && typeof gateway.cacheKey === 'string' && /^[a-f0-9]{64}$/u.test(gateway.cacheKey)
+    ? gateway.cacheKey : undefined;
+  registerLearningNotesRoutes(app, runtimeMode === 'personal' && options.readApi && vaultId
+    ? createLearningNotesService({ database: options.readApi.database, vaultId }) : undefined);
   registerMaterialRoutes(app, readService);
   registerDocumentRoutes(app, readService);
   registerIntakeRoutes(app, options.intakeService);

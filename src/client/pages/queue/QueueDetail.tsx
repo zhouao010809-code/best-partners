@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { FileText, Sparkles, ListMinus, ListPlus } from 'lucide-react';
 import { useConsoleRuntime } from '../../app/ConsoleRuntime.js';
+import { LearningNotes } from '../../components/learning/LearningNotes.js';
+import { ReadingSelection } from '../../components/learning/ReadingSelection.js';
 import { SafeMarkdown } from '../../components/SafeMarkdown.js';
 import { MaterialTrashButton } from '../../components/MaterialTrash.js';
 import { ExtractionWorkbench } from '../ExtractionPage.js';
@@ -50,6 +52,8 @@ export function QueueDetail({ materialPath, item, runId, pane, onPane, onSelectR
       if (!result.ok) { if ('state' in result) setOriginalError(result.state.message ?? '原资料暂时无法读取，已保存结果仍可查看。'); return; }
       if (result.value.path !== materialPath) { setOriginalError('原文路径不匹配，请重新读取。'); return; }
       setOriginal(result.value);
+    }).catch(() => {
+      if (!controller.signal.aborted) setOriginalError('原资料暂时无法读取，已保存结果仍可查看。');
     });
     return () => controller.abort();
   }, [api.getDocumentDetail, materialPath, originalRevision, item?.sourceRawSha256]);
@@ -74,7 +78,7 @@ export function QueueDetail({ materialPath, item, runId, pane, onPane, onSelectR
       {pane === 'result' && <header className="queue-evidence-heading"><div><strong>原文依据</strong><span>核对后继续审阅，编辑会保留</span></div><button type="button" ref={evidenceClose} className="quiet-button" onClick={closeEvidence}>收起依据</button></header>}
       {!original && !originalError && <p role="status">正在读取原文…</p>}
       {originalError && <div className="extraction-notice" role="alert"><p>{originalError}</p><button type="button" className="quiet-button" onClick={() => setOriginalRevision((v) => v + 1)}>重新读取原文</button></div>}
-      {original && <>{item?.sourceRawSha256 && item.sourceRawSha256 !== original.versionMarker.rawSha256 && <p className="extraction-notice">原文已有更新，以下显示当前文件内容。</p>}<SafeMarkdown>{original.markdown.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u, '')}</SafeMarkdown></>}
+      {original && <>{item?.sourceRawSha256 && item.sourceRawSha256 !== original.versionMarker.rawSha256 && <p className="extraction-notice">原文已有更新，以下显示当前文件内容。</p>}<ReadingSelection source={original.path === materialPath && !originalError && (pane === 'original' || pane === 'result' && evidenceOpen) ? { path: original.path, title: original.title, revision: original.versionMarker.rawSha256 } : undefined}><SafeMarkdown>{original.markdown.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u, '')}</SafeMarkdown></ReadingSelection><LearningNotes api={api} path={original.path} /></>}
       {item && !item.canExtract && <p className="extraction-muted">这份资料当前不在待提炼范围，已保存的结果仍可查看。</p>}
       <details className="queue-file-info"><summary>文件信息</summary><p>{materialPath}</p>{currentSha && <p>原文版本 {currentSha.slice(0, 12)}</p>}</details>
     </section>

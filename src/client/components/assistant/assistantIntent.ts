@@ -1,3 +1,4 @@
+import type { LearningSelection } from '../../../shared/api/learning.js';
 import type { AttachmentSelection } from '../../../shared/api/attachments.js';
 export const ASSISTANT_INTENT_EVENT = 'xiaozhao:ask';
 export const ASSISTANT_REVIEW_EVENT = 'xiaozhao:review-updated';
@@ -8,6 +9,8 @@ export type ProjectWorkspaceUpdate = {
 };
 export type AssistantIntent = {
   prompt: string;
+  purpose?: 'learning';
+  selection?: LearningSelection;
   contextPath?: string;
   scope?: 'brain' | 'current' | 'project';
   projectId?: string;

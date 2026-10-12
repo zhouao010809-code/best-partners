@@ -18,6 +18,7 @@ import { AppShell } from '../../src/client/app/AppShell.js';
 import { AppRouter } from '../../src/client/app/router.js';
 import { useConsoleRuntime } from '../../src/client/app/ConsoleRuntime.js';
 import { PageState } from '../../src/client/components/PageState.js';
+import { ReadingSelection } from '../../src/client/components/learning/ReadingSelection.js';
 import { ASSISTANT_INTENT_EVENT } from '../../src/client/components/assistant/assistantIntent.js';
 
 const MAIN_NAVIGATION_NAMES = [
@@ -129,13 +130,13 @@ function renderShell(api: ReadConsoleApi) {
 describe('asking about selected source prose', () => {
   const materialPath = '01图书馆/来自个人/原始资料.md';
   const knowledgePath = '02知识库/阅读知识.md';
-  function mountSelectionPage(route: string) {
+  function mountSelectionPage(route: string, ready = true) {
     const api = createApi();
     render(<MemoryRouter initialEntries={[route]}><Routes><Route element={<AppShell api={api} />}><Route path="*" element={<>
-      <div className="library-original__reading"><div className="safe-markdown"><p data-testid="library-source">档案原文证据</p></div></div>
+      <div className="library-original__reading"><ReadingSelection source={ready ? { path: materialPath, title: '实际加载的资料', revision: 'a'.repeat(64) } : undefined}><div className="safe-markdown"><p data-testid="library-source">档案原文证据</p></div></ReadingSelection></div>
       <div className="library-original__source"><pre data-testid="library-raw">原始文件元信息</pre></div>
-      <div className="knowledge-detail__body"><section aria-label="知识正文"><div className="safe-markdown"><p data-testid="knowledge-source">知识正文证据</p></div></section><section aria-label="来源材料"><div className="safe-markdown"><p data-testid="knowledge-provenance">关联资料信息</p></div></section></div>
-      <section className="queue-original"><div className="safe-markdown"><p data-testid="queue-source">队列原文证据</p></div></section>
+      <div className="knowledge-detail__body"><section aria-label="知识正文"><ReadingSelection source={ready ? { path: knowledgePath, title: '实际加载的资料', revision: 'a'.repeat(64) } : undefined}><div className="safe-markdown"><p data-testid="knowledge-source">知识正文证据</p></div></ReadingSelection></section><section aria-label="来源材料"><div className="safe-markdown"><p data-testid="knowledge-provenance">关联资料信息</p></div></section></div>
+      <section className="queue-original"><ReadingSelection source={ready ? { path: materialPath, title: '实际加载的资料', revision: 'a'.repeat(64) } : undefined}><div className="safe-markdown"><p data-testid="queue-source">队列原文证据</p></div></ReadingSelection></section>
       <article className="ingestion-candidate"><div className="safe-markdown"><p data-testid="candidate">尚未提交的候选判断</p></div></article>
     </>} /></Route></Routes></MemoryRouter>);
     return api;
@@ -165,7 +166,8 @@ describe('asking about selected source prose', () => {
       await userEvent.click(screen.getByRole('button', { name: '问问这段内容' }));
       expect(listener).toHaveBeenCalledOnce();
       expect((listener.mock.calls[0]![0] as CustomEvent).detail).toEqual({
-        prompt: `请解释这段原文，并结合上下文说明：\n\n“${passage}”`, contextPath: path
+        prompt: '请用容易理解的话解释这段内容', contextPath: path, scope: 'current', purpose: 'learning',
+        selection: { path, title: '实际加载的资料', revision: 'a'.repeat(64), text: passage }
       });
       expect(screen.queryByRole('button', { name: '问问这段内容' })).toBeNull();
       expect(api.getDocumentDetail).not.toHaveBeenCalled(); expect(api.getKnowledgeDetail).not.toHaveBeenCalled();
@@ -191,8 +193,8 @@ describe('asking about selected source prose', () => {
     expect(screen.queryByRole('button', { name: '问问这段内容' })).toBeNull();
   });
 
-  it('requires an explicit source path before attributing selected original prose', async () => {
-    mountSelectionPage('/library'); await screen.findByTitle('索引 v7 已就绪');
+  it('does not infer a ready source from the URL when no loaded source was registered', async () => {
+    mountSelectionPage(`/library?${new URLSearchParams({ path: materialPath })}`, false); await screen.findByTitle('索引 v7 已就绪');
     selectText('library-source');
     expect(screen.queryByRole('button', { name: '问问这段内容' })).toBeNull();
   });

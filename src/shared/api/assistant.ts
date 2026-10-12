@@ -3,6 +3,7 @@ import { successEnvelopeSchema } from './schemas.js';
 import { attachmentSchema, attachmentSelectionSchema } from './attachments.js';
 import { extractionSourceRangeSchema } from './extraction.js';
 import { projectWriteActionSchema } from './projects.js';
+import { learningSelectionSchema } from './learning.js';
 
 const tokenCount = z.number().int().nonnegative();
 export const assistantModelCapacitySchema = z.object({ contextWindowTokens: z.number().int().positive(), maxOutputTokens: z.number().int().positive().optional(), sourceUrl: z.string().url(), verifiedAt: z.string() });
@@ -67,17 +68,19 @@ const assistantMessageFieldsSchema = z.object({
   startedAt: z.string().optional(), finishedAt: z.string().optional(), steps: z.array(assistantStepSchema).optional(),
   usage: assistantUsageSchema.optional(), context: assistantContextSchema.optional(),
   skillUse: assistantSkillUseSchema.optional(),
+  purpose: z.literal('learning').optional(), selection: learningSelectionSchema.optional(),
   attachmentArchives: z.array(z.uuid()).max(8).optional(),
   attachments: z.array(attachmentSchema.extend({ startPage: z.number().int().positive().optional(), endPage: z.number().int().positive().optional() })).max(8).optional()
 });
 export const assistantMessageSchema = assistantMessageFieldsSchema.superRefine(validateProjectScope);
-const assistantConversationFieldsSchema = z.object({ id: z.string(), title: z.string(), createdAt: z.string(), updatedAt: z.string(), status: z.enum(['idle', 'running', 'failed', 'stopped']), providerId: z.string(), model: z.string(), effort: z.string().optional(), scope: assistantScopeSchema, contextPath: z.string().optional(), projectId: z.uuid().optional(), projectRevision: projectRevisionSchema.optional(), messages: z.array(assistantMessageSchema), problem: z.string().optional() });
+const assistantConversationFieldsSchema = z.object({ purpose: z.literal('learning').optional(), selection: learningSelectionSchema.optional(), id: z.string(), title: z.string(), createdAt: z.string(), updatedAt: z.string(), status: z.enum(['idle', 'running', 'failed', 'stopped']), providerId: z.string(), model: z.string(), effort: z.string().optional(), scope: assistantScopeSchema, contextPath: z.string().optional(), projectId: z.uuid().optional(), projectRevision: projectRevisionSchema.optional(), messages: z.array(assistantMessageSchema), problem: z.string().optional() });
 export const assistantConversationSchema = assistantConversationFieldsSchema.superRefine(validateProjectScope);
 export const assistantSendSchema = z.strictObject({
   conversationId: z.uuid().optional(), clientRequestId: z.uuid(), message: z.string().trim().min(1).max(16000),
   providerId: z.string().min(1).max(80), model: z.string().min(1).max(160), effort: z.string().max(40).optional(),
   scope: assistantScopeSchema, contextPath: z.string().min(1).max(1024).optional(), projectId: z.uuid().optional(), projectRevision: projectRevisionSchema.optional(),
   attachments: z.array(attachmentSelectionSchema).max(8).refine(items => new Set(items.map(item => item.id)).size === items.length, '附件不可重复选择').optional(),
+  purpose: z.literal('learning').optional(), selection: learningSelectionSchema.optional(),
   skillId: assistantSkillIdSchema.optional(),
   skillRevision: assistantSkillRevisionSchema.optional()
 }).superRefine((value, context) => {

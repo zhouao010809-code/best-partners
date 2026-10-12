@@ -1,3 +1,5 @@
+import type { LearningSelection } from '../../shared/api/learning.js';
+import { PublicApiError } from '../../shared/api/errors.js';
 import type { AttachmentSelection } from '../../shared/api/attachments.js';
 import type { ProjectService, ProjectWritePlanService } from '../../shared/api/projects.js';
 import type { ReadService } from '../services/read-service.js';
@@ -16,6 +18,8 @@ export interface ToolFactoryInput {
   projectWritePlans?: ProjectWritePlanService;
   scope: 'brain' | 'current' | 'project';
   contextPath?: string;
+  purpose?: 'learning';
+  selection?: LearningSelection;
   projectId?: string;
   projectRevision?: number;
   allowCandidateWrites?: boolean;
@@ -39,6 +43,14 @@ export type AssistantToolContext = Omit<ToolFactoryInput, 'readService'>;
 /** Compose the personal tool set at one explicit runtime scope. */
 export function createAssistantTools(input: ToolFactoryInput): AssistantTool[] {
   const sourceAllocator = input.sourceAllocator ?? createAssistantSourceAllocator();
+  if (input.purpose === 'learning') {
+    if (!input.selection || input.scope !== 'current' || input.contextPath !== input.selection.path || input.attachments.length || input.projectId) {
+      throw new PublicApiError('ASSISTANT_LEARNING_CONFLICT', '学习会话只能使用固定的当前资料，请重新选择。', 409);
+    }
+    return createBrainTools({ readService: input.readService, scope: 'current', contextPath: input.selection.path,
+      expectedRevision: input.selection.revision, allowCandidateWrites: false, sourceAllocator,
+      model: input.model, signal: input.signal, emit: input.emit });
+  }
   const brainTools = createBrainTools({
     ...input,
     scope: input.scope === 'current' ? 'current' : 'brain',

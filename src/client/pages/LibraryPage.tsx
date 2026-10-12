@@ -8,6 +8,8 @@ import type { LibraryQuery } from '../../shared/api/library.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { PageState } from '../components/PageState.js';
 import { MaterialTrashButton, MaterialTrashProvider } from '../components/MaterialTrash.js';
+import { LearningNotes } from '../components/learning/LearningNotes.js';
+import { ReadingSelection } from '../components/learning/ReadingSelection.js';
 import { SafeMarkdown } from '../components/SafeMarkdown.js';
 import { catalogSessionKey, readCatalogSession, updateCatalogSession, rememberCatalogPosition, rememberCatalogCount, useCatalogReturn } from '../components/library/catalogSession.js';
 import { CollectionFolder } from '../components/library/CollectionFolder.js';
@@ -75,7 +77,8 @@ function OriginalDetail({ record, revision, onClose, onLoaded }: { record: Pick<
       <button type="button" className="load-more-button" onClick={() => setRetry((value) => value + 1)}>重试读取原文</button>
     </>}
     {data && <>
-      <section className="library-original__reading" aria-label="原始文件内容"><SafeMarkdown>{data.markdown.replace(/^\uFEFF?---[\t ]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[\t ]*(?:\r?\n|$)/u, '')}</SafeMarkdown></section>
+      <section className="library-original__reading" aria-label="原始文件内容"><ReadingSelection source={resource.status === 'ready' ? { path: data.path, title: data.title, revision: data.versionMarker.rawSha256 } : undefined}><SafeMarkdown>{data.markdown.replace(/^\uFEFF?---[\t ]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[\t ]*(?:\r?\n|$)/u, '')}</SafeMarkdown></ReadingSelection></section>
+      <LearningNotes api={api} path={data.path} />
       <details className="library-original__source"><summary>查看原始 Markdown 与文件信息</summary><p>{record.path}</p><pre className="library-original__text" aria-label="原始 Markdown 与 YAML">{data.markdown}</pre></details>
     </>}
     <footer className="knowledge-detail__footer"><Link to={`/queue?${new URLSearchParams({ view: 'ready', materialPath: record.path })}`}>返回这份资料的提炼工作台</Link><MaterialTrashButton record={record} text /></footer>

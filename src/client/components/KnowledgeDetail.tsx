@@ -1,13 +1,16 @@
 import { useEffect, useRef } from 'react';
 import { ArrowUpRight, BookOpen, Link2, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import type { KnowledgePage, LiveKnowledgeDetail } from '../api/client.js';
+import type { KnowledgePage, LiveKnowledgeDetail, ReadConsoleApi } from '../api/client.js';
 import { PageState } from './PageState.js';
 import { MaterialTrashButton } from './MaterialTrash.js';
+import { LearningNotes } from './learning/LearningNotes.js';
+import { ReadingSelection } from './learning/ReadingSelection.js';
 import { SafeMarkdown } from './SafeMarkdown.js';
 import type { PageResource } from '../pages/pageSupport.js';
 
 export interface KnowledgeDetailProps {
+  readonly api?: ReadConsoleApi;
   readonly record: Pick<KnowledgePage['items'][number], 'path' | 'title'> & Partial<KnowledgePage['items'][number]>;
   readonly resource: PageResource<LiveKnowledgeDetail>;
   readonly openState: 'idle' | 'opening' | 'opened' | 'failed';
@@ -41,6 +44,7 @@ function markdownBody(markdown: string): string {
 }
 
 export function KnowledgeDetail({
+  api,
   record,
   resource,
   openState,
@@ -116,7 +120,8 @@ export function KnowledgeDetail({
       {detail !== undefined && (
         <div className="knowledge-detail__body">
           {!inline && provenance}
-          <section aria-label="知识正文"><SafeMarkdown>{markdownBody(detail.markdown)}</SafeMarkdown></section>
+          <section aria-label="知识正文"><ReadingSelection source={resource.status === 'ready' && detail.path === record.path ? { path: detail.path, title: detail.title, revision: detail.versionMarker.rawSha256 } : undefined}><SafeMarkdown>{markdownBody(detail.markdown)}</SafeMarkdown></ReadingSelection></section>
+          {api && <LearningNotes api={api} path={detail.path} />}
           {inline && <details className="knowledge-detail__provenance" key={record.path}><summary>来源与关联知识</summary>{facts}{provenance}</details>}
         </div>
       )}

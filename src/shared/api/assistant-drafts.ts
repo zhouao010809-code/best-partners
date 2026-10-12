@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { successEnvelopeSchema } from './schemas.js';
 import { attachmentSelectionSchema } from './attachments.js';
+import { learningSelectionSchema } from './learning.js';
 
 const projectRevisionSchema = z.number().int().nonnegative();
 function validateProjectScope(value: { scope: 'brain' | 'current' | 'project'; projectId?: string | undefined; projectRevision?: number | undefined; contextPath?: string | undefined }, context: z.RefinementCtx): void {
@@ -14,6 +15,7 @@ function validateProjectScope(value: { scope: 'brain' | 'current' | 'project'; p
 }
 
 const assistantDraftFieldsBaseSchema = z.strictObject({
+  purpose: z.literal('learning').optional(), selection: learningSelectionSchema.optional(),
   conversationId: z.uuid().optional(), text: z.string().max(16000),
   attachments: z.array(attachmentSelectionSchema).max(8), groupId: z.uuid(),
   scope: z.enum(['brain', 'current', 'project']), contextPath: z.string().min(1).max(1024).optional(),

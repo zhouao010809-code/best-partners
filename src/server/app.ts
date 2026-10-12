@@ -223,7 +223,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   // is idempotent and never writes files.
   actionPlans?.recover();
   const assistant = options.assistantAdapters && options.readApi && readService
-    ? createAssistantService({ database: options.readApi.database, adapters: options.assistantAdapters,
+    ? createAssistantService({ database: options.readApi.database, adapters: options.assistantAdapters, readService,
       projectExists: projectId => options.readApi!.database.prepare('SELECT 1 AS present FROM personal_projects WHERE id = ?').get(projectId) !== undefined,
       ...(options.projectService ? { projectService: options.projectService } : {}),
       ...(options.projectWritePlans ? { projectWritePlans: options.projectWritePlans } : {}),

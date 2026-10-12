@@ -6,8 +6,8 @@ import type { AssistantConversation } from '../../../shared/api/assistant.js';
 type LocalDraft = AssistantDraftFields & { id: string; revision: number };
 const fresh = (): LocalDraft => ({ id: crypto.randomUUID(), revision: 0, text: '', attachments: [], groupId: crypto.randomUUID(), scope: 'brain' });
 const fields = ({ id: _id, revision: _revision, ...value }: LocalDraft): AssistantDraftFields => {
-  const { text, attachments, groupId, scope, conversationId, contextPath, projectId, projectRevision } = value;
-  return { text, attachments, groupId, scope, ...(conversationId ? { conversationId } : {}), ...(contextPath ? { contextPath } : {}), ...(projectId ? { projectId } : {}), ...(projectRevision !== undefined ? { projectRevision } : {}) };
+  const { text, attachments, groupId, scope, conversationId, contextPath, projectId, projectRevision, purpose, selection } = value;
+  return { text, attachments, groupId, scope, ...(conversationId ? { conversationId } : {}), ...(contextPath ? { contextPath } : {}), ...(projectId ? { projectId } : {}), ...(projectRevision !== undefined ? { projectRevision } : {}), ...(purpose ? { purpose } : {}), ...(selection ? { selection } : {}) };
 };
 const fingerprint = (draft: LocalDraft) => JSON.stringify({ id: draft.id, ...fields(draft) });
 
@@ -97,14 +97,14 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
     // Flush also records which draft should be restored after a full app restart.
     await flush(); return true;
   }, [flush, replace]);
-  async function newDraft(text = '', attachments: AssistantDraftFields['attachments'] = []): Promise<boolean> {
+  async function newDraft(text = '', attachments: AssistantDraftFields['attachments'] = [], learning?: Pick<AssistantDraftFields, 'purpose' | 'selection' | 'scope' | 'contextPath' | 'conversationId'>): Promise<boolean> {
     const current = currentRef.current;
     return select({
       ...fresh(), text, attachments,
       ...(projectId ? {
         scope: 'project', projectId,
         ...(current.projectId === projectId && current.projectRevision !== undefined ? { projectRevision: current.projectRevision } : {})
-      } : {})
+      } : learning ?? {})
     });
   }
   const enterProject = useCallback(async (id: string, sourceRevision: number): Promise<boolean> => {
@@ -130,7 +130,7 @@ export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], p
     // An existing empty selection represents an explicit removal. Only recover
     // the last sent snapshot when no draft exists for this conversation.
     const attachments = (value.messages.filter(item => item.role === 'user').at(-1)?.attachments ?? []).map(item => ({ id: item.id, ...(item.startPage ? { startPage: item.startPage } : {}), ...(item.endPage ? { endPage: item.endPage } : {}) }));
-    return select(existing ?? { ...fresh(), conversationId: value.id, scope: value.scope, attachments, ...(value.contextPath ? { contextPath: value.contextPath } : {}), ...(value.projectId ? { projectId: value.projectId } : {}), ...(value.projectRevision !== undefined ? { projectRevision: value.projectRevision } : {}) });
+    return select(existing ?? { ...fresh(), conversationId: value.id, scope: value.scope, attachments, ...(value.contextPath ? { contextPath: value.contextPath } : {}), ...(value.projectId ? { projectId: value.projectId } : {}), ...(value.projectRevision !== undefined ? { projectRevision: value.projectRevision } : {}), ...(value.purpose ? { purpose: value.purpose } : {}), ...(value.selection ? { selection: value.selection } : {}) });
   }
   async function saveAsCopy(): Promise<boolean> {
     if (inFlight.current) await inFlight.current;

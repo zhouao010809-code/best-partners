@@ -1,3 +1,4 @@
+import { learningNoteListResponseSchema, learningNoteResponseSchema, type LearningNote, type LearningNoteList, type LearningNoteQuery, type LearningNoteSave } from '../../shared/api/learning-notes.js';
 import { z } from 'zod';
 import { creativeProfileResponseSchema, type ProjectCreativeProfile, type CreativeProfileSave } from '../../shared/api/creative-profile.js';
 import { creationListResponseSchema, creationDetailResponseSchema, creationSuggestionResponseSchema, creationExportResponseSchema,
@@ -179,6 +180,10 @@ export interface ReadConsoleApi {
     pages(id: string, startPage?: number, endPage?: number, signal?: AbortSignal): Promise<ApiClientResult<AttachmentPages>>;
     retry(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
     cancel(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
+  };
+  learningNotes?: {
+    list(query: LearningNoteQuery, signal?: AbortSignal): Promise<ApiClientResult<LearningNoteList>>;
+    save(id: string, input: LearningNoteSave, signal?: AbortSignal): Promise<ApiClientResult<{ note: LearningNote }>>;
   };
   assistantDrafts?: {
     list: AssistantDraftListClient;
@@ -550,6 +555,13 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
         { clientRequestId },
         clientRequestId
       )
+    },
+    learningNotes: {
+      list: (query, signal) => requestData(fetcher, withQuery('/api/v1/learning-notes', parameters => {
+        appendQuery(parameters, 'path', query.path);
+        appendQuery(parameters, 'conversationId', query.conversationId);
+      }), learningNoteListResponseSchema, getInit(signal)),
+      save: (id, input, signal) => writeWithCsrf(`/api/v1/learning-notes/${encodeURIComponent(id)}`, learningNoteResponseSchema, 'PUT', JSON.stringify(input), 'application/json', signal)
     },
     assistantDrafts: {
       list: ((first?: string | AbortSignal, second?: AbortSignal | AssistantDraftQuery) => {

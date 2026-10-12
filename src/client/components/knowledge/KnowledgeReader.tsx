@@ -131,6 +131,7 @@ export function KnowledgeReader({ path, record, revision, onClose, onLoaded, onU
   const loadedRecord = resource.status === 'ready' || resource.status === 'refreshing' ? resource.data?.record : undefined;
 
   return <><KnowledgeDetail
+    api={api}
     presentation="inline"
     record={loadedRecord ?? record ?? { path, title: path.split('/').at(-1)?.replace(/\.md$/u, '') || '知识正文' }}
     resource={resource}

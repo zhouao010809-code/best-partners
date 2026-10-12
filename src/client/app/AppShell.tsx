@@ -13,7 +13,6 @@ import {
   ListFilter,
   Settings,
   Search,
-  MessageCircle,
   Sparkles
 } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
@@ -30,7 +29,7 @@ import { useTrashInventory } from '../components/useTrashInventory.js';
 import { RecycleBinArtwork } from '../components/RecycleBinArtwork.js';
 import { AssistantPanel, AssistantToggle } from '../components/assistant/AssistantPanel.js';
 import { GlobalSearch, rememberRecent } from '../components/GlobalSearch.js';
-import { ASSISTANT_INTENT_EVENT, askAssistant } from '../components/assistant/assistantIntent.js';
+import { ASSISTANT_INTENT_EVENT } from '../components/assistant/assistantIntent.js';
 import '../styles/unified-trash.css';
 import '../styles/ai-glow.css';
 
@@ -287,7 +286,6 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
   })();
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [selectedPassage, setSelectedPassage] = useState('');
   const [assistantRunning, setAssistantRunning] = useState(false);
   const [assistantWidth, setAssistantWidth] = useState(430);
   const resizeAssistant = useCallback((width: number) => setAssistantWidth([360, 430, 520, 600].reduce((nearest, item) => Math.abs(item - width) < Math.abs(nearest - width) ? item : nearest, 430)), []);
@@ -568,20 +566,9 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
     previousAssistantProjectId.current = assistantProjectId;
   }, [assistantProjectId]);
   useEffect(() => {
-    setSelectedPassage('');
     const query = new URLSearchParams(location.search);
     const path = ['/library', '/knowledge'].includes(location.pathname) ? query.get('path') : location.pathname === '/queue' ? query.get('materialPath') : undefined;
     if (path) rememberRecent(vaultName, { href: `${location.pathname}${location.search}`, title: path.split('/').at(-1)?.replace(/\.md$/iu, '') || path });
-    const selection = () => {
-      const value = window.getSelection();
-      const parent = value?.anchorNode?.parentElement;
-      const end = value?.focusNode?.parentElement;
-      const readingSelector = location.pathname === '/library' ? '.library-original__reading .safe-markdown' : location.pathname === '/knowledge' ? '.knowledge-detail__body section[aria-label="知识正文"] .safe-markdown' : '.queue-original .safe-markdown';
-      const reading = parent?.closest(readingSelector);
-      setSelectedPassage(path && reading && end && reading.contains(end) && !parent?.closest('#assistant-panel') ? value!.toString().trim().slice(0, 6000) : '');
-    };
-    document.addEventListener('selectionchange', selection);
-    return () => document.removeEventListener('selectionchange', selection);
   }, [location.pathname, location.search, vaultName]);
 
   return (
@@ -677,7 +664,6 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
         </main>
       </section>
       {searchOpen && <GlobalSearch api={api} vault={vaultName} onClose={() => setSearchOpen(false)} />}
-      {selectedPassage && !searchOpen && <button type="button" className="selection-ask" onMouseDown={event => event.preventDefault()} onClick={() => { const query = new URLSearchParams(location.search); const path = query.get('materialPath') || query.get('path'); askAssistant({ prompt: `请解释这段原文，并结合上下文说明：\n\n“${selectedPassage}”`, ...(path ? { contextPath: path } : {}) }); setSelectedPassage(''); window.getSelection()?.removeAllRanges(); }}><MessageCircle size={16} />问问这段内容</button>}
       <AssistantPanel api={api} open={assistantOpen} onClose={closeAssistant} width={assistantWidth} onWidthChange={resizeAssistant} onRunningChange={setAssistantRunning} dataRevision={dataRevision} {...(assistantProjectId ? { projectId: assistantProjectId } : {})} />
     </div>
   );

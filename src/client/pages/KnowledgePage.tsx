@@ -384,7 +384,7 @@ function LegacyKnowledgePage() {
         )}
       </section>
       {linkedPath ? <LinkedKnowledgeDetail key={linkedPath} path={linkedPath} onClose={closeLinkedDetail} /> : selected !== undefined && (
-        <KnowledgeDetail key={selected.path} record={selected} resource={visibleDetailResource} openState={openState} onClose={closeDetail} onOpen={() => { void openSelected(); }} />
+        <KnowledgeDetail api={runtime.api} key={selected.path} record={selected} resource={visibleDetailResource} openState={openState} onClose={closeDetail} onOpen={() => { void openSelected(); }} />
       )}
     </div>
   );
@@ -410,7 +410,7 @@ function LinkedKnowledgeDetail({ path, onClose }: { path: string; onClose: () =>
   }, [api, path, dataRevision, retry]);
   const detail = resource.status === 'ready' ? resource.data : undefined;
   const record = detail?.record ?? { path, title: detail?.title ?? path.split('/').at(-1)?.replace(/\.md$/u, '') ?? '知识' };
-  return <KnowledgeDetail record={record} resource={resource} openState={openState} onClose={onClose} onRetry={() => setRetry((value) => value + 1)} onOpen={() => {
+  return <KnowledgeDetail api={api} record={record} resource={resource} openState={openState} onClose={onClose} onRetry={() => setRetry((value) => value + 1)} onOpen={() => {
       setOpenState('opening'); void api.openKnowledge(path).then((result) => setOpenState(result.ok && result.value.path === path && result.value.opened ? 'opened' : 'failed'));
     }} />;
 }
