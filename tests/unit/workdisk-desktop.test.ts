@@ -47,6 +47,21 @@ describe('desktop workdisk controller', () => {
     await expect(f.controller.importFiles('2026-02-31')).rejects.toThrow('输入');
     expect(f.chooseFiles).toHaveBeenCalledTimes(1);
   });
+  it.each([true, false])('passes the explicit content-naming choice %s through native selection and drop', async nameFromContent => {
+    const f = await fixture();
+    await f.controller.importFiles('2026-10-29', { nameFromContent });
+    expect(f.service.importFiles).toHaveBeenLastCalledWith([join(f.root, 'clip.mp4')], '2026-10-29', { nameFromContent });
+    await f.controller.importDroppedFiles([join(f.root, 'article.txt')], '2026-10-28', { nameFromContent });
+    expect(f.service.importFiles).toHaveBeenLastCalledWith([join(f.root, 'article.txt')], '2026-10-28', { nameFromContent });
+  });
+  it('rejects invalid naming options before choosing or reading files', async () => {
+    const f = await fixture();
+    for (const options of [null, 'yes', { nameFromContent: 'yes' }, { nameFromContent: true, destination: '/elsewhere' }]) {
+      await expect(f.controller.importFiles('2026-10-29', options)).rejects.toThrow('输入');
+      await expect(f.controller.importDroppedFiles([join(f.root, 'article.txt')], '2026-10-29', options)).rejects.toThrow('输入');
+    }
+    expect(f.chooseFiles).not.toHaveBeenCalled(); expect(f.service.importFiles).not.toHaveBeenCalled();
+  });
   it('rejects unsafe renderer paths and executable opening before touching disk', async () => {
     const f = await fixture();
     for (const path of ['../secret', '/absolute', 'dir/../file', 'a\\b', 'a\u0000b']) await expect(f.controller.preview(path)).rejects.toThrow('输入');

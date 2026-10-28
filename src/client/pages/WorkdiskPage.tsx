@@ -5,6 +5,7 @@ import type { WorkdiskFile, WorkdiskImportResult, WorkdiskKind, WorkdiskListRequ
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { WorkdiskPreviewDialog } from '../components/workdisk/WorkdiskPreviewDialog.js';
 import { WorkdiskNote } from '../components/workdisk/WorkdiskNote.js';
+import { WorkdiskNamingResults } from '../components/workdisk/WorkdiskNamingResults.js';
 import '../styles/workdisk.css';
 
 const TYPES = [
@@ -27,6 +28,11 @@ export function WorkdiskPage() {
   const [results, setResults] = useState<WorkdiskSnapshot>();
   const [loading, setLoading] = useState(Boolean(disk));
   const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [nameFromContent, setNameFromContent] = useState(() => {
+    try { return sessionStorage.getItem('workdisk-content-naming') !== 'off'; } catch { return true; }
+  });
+  const [naming, setNaming] = useState<NonNullable<WorkdiskImportResult['naming']>>([]);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -69,7 +75,7 @@ export function WorkdiskPage() {
 
   async function runAction(action: () => Promise<void>) {
     if (actionLock.current) return;
-    actionLock.current = true; setBusy(true); setError(''); setNotice(''); setFailures([]);
+    actionLock.current = true; setBusy(true); setError(''); setNotice(''); setFailures([]); setNaming([]);
     try { await action(); } catch (cause) { if (alive.current) setError(errorText(cause)); }
     finally { actionLock.current = false; if (alive.current) setBusy(false); }
   }
@@ -90,8 +96,15 @@ export function WorkdiskPage() {
   async function collected(result: WorkdiskImportResult | null) {
     if (!result) { setNotice('已取消选择'); return; }
     setFailures(result.failures);
+    setNaming(result.naming ?? []);
     setNotice(result.files.length ? `已收好 ${result.files.length} 个文件 · ${saveDate}` : '没有新增文件');
     clearSearch(); setBrowseDate(saveDate); setKind('all'); await refresh();
+  }
+  async function importBatch(load: () => Promise<WorkdiskImportResult | null>) {
+    await runAction(async () => {
+      setImporting(true);
+      try { await collected(await load()); } finally { if (alive.current) setImporting(false); }
+    });
   }
   async function search() {
     if (!disk || !query.trim()) return;
@@ -126,7 +139,7 @@ export function WorkdiskPage() {
     onDragOver={event => { if (binding && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
     onDrop={event => { event.preventDefault(); setDragging(false); const files = Array.from(event.dataTransfer.files);
-      if (disk?.importDroppedFiles && files.length && binding) void runAction(async () => collected(await disk.importDroppedFiles!(files, saveDate))); }}>
+      if (disk?.importDroppedFiles && files.length && binding) void importBatch(() => disk.importDroppedFiles!(files, saveDate, { nameFromContent })); }}>
     <nav className="workdisk-spaces" aria-label="资料空间">
       <span aria-current="page"><HardDrive size={17} />工作盘<small>每天的工作资料</small></span>
       <Link to="/knowledge"><BookOpen size={17} />知识库<small>长期积累与复用</small><ArrowUpRight size={15} /></Link>
@@ -143,11 +156,17 @@ export function WorkdiskPage() {
     {!disk ? <div className="workdisk-empty"><HardDrive /><h3>请在桌面应用中打开工作盘</h3><p>桌面版可以直接连接和保存本地文件。</p></div>
       : !binding ? <div className="workdisk-empty workdisk-connect"><div className="workdisk-folder-art"><FolderOpen size={66} /></div><h3>{loading ? '正在读取工作盘…' : '给每天的工作，选一个家'}</h3><p>连接一个本地文件夹，就能在这里浏览、收纳和查找。<br />已有文件会保留在原来的位置。</p><button className="workdisk-primary" disabled={busy || loading} onClick={() => void connect()}><Plus size={17} />连接本地文件夹</button></div>
       : <>
-        <div className="workdisk-collect"><div><Upload size={21} /><span><strong>文件放这里，日期帮你记</strong><small>拖入文件，自动按类型收好 · 原件保留</small></span></div>
+        <div className="workdisk-collect"><div><Upload size={21} /><span><strong>文件放这里，名称帮你理</strong><small>按日期和类型收好 · 原件保留</small></span></div>
           <label>收纳日期<input type="date" aria-label="收纳日期" value={saveDate} onChange={event => { if (event.target.value) setSaveDate(event.target.value); }} disabled={busy} /></label>
           <button disabled={busy || searching} onClick={() => setWriting(value => !value)}><FileText size={16} />写文案</button>
-          <button className="workdisk-primary" disabled={busy || searching} onClick={() => void runAction(async () => collected(await disk.importFiles(saveDate)))}><Plus size={17} />{busy ? '正在收纳…' : '收文件'}</button>
+          <button className="workdisk-primary" disabled={busy || searching} onClick={() => void importBatch(() => disk.importFiles(saveDate, { nameFromContent }))}><Plus size={17} />{importing ? nameFromContent ? '正在命名收纳…' : '正在收纳…' : '收文件'}</button>
         </div>
+        <div className="workdisk-naming-option">
+          <label><input type="checkbox" checked={nameFromContent} disabled={busy} aria-describedby="workdisk-naming-detail" onChange={event => { const checked = event.target.checked; setNameFromContent(checked); try { sessionStorage.setItem('workdisk-content-naming', checked ? 'on' : 'off'); } catch { /* Current choice still applies. */ } }} /><span>根据内容命名</span><Sparkles size={14} /></label>
+          <p id="workdisk-naming-detail">{nameFromContent ? <>支持文本和有文字的 PDF。可读正文会发送给已连接的 AI，长文使用节选；未连接或读不出内容时按原名保存。<Link to="/settings">连接 AI</Link></> : '按原名保存，不会为命名发送正文。'}</p>
+        </div>
+        {importing && <p className="workdisk-notice" role="status">{nameFromContent ? '正在读取正文、生成名称并保存，完成后会列出原名和新名。' : '正在复制文件到所选日期，原文件会保留。'}</p>}
+        {naming.length > 0 && <WorkdiskNamingResults receipts={naming} onClose={() => setNaming([])} />}
         {writing && <WorkdiskNote key={binding.id} bindingId={binding.id} date={saveDate} disk={disk} onBusy={value => { actionLock.current = value; setBusy(value); }} onClose={() => setWriting(false)} onSaved={async file => { setWriting(false); setNotice(`已保存 ${file.name} · ${file.date}`); clearSearch(); setBrowseDate(file.date); setKind('all'); await refresh(); }} />}
         <form className="workdisk-search" onSubmit={event => { event.preventDefault(); void search(); }}><Sparkles size={21} /><input type="search" aria-label="描述要找的文件" placeholder="比如：上个月28号的招生文案" maxLength={1000} value={query} onChange={event => setQuery(event.target.value)} /><button type="submit" disabled={!query.trim() || searching || busy}><Search size={16} />{searching ? '正在找…' : '找文件'}</button></form>
         {results && <div className="workdisk-search-info"><span>{searchDescription}<small>“{activeSearch.current?.query}” · 跨全部日期</small></span><button onClick={() => clearSearch()}><X size={14} />退出搜索</button></div>}

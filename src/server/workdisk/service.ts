@@ -1,17 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, type Stats } from 'node:fs';
 import { link, lstat, mkdir, open, readdir, realpath, rename, unlink } from 'node:fs/promises';
 import { basename, extname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
-import type { WorkdiskBinding, WorkdiskFile, WorkdiskImportResult, WorkdiskKind, WorkdiskListRequest, WorkdiskPreview, WorkdiskSnapshot } from '../../shared/workdisk.js';
+import type { WorkdiskBinding, WorkdiskFile, WorkdiskImportOptions, WorkdiskImportResult, WorkdiskKind, WorkdiskListRequest, WorkdiskPreview, WorkdiskSnapshot } from '../../shared/workdisk.js';
 import { assertRoot, contained, directory, problem, readBounded, regularFile, safeRelative, sameIdentity, type FileIdentity } from './paths.js';
 import { copyExclusive } from './publication.js';
+import type { WorkdiskContentNamer } from './content-namer.js';
 
 const TEXT_LIMIT = 512 * 1024;
 const IMAGE_LIMIT = 8 * 1024 * 1024;
 const MAX_ENTRIES = 10_000;
 const MAX_FILES = 2_000;
 const TEXT_SCAN_LIMIT = 32 * 1024 * 1024;
+const NAMING_INPUT_LIMIT = 20 * 1024 * 1024;
+const NAMING_SHUTDOWN_REASON = '应用正在关闭，本次已按原名保存。';
 const textExtensions = new Set(['.md', '.markdown', '.txt', '.csv', '.json', '.srt', '.vtt', '.log', '.yaml', '.yml']);
 const kinds = z.enum(['video', 'audio', 'image', 'document', 'other']);
 const category: Record<WorkdiskKind, string> = { video: '视频', audio: '音频', image: '图片', document: '文档', other: '其他' };
@@ -26,6 +29,7 @@ const requestSchema = z.object({ query: z.string().max(1000).optional(), plan: p
 const storedSchema = z.object({ id: z.uuid(), rootPath: z.string().min(1), displayName: z.string(), connectedAt: z.string(), dev: z.number(), ino: z.number() }).strict();
 type StoredBinding = z.infer<typeof storedSchema>;
 const noteSchema = z.object({ title: z.string().trim().min(1).max(120), body: z.string().max(250_000), date: dateSchema }).strict();
+const importOptionsSchema = z.object({ nameFromContent: z.boolean().optional() }).strict();
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value); if (!result.success) throw problem('填写的内容或日期无效，请检查后重试。'); return result.data;
 }
@@ -52,10 +56,39 @@ function safeName(name: string): string {
   return name;
 }
 
-export function createWorkdiskService(config: { stateDirectory: string; protectedRoots: string[] }) {
+function namingTitle(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const title = value.normalize('NFKC').trim();
+  if (!title || [...title].length > 60 || Buffer.byteLength(title) > 180 || /^[.]/u.test(title) || /[. ]$/u.test(title)
+    || /[\\/:*?"<>|\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/u.test(title)
+    || /\.[a-z0-9]{1,12}$/iu.test(title) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu.test(title)) return undefined;
+  return title;
+}
+async function verifySource(source: string, handle: Awaited<ReturnType<typeof open>>, expected: Stats): Promise<void> {
+  const after = await handle.stat(); const current = await lstat(source);
+  if (!current.isFile() || current.isSymbolicLink() || !sameIdentity(expected, current) || !sameIdentity(expected, after)
+    || after.size !== expected.size || after.mtimeMs !== expected.mtimeMs || after.ctimeMs !== expected.ctimeMs) {
+    throw problem('读取或命名期间原文件发生变化，请重新导入。');
+  }
+}
+async function nameContent(namer: WorkdiskContentNamer, input: Parameters<WorkdiskContentNamer>[0], signal: AbortSignal): Promise<Awaited<ReturnType<WorkdiskContentNamer>>> {
+  signal.throwIfAborted();
+  let abort!: () => void;
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try {
+    // A provider may ignore its signal. Stop awaiting it without cancelling the authorized file copies.
+    return await Promise.race([Promise.resolve().then(() => { signal.throwIfAborted(); return namer(input, signal); }), cancelled]);
+  } finally { signal.removeEventListener('abort', abort); }
+}
+
+export function createWorkdiskService(config: { stateDirectory: string; protectedRoots: string[]; contentNamer?: WorkdiskContentNamer }) {
   let loaded = false; let binding: StoredBinding | null = null; let stateRoot: string | undefined;
   let loading: Promise<StoredBinding | null> | undefined;
   let closing = false;
+  const namingShutdown = new AbortController();
   let tail: Promise<unknown> = Promise.resolve();
   function exclusive<T>(action: () => Promise<T>): Promise<T> {
     if (closing) return Promise.reject(problem('应用正在关闭，请重新打开后再保存。'));
@@ -132,7 +165,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
     }
   }
   return {
-    async close(): Promise<void> { closing = true; await tail; },
+    async close(): Promise<void> { closing = true; namingShutdown.abort(); await tail; },
     async status(): Promise<WorkdiskBinding | null> { const current = await load(); return current ? publicBinding(current) : null; },
     bind(selectedPath: string): Promise<WorkdiskBinding> { return exclusive(async () => {
       // A pending status read must finish before replacing the remembered root.
@@ -197,9 +230,9 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
       snapshot.files.sort((a, b) => b.date.localeCompare(a.date) || b.modifiedAt.localeCompare(a.modifiedAt) || a.path.localeCompare(b.path));
       return snapshot;
     },
-    importFiles(paths: string[], date: string): Promise<WorkdiskImportResult> { return exclusive(async () => {
-      parse(dateSchema, date); parse(z.array(z.string().min(1).max(4096)).min(1).max(100), paths); const current = await active();
-      const result: WorkdiskImportResult = { files: [], failures: [] };
+    importFiles(paths: string[], date: string, options: WorkdiskImportOptions = {}): Promise<WorkdiskImportResult> { return exclusive(async () => {
+      parse(dateSchema, date); parse(z.array(z.string().min(1).max(4096)).min(1).max(100), paths); const requested = parse(importOptionsSchema, options); const current = await active();
+      const result: WorkdiskImportResult = { files: [], failures: [], ...(requested.nameFromContent ? { naming: [] } : {}) };
       for (const source of paths) {
         try {
           if (!isAbsolute(source)) throw problem('请选择本地文件。');
@@ -207,7 +240,32 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
           const input = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
           try {
             const opened = await input.stat(); if (!opened.isFile() || !sameIdentity(before, opened)) throw problem('原文件已改变，请重试。');
-            result.files.push(await publish(current, basename(source), date, async output => {
+            const originalName = basename(source); const extension = extname(originalName);
+            let filename = originalName; let reason = '';
+            if (requested.nameFromContent) {
+              if (closing) reason = NAMING_SHUTDOWN_REASON;
+              else if (!textExtensions.has(extension.toLowerCase()) && extension.toLowerCase() !== '.pdf') reason = '这个格式暂不支持读取正文命名，已保留原名。';
+              else if (opened.size > NAMING_INPUT_LIMIT) reason = '文件超过 20 MiB 的正文命名范围，已保留原名。';
+              else if (!config.contentNamer) reason = 'AI 未连接，已保留原名。';
+              else {
+                const bytes = Buffer.alloc(opened.size); let position = 0;
+                while (position < bytes.length) {
+                  const { bytesRead } = await input.read(bytes, position, bytes.length - position, position);
+                  if (!bytesRead) break; position += bytesRead;
+                }
+                if (position !== opened.size) throw problem('读取期间原文件发生变化，请重新导入。');
+                await verifySource(source, input, opened);
+                try {
+                  const suggested = await nameContent(config.contentNamer, { name: originalName, bytes }, namingShutdown.signal);
+                  const title = namingTitle(suggested.title);
+                  if (title) { filename = `${title}${extension}`; reason = typeof suggested.reason === 'string' ? suggested.reason.trim().slice(0, 300) : ''; reason ||= '已根据可读正文生成名称。'; }
+                  else if (suggested.title !== undefined) reason = 'AI 返回的文件名不适用，已保留原名。';
+                  else reason = typeof suggested.reason === 'string' && suggested.reason.trim() ? suggested.reason.trim().slice(0, 300) : '没有足够的可读正文生成名称，已保留原名。';
+                } catch { reason = closing ? NAMING_SHUTDOWN_REASON : 'AI 本次未能完成内容命名，已保留原名。'; }
+                await verifySource(source, input, opened);
+              }
+            }
+            const saved = await publish(current, filename, date, async output => {
               const buffer = Buffer.alloc(1024 * 1024); let position = 0;
               while (position < opened.size) {
                 const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, opened.size - position), position);
@@ -216,9 +274,11 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
                 while (written < bytesRead) { const result = await output.write(buffer, written, bytesRead - written, position + written); if (!result.bytesWritten) throw problem('文件保存中断，请重试。'); written += result.bytesWritten; }
                 position += bytesRead;
               }
-              const after = await input.stat();
-              if (position !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) throw problem('复制期间原文件发生变化，请重试。');
-            }));
+              if (position !== opened.size) throw problem('复制期间原文件发生变化，请重试。');
+              await verifySource(source, input, opened);
+            });
+            result.files.push(saved);
+            result.naming?.push({ originalName, savedName: saved.name, status: filename === originalName ? 'kept' : 'renamed', reason });
           } finally { await input.close(); }
         } catch (error) { result.failures.push({ name: basename(source), message: error instanceof Error && !('code' in error) ? error.message : '这个文件暂时无法保存，请检查文件是否仍存在及磁盘空间。' }); }
       }

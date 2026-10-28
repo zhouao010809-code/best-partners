@@ -8,7 +8,7 @@ import { WorkdiskPage } from '../../src/client/pages/WorkdiskPage.js';
 
 const binding = { id: 'disk-a', rootPath: '/tmp/工作盘', displayName: '工作盘', connectedAt: '2026-10-29T00:00:00Z' };
 const file = { path: '2026-09-28/文档/招生.txt', name: '招生.txt', kind: 'document', size: 24, date: '2026-09-28', modifiedAt: '2026-09-28T00:00:00Z' };
-const list = vi.fn(), connect = vi.fn(), importFiles = vi.fn(), createNote = vi.fn(), preview = vi.fn(), planner = vi.fn();
+const list = vi.fn(), connect = vi.fn(), importFiles = vi.fn(), importDroppedFiles = vi.fn(), createNote = vi.fn(), preview = vi.fn(), planner = vi.fn();
 const runtime = { api: { workdiskSearchPlan: planner } };
 vi.mock('../../src/client/app/ConsoleRuntime.js', () => ({ useConsoleRuntime: () => runtime }));
 const snapshot = (files: unknown[] = [file]) => ({ binding, files, scannedAt: '2026-10-29T00:00:00Z', truncated: false, skippedCount: 0 });
@@ -18,9 +18,10 @@ beforeEach(() => {
   sessionStorage.clear();
   list.mockResolvedValue(snapshot()); connect.mockResolvedValue(binding);
   importFiles.mockResolvedValue({ files: [file], failures: [] }); createNote.mockResolvedValue(file);
+  importDroppedFiles.mockResolvedValue({ files: [file], failures: [] });
   preview.mockResolvedValue({ kind: 'text', text: '招生说明正文' });
   planner.mockResolvedValue({ ok: true, value: { mode: 'ai', plan: { terms: ['招生'], startDate: '2026-09-28', endDate: '2026-09-28' } } });
-  Object.defineProperty(window, 'xiaozhaoDesktop', { configurable: true, value: { workdisk: { list, connect, importFiles, createNote, preview, openFile: vi.fn() } } });
+  Object.defineProperty(window, 'xiaozhaoDesktop', { configurable: true, value: { workdisk: { list, connect, importFiles, importDroppedFiles, createNote, preview, openFile: vi.fn() } } });
 });
 afterEach(() => { cleanup(); Reflect.deleteProperty(window, 'xiaozhaoDesktop'); vi.resetAllMocks(); });
 
@@ -37,7 +38,7 @@ describe('workdisk page', () => {
     await screen.findByRole('button', { name: /预览 招生.txt/u });
     fireEvent.change(screen.getByLabelText('收纳日期'), { target: { value: '2026-10-28' } });
     await userEvent.click(screen.getByRole('button', { name: '收文件' }));
-    expect(importFiles).toHaveBeenCalledWith('2026-10-28');
+    expect(importFiles).toHaveBeenCalledWith('2026-10-28', { nameFromContent: true });
     expect(await screen.findByText(/打不开.mp4/u)).toBeVisible();
   });
   it('searches across dates with a query plan and opens actual content', async () => {
@@ -92,5 +93,35 @@ describe('workdisk page', () => {
     await act(async () => finish({ ok: true, value: { mode: 'local', plan: { terms: ['招生'] } } }));
     expect(await screen.findByRole('button', { name: '退出搜索' })).toBeVisible();
     expect(screen.getByRole('button', { name: '找文件' })).toBeEnabled();
+  });
+  it('explains content naming before import and permits keeping the original name', async () => {
+    mount(); await screen.findByRole('button', { name: /预览 招生.txt/u });
+    expect(screen.getByRole('checkbox', { name: '根据内容命名' })).toBeChecked();
+    expect(screen.getByText(/可读正文会发送给已连接的 AI/u)).toBeVisible();
+    await userEvent.click(screen.getByRole('checkbox', { name: '根据内容命名' }));
+    await userEvent.click(screen.getByRole('button', { name: '收文件' }));
+    expect(importFiles).toHaveBeenCalledWith(expect.any(String), { nameFromContent: false });
+  });
+  it('shows original and actual saved names, including reasons for retaining an unsupported file', async () => {
+    importFiles.mockResolvedValue({ files: [file], failures: [], naming: [
+      { originalName: '83927.pdf', savedName: '短视频获客的选题方法.pdf', status: 'renamed', reason: '根据可读正文概括命名。' },
+      { originalName: '777.png', savedName: '777.png', status: 'kept', reason: '图片暂不支持读取正文命名。' }
+    ] });
+    mount(); await userEvent.click(await screen.findByRole('button', { name: '收文件' }));
+    expect(await screen.findByRole('region', { name: '本次收纳命名结果' })).toHaveTextContent('83927.pdf');
+    expect(screen.getByRole('region', { name: '本次收纳命名结果' })).toHaveTextContent('短视频获客的选题方法.pdf');
+    expect(screen.getByRole('region', { name: '本次收纳命名结果' })).toHaveTextContent('图片暂不支持读取正文命名。');
+  });
+  it('passes the content naming option on drop and explains the pending work', async () => {
+    let finish!: (value: unknown) => void;
+    importDroppedFiles.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    mount(); await screen.findByRole('button', { name: /预览 招生.txt/u });
+    const article = new File(['短视频需要有具体主题和可验证的内容。'], '83927.txt', { type: 'text/plain' });
+    fireEvent.drop(screen.getByRole('navigation', { name: '资料空间' }).parentElement!, { dataTransfer: { files: [article], types: ['Files'] } });
+    expect(importDroppedFiles).toHaveBeenCalledWith([article], expect.any(String), { nameFromContent: true });
+    expect(screen.getByRole('checkbox', { name: '根据内容命名' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('正在读取正文、生成名称并保存');
+    await act(async () => finish({ files: [file], failures: [] }));
+    expect(screen.getByRole('checkbox', { name: '根据内容命名' })).toBeEnabled();
   });
 });

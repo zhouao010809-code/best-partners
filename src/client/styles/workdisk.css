@@ -31,6 +31,23 @@
 .workdisk-collect > label { display: grid; gap: 4px; font-size: 9px; color: #92a599; }
 .workdisk input, .workdisk textarea { border: 1px solid #35423a; border-radius: 6px; background: #0e1611; padding: 8px; color: var(--text-primary); font: inherit; }
 .workdisk-collect input { padding: 5px 7px; max-width: 138px; font-size: 12px; }
+.workdisk-naming-option { padding: 12px 5px 0; }
+.workdisk-naming-option label { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: #bfd8c7; cursor: pointer; }
+.workdisk-naming-option input { accent-color: var(--disk-green); width: 15px; height: 15px; margin: 0; }
+.workdisk-naming-option p { font-size: 11px; color: #91a798; line-height: 1.8; margin: 6px 0 0; }
+.workdisk-naming-option a { color: #b8dfc3; margin-left: 8px; text-decoration: underline; text-underline-offset: 3px; }
+.workdisk-naming-results { margin-top: 14px; border: 1px solid #43654f; border-radius: 9px; background: #182b1e77; padding: 13px 16px; }
+.workdisk-naming-results header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.workdisk-naming-results header > strong { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 12px; color: #cee7d6; font-weight: 500; }
+.workdisk-naming-results header > strong span { color: #a2b6aa; font-size: 11px; }
+.workdisk-naming-results header button { border: 0; background: transparent; padding: 4px; }
+.workdisk-naming-results ul { list-style: none; padding: 0; margin: 4px 0 0; max-height: 260px; overflow-y: auto; }
+.workdisk-naming-results li { padding: 11px 0 7px; border-top: 1px solid #ffffff0c; }
+.workdisk-naming-results li > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.workdisk-naming-results li > div > span { color: #a0afa4; }
+.workdisk-naming-results li strong { font-weight: 550; color: #cae4d2; }
+.workdisk-naming-results li p { color: #819b8b; font-size: 10px; margin: 6px 0 0; line-height: 1.7; }
+.workdisk-naming-results .workdisk-naming-kept p { color: #c5b493; }
 .workdisk-search { display: flex; gap: 12px; align-items: center; margin: 22px 0; padding: 9px 10px 9px 16px; background: #171c19; border: 1px solid #36423a; border-radius: 11px; box-shadow: 0 5px 20px #0002; color: #8fae9a; }
 .workdisk-search input { flex: 1; min-width: 0; border: 0; background: transparent; font-size: 13px; padding: 6px 0; outline-offset: 0; }
 .workdisk-search input::placeholder { color: #7d8b81; }

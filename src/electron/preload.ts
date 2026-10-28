@@ -7,8 +7,8 @@ contextBridge.exposeInMainWorld('xiaozhaoDesktop', Object.freeze({
     status: () => ipcRenderer.invoke('desktop:workdisk-status'),
     connect: () => ipcRenderer.invoke('desktop:workdisk-connect'),
     list: (request) => ipcRenderer.invoke('desktop:workdisk-list', request),
-    importFiles: (date) => ipcRenderer.invoke('desktop:workdisk-import', date),
-    importDroppedFiles: (files, date) => ipcRenderer.invoke('desktop:workdisk-drop', files.map(file => webUtils.getPathForFile(file)), date),
+    importFiles: (date, options) => ipcRenderer.invoke('desktop:workdisk-import', date, options),
+    importDroppedFiles: (files, date, options) => ipcRenderer.invoke('desktop:workdisk-drop', files.map(file => webUtils.getPathForFile(file)), date, options),
     createNote: (input) => ipcRenderer.invoke('desktop:workdisk-create-note', input),
     preview: (path) => ipcRenderer.invoke('desktop:workdisk-preview', path),
     openFile: (path) => ipcRenderer.invoke('desktop:workdisk-open', path)

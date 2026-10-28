@@ -26,6 +26,8 @@ import { clearPreviousUpdateDownloads, downloadUpdateInstaller } from './update-
 import { createUpdateDownloadFetcher } from './update-network.js';
 import { createWorkdiskService } from '../server/workdisk/service.js';
 import { createDesktopWorkdisk } from './workdisk-controller.js';
+import { createWorkdiskContentNamer } from '../server/workdisk/content-namer.js';
+import { createDeepSeekAssistantAdapter } from '../server/assistant/deepseek-adapter.js';
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'workdisk', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 
@@ -159,16 +161,20 @@ async function bootstrap(): Promise<void> {
   // Keep the server bundle separate so SQLite migrations retain their relative location.
   const { startServer } = await import(new URL('../server/start-server.js', import.meta.url).href) as typeof import('../server/start-server.js');
   const appDataDir = prepareVaultCacheDirectory({ userDataDir, vaultRoot: settings.vaultRoot, cacheKey: gateway.cacheKey });
+  const modelCredentials = createModelKeyStore({ directory: join(userDataDir, 'model-credentials'), safeStorage });
   started = await startServer({
     host: '127.0.0.1', port: 0, appDataDir,
     vaultRealRoot: settings.vaultRoot, clientRoot: join(import.meta.dirname, '../client'),
     modelBaseUrl: 'https://api.deepseek.com', gateway, adapter: 'filesystem',
-    modelCredentials: createModelKeyStore({ directory: join(userDataDir, 'model-credentials'), safeStorage }),
+    modelCredentials,
     skillCatalog,
     personalArchiveAddonPath: join(import.meta.dirname, '../native/personal-archive.node')
   });
   window = createMainWindow(started.origin);
-  const workdiskService = createWorkdiskService({ stateDirectory: join(appDataDir, 'workdisk'), protectedRoots: [settings.vaultRoot, userDataDir] });
+  const workdiskService = createWorkdiskService({
+    stateDirectory: join(appDataDir, 'workdisk'), protectedRoots: [settings.vaultRoot, userDataDir],
+    contentNamer: createWorkdiskContentNamer({ adapter: createDeepSeekAssistantAdapter({ credentials: modelCredentials }), parserWorkerPath: new URL('../server/pdf-worker.mjs', import.meta.url) })
+  });
   closeWorkdisk = () => workdiskService.close();
   const workdisk = createDesktopWorkdisk({
     service: workdiskService,
@@ -188,8 +194,8 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('desktop:workdisk-status', event => { assertMainSender(event); return workdisk.status(); });
   ipcMain.handle('desktop:workdisk-connect', event => { assertMainSender(event); return workdisk.connect(); });
   ipcMain.handle('desktop:workdisk-list', (event, request: unknown) => { assertMainSender(event); return workdisk.list(request); });
-  ipcMain.handle('desktop:workdisk-import', (event, date: unknown) => { assertMainSender(event); return workdisk.importFiles(date); });
-  ipcMain.handle('desktop:workdisk-drop', (event, files: unknown, date: unknown) => { assertMainSender(event); return workdisk.importDroppedFiles(files, date); });
+  ipcMain.handle('desktop:workdisk-import', (event, date: unknown, options: unknown) => { assertMainSender(event); return workdisk.importFiles(date, options); });
+  ipcMain.handle('desktop:workdisk-drop', (event, files: unknown, date: unknown, options: unknown) => { assertMainSender(event); return workdisk.importDroppedFiles(files, date, options); });
   ipcMain.handle('desktop:workdisk-create-note', (event, request: unknown) => { assertMainSender(event); return workdisk.createNote(request); });
   ipcMain.handle('desktop:workdisk-preview', (event, path: unknown) => { assertMainSender(event); return workdisk.preview(path); });
   ipcMain.handle('desktop:workdisk-open', (event, path: unknown) => { assertMainSender(event); return workdisk.openFile(path); });

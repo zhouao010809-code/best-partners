@@ -1,4 +1,4 @@
-import type { WorkdiskBinding, WorkdiskFile, WorkdiskImportResult, WorkdiskListRequest, WorkdiskPreview, WorkdiskSnapshot } from '../workdisk.js';
+import type { WorkdiskBinding, WorkdiskFile, WorkdiskImportOptions, WorkdiskImportResult, WorkdiskListRequest, WorkdiskPreview, WorkdiskSnapshot } from '../workdisk.js';
 import type { UpdateCheckResult, UpdateSnapshot } from './update.js';
 
 export interface DesktopVaultSelection {
@@ -24,8 +24,8 @@ export interface DesktopWorkdiskApi {
   status(): Promise<WorkdiskBinding | null>;
   connect(): Promise<WorkdiskBinding | null>;
   list(request?: WorkdiskListRequest): Promise<WorkdiskSnapshot>;
-  importFiles(date: string): Promise<WorkdiskImportResult | null>;
-  importDroppedFiles?(files: File[], date: string): Promise<WorkdiskImportResult>;
+  importFiles(date: string, options?: WorkdiskImportOptions): Promise<WorkdiskImportResult | null>;
+  importDroppedFiles?(files: File[], date: string, options?: WorkdiskImportOptions): Promise<WorkdiskImportResult>;
   createNote(input: { title: string; body: string; date: string }): Promise<WorkdiskFile>;
   preview(path: string): Promise<WorkdiskPreview>;
   openFile(path: string): Promise<void>;

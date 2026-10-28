@@ -4,7 +4,7 @@ import { open, stat } from 'node:fs/promises';
 import { extname, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { WorkdiskService } from '../server/workdisk/service.js';
-import type { WorkdiskListRequest, WorkdiskPreview } from '../shared/workdisk.js';
+import type { WorkdiskImportOptions, WorkdiskListRequest, WorkdiskPreview } from '../shared/workdisk.js';
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).refine(value => {
   const date = new Date(`${value}T12:00:00Z`);
@@ -18,6 +18,7 @@ const listSchema = z.object({ query: z.string().max(1000).optional(), date: date
 }).strict().optional();
 const noteSchema = z.object({ title: z.string().trim().min(1).max(120).refine(value => !/[\\/\u0000-\u001f]/u.test(value) && value !== '.' && value !== '..'), body: z.string().max(250_000), date: dateSchema }).strict();
 const selectedFilesSchema = z.array(z.string().min(1).max(4096).refine(value => isAbsolute(value) && !value.includes('\0'))).min(1).max(100);
+const importOptionsSchema = z.object({ nameFromContent: z.boolean().optional() }).strict().optional();
 const MEDIA: Record<string, string> = { '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.ogv': 'video/ogg', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.aac': 'audio/aac', '.flac': 'audio/flac' };
 const OPENABLE = new Set([...Object.keys(MEDIA), '.pdf', '.txt', '.md', '.markdown', '.csv', '.json', '.srt', '.vtt', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.rtf', '.pages', '.numbers', '.key', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff', '.heic', '.mkv', '.avi', '.wmv', '.mpeg', '.mpg']);
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -27,6 +28,10 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 async function safe<T>(action: () => Promise<T>, message: string): Promise<T> {
   try { return await action(); } catch { throw new Error(message); }
+}
+function checkedImportOptions(value: unknown): WorkdiskImportOptions | undefined {
+  const result = parse(importOptionsSchema, value);
+  return result === undefined ? undefined : result.nameFromContent === undefined ? {} : { nameFromContent: result.nameFromContent };
 }
 
 export function createDesktopWorkdisk(input: {
@@ -66,18 +71,20 @@ export function createDesktopWorkdisk(input: {
       };
       return safe(() => input.service.list(checkedRequest), '无法读取工作盘，请检查文件夹是否已连接。');
     },
-    importFiles: async (date: unknown) => {
+    importFiles: async (date: unknown, options?: unknown) => {
       const validDate = parse(dateSchema, date);
+      const checkedOptions = checkedImportOptions(options);
       return pick(async () => {
         const files = await safe(input.chooseFiles, '无法打开文件选择窗口。');
         if (!files?.length) return null;
         const paths = parse(selectedFilesSchema, files);
-        return safe(() => input.service.importFiles(paths, validDate), '文件未能收纳，请检查工作盘后重试。');
+        return safe(() => checkedOptions === undefined ? input.service.importFiles(paths, validDate) : input.service.importFiles(paths, validDate, checkedOptions), '文件未能收纳，请检查工作盘后重试。');
       });
     },
-    importDroppedFiles: async (files: unknown, date: unknown) => {
+    importDroppedFiles: async (files: unknown, date: unknown, options?: unknown) => {
       const paths = parse(selectedFilesSchema, files); const validDate = parse(dateSchema, date);
-      return safe(() => input.service.importFiles(paths, validDate), '文件未能收纳，请检查工作盘后重试。');
+      const checkedOptions = checkedImportOptions(options);
+      return safe(() => checkedOptions === undefined ? input.service.importFiles(paths, validDate) : input.service.importFiles(paths, validDate, checkedOptions), '文件未能收纳，请检查工作盘后重试。');
     },
     createNote: async (request: unknown) => {
       const parsed = parse(noteSchema, request);
