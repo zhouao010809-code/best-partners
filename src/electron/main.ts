@@ -1,4 +1,4 @@
-import { app, autoUpdater, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createInitialVault, loadDesktopSettings, resolveInitialVaultSettings, saveDesktopSettings, validateDesktopVault } from './settings-store.js';
@@ -24,6 +24,10 @@ import { createUpdateController } from './update-controller.js';
 import { supportsAutomaticUpdates } from './update-signature.js';
 import { clearPreviousUpdateDownloads, downloadUpdateInstaller } from './update-download.js';
 import { createUpdateDownloadFetcher } from './update-network.js';
+import { createWorkdiskService } from '../server/workdisk/service.js';
+import { createDesktopWorkdisk } from './workdisk-controller.js';
+
+protocol.registerSchemesAsPrivileged([{ scheme: 'workdisk', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
 
 app.setName('最佳拍档');
 let started: StartedServer | undefined;
@@ -33,6 +37,7 @@ let choosing = false;
 let projectChoosing = false;
 let updateController: ReturnType<typeof createUpdateController> | undefined;
 let installRequested = false;
+let closeWorkdisk: (() => Promise<void>) | undefined;
 
 function createMainWindow(origin: string): BrowserWindow {
   const policy = createDesktopWindowPolicy(origin);
@@ -163,6 +168,31 @@ async function bootstrap(): Promise<void> {
     personalArchiveAddonPath: join(import.meta.dirname, '../native/personal-archive.node')
   });
   window = createMainWindow(started.origin);
+  const workdiskService = createWorkdiskService({ stateDirectory: join(appDataDir, 'workdisk'), protectedRoots: [settings.vaultRoot, userDataDir] });
+  closeWorkdisk = () => workdiskService.close();
+  const workdisk = createDesktopWorkdisk({
+    service: workdiskService,
+    chooseDirectory: async () => {
+      if (process.env.NODE_ENV === 'test' && process.env.XIAOZHAO_TEST_WORKDISK_ROOT) return process.env.XIAOZHAO_TEST_WORKDISK_ROOT;
+      const result = await dialog.showOpenDialog(window!, { title: '连接工作盘', properties: ['openDirectory', 'createDirectory'], message: '选择日常工作资料所在的文件夹。现有文件会保持原位，新资料按日期收纳。' });
+      return result.canceled ? undefined : result.filePaths[0];
+    },
+    chooseFiles: async () => {
+      if (process.env.NODE_ENV === 'test' && process.env.XIAOZHAO_TEST_WORKDISK_IMPORT_JSON) return JSON.parse(process.env.XIAOZHAO_TEST_WORKDISK_IMPORT_JSON) as string[];
+      const result = await dialog.showOpenDialog(window!, { title: '收纳工作文件', properties: ['openFile', 'multiSelections'], message: '文件会复制到选定日期，原文件保留。' });
+      return result.canceled ? undefined : result.filePaths;
+    },
+    openPath: path => shell.openPath(path)
+  });
+  window.webContents.session.protocol.handle('workdisk', request => workdisk.media(request));
+  ipcMain.handle('desktop:workdisk-status', event => { assertMainSender(event); return workdisk.status(); });
+  ipcMain.handle('desktop:workdisk-connect', event => { assertMainSender(event); return workdisk.connect(); });
+  ipcMain.handle('desktop:workdisk-list', (event, request: unknown) => { assertMainSender(event); return workdisk.list(request); });
+  ipcMain.handle('desktop:workdisk-import', (event, date: unknown) => { assertMainSender(event); return workdisk.importFiles(date); });
+  ipcMain.handle('desktop:workdisk-drop', (event, files: unknown, date: unknown) => { assertMainSender(event); return workdisk.importDroppedFiles(files, date); });
+  ipcMain.handle('desktop:workdisk-create-note', (event, request: unknown) => { assertMainSender(event); return workdisk.createNote(request); });
+  ipcMain.handle('desktop:workdisk-preview', (event, path: unknown) => { assertMainSender(event); return workdisk.preview(path); });
+  ipcMain.handle('desktop:workdisk-open', (event, path: unknown) => { assertMainSender(event); return workdisk.openFile(path); });
   const navigation = createDesktopVaultNavigation({ reader: await nativeReader.create(settings.vaultRoot), shell });
   const skillNavigation = createDesktopSkillNavigation({ catalog: skillCatalog, shell });
   ipcMain.handle('desktop:get-app-version', (event) => { assertMainSender(event); return app.getVersion(); });
@@ -277,7 +307,9 @@ app.on('will-quit', (event) => {
     quitState = 'ready';
     setImmediate(() => { if (installRequested) autoUpdater.quitAndInstall(); else app.quit(); });
   };
-  void (started?.close() ?? Promise.resolve()).then(finishQuit, finishQuit);
+  void (async () => {
+    try { await closeWorkdisk?.(); } finally { await started?.close(); }
+  })().then(finishQuit, finishQuit);
 });
 app.on('window-all-closed', () => { if (!installRequested) app.quit(); });
 app.on('quit', () => updateController?.dispose());

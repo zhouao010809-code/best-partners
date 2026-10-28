@@ -8,6 +8,7 @@ import { routePages } from '#client-route-pages';
 
 const {
   DashboardPage: DashboardRoutePage,
+  WorkdiskPage: WorkdiskRoutePage,
   QueuePage: QueueRoutePage,
   IntakePage: IntakeRoutePage,
   LibraryPage: LibraryRoutePage,
@@ -84,6 +85,7 @@ export function AppRouter({ api, runtimeMode = 'personal' }: AppRouterProps = {}
     <Routes>
       <Route element={<AppShell {...(api === undefined ? {} : { api })} suspendDataEffects={runtimeMode === 'pending'} />}>
         <Route index element={<RouteElement component={DashboardRoutePage} />} />
+        <Route path="workdisk" element={<RouteElement component={WorkdiskRoutePage} />} />
         <Route path="queue" element={<RouteElement component={QueueRoutePage} />} />
         <Route path="intake" element={<RouteElement component={IntakeRoutePage} />} />
         <Route path="library" element={<RouteElement component={LibraryRoutePage} />} />

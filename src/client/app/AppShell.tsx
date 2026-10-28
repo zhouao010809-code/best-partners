@@ -6,6 +6,7 @@ import {
   CircleDot,
   DatabaseZap,
   FolderKanban,
+  HardDrive,
   Archive,
   Inbox,
   GitPullRequestArrow,
@@ -35,6 +36,7 @@ import '../styles/ai-glow.css';
 
 const NAVIGATION = [
   { to: '/', label: '大脑总览', icon: LayoutDashboard, end: true },
+  { to: '/workdisk', label: '工作盘', icon: HardDrive, end: false },
   { to: '/intake', label: '收件箱', icon: Inbox, end: false },
   { to: '/queue', label: '提炼队列', icon: ListFilter, end: false },
   { to: '/library', label: '档案库', icon: Archive, end: false },
@@ -207,6 +209,8 @@ function pageIdentity(pathname: string): PageIdentity {
   const canonicalPath = pathname.length > 1 ? pathname.replace(/\/+$/u, '') : pathname;
 
   switch (canonicalPath) {
+    case '/workdisk':
+      return { eyebrow: 'WORKSPACE / LOCAL FILES', title: '工作盘', description: '收好每天的工作，找回需要的资料。' };
     case '/intake':
       return { eyebrow: 'INCOMING / PERSONAL ARCHIVE', title: '收件箱', description: '收藏的下一站。' };
     case '/':
@@ -637,7 +641,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
         <header className="workspace-bar">
           <div className="workspace-bar__context">
             <Activity aria-hidden="true" />
-            <span>{location.pathname.startsWith('/projects/') ? '项目工作区 · 创作工作台' : location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
+            <span>{location.pathname === '/workdisk' ? '本地文件工作台' : location.pathname.startsWith('/projects/') ? '项目工作区 · 创作工作台' : location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
           </div>
           <div className="workspace-bar__actions"><div className={`workspace-bar__status${quietOverview ? ' workspace-bar__status--quiet' : ''}`} role="status" aria-label="索引运行状态" title={indexStatus}>
             <CircleDot aria-hidden="true" />
@@ -652,9 +656,9 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
               <h1 ref={headingRef} tabIndex={-1}>{identity.title}</h1>
               <p className="page-heading__description">{identity.description}</p>
             </div>
-            {location.pathname !== '/' && location.pathname !== '/operations' && <div className="read-only-seal" aria-label={location.pathname === '/intake' ? '当前模式：归档需确认' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? '当前模式：入库需确认' : '当前模式：候选不入库' : location.pathname === '/settings' ? '当前模式：本地设置' : location.pathname === '/skills' ? '当前模式：内容只读，整理可编辑' : ['/trash', '/library', '/knowledge'].includes(location.pathname) && api.trash ? '当前模式：删除需确认' : '当前模式：只读'}>
+            {location.pathname !== '/' && location.pathname !== '/operations' && <div className="read-only-seal" aria-label={location.pathname === '/workdisk' ? '当前模式：文件保存在本地' : location.pathname === '/intake' ? '当前模式：归档需确认' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? '当前模式：入库需确认' : '当前模式：候选不入库' : location.pathname === '/settings' ? '当前模式：本地设置' : location.pathname === '/skills' ? '当前模式：内容只读，整理可编辑' : ['/trash', '/library', '/knowledge'].includes(location.pathname) && api.trash ? '当前模式：删除需确认' : '当前模式：只读'}>
               <span aria-hidden="true" />
-              {location.pathname === '/intake' ? 'CONFIRM TO ARCHIVE' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? 'CONFIRM TO KEEP' : 'CANDIDATES ONLY' : location.pathname === '/settings' ? 'LOCAL SETTINGS' : location.pathname === '/skills' ? 'ORGANIZE LOCALLY' : (location.pathname === '/trash' || location.pathname.startsWith('/library') || location.pathname === '/knowledge') && api.trash ? 'MANUAL CONFIRM' : 'READ ONLY'}
+              {location.pathname === '/workdisk' ? '本地保存' : location.pathname === '/intake' ? 'CONFIRM TO ARCHIVE' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? api.ingestion ? 'CONFIRM TO KEEP' : 'CANDIDATES ONLY' : location.pathname === '/settings' ? 'LOCAL SETTINGS' : location.pathname === '/skills' ? 'ORGANIZE LOCALLY' : (location.pathname === '/trash' || location.pathname.startsWith('/library') || location.pathname === '/knowledge') && api.trash ? 'MANUAL CONFIRM' : 'READ ONLY'}
             </div>}
           </header>}
 

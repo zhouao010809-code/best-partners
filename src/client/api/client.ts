@@ -1,5 +1,6 @@
 import { learningNoteListResponseSchema, learningNoteResponseSchema, type LearningNote, type LearningNoteList, type LearningNoteQuery, type LearningNoteSave } from '../../shared/api/learning-notes.js';
 import { z } from 'zod';
+import { workdiskSearchResponseSchema, type WorkdiskSearchResponse } from '../../shared/api/workdisk-search.js';
 import { creativeProfileResponseSchema, type ProjectCreativeProfile, type CreativeProfileSave } from '../../shared/api/creative-profile.js';
 import { creationListResponseSchema, creationDetailResponseSchema, creationSuggestionResponseSchema, creationExportResponseSchema,
   type ProjectCreation, type CreationDetail, type CreationCreate, type CreationSave, type CreationSuggestion, type CreationGenerateRequest, type CreationExport } from '../../shared/api/project-creations.js';
@@ -181,6 +182,7 @@ export interface ReadConsoleApi {
     retry(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
     cancel(id: string): Promise<ApiClientResult<{ attachment: Attachment }>>;
   };
+  workdiskSearchPlan?(query: string, today: string, signal?: AbortSignal): Promise<ApiClientResult<WorkdiskSearchResponse>>;
   learningNotes?: {
     list(query: LearningNoteQuery, signal?: AbortSignal): Promise<ApiClientResult<LearningNoteList>>;
     save(id: string, input: LearningNoteSave, signal?: AbortSignal): Promise<ApiClientResult<{ note: LearningNote }>>;
@@ -556,6 +558,7 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
         clientRequestId
       )
     },
+    workdiskSearchPlan: (query, today, signal) => postWithCsrf('/api/v1/workdisk/search-plan', workdiskSearchResponseSchema, { query, today }, undefined, signal),
     learningNotes: {
       list: (query, signal) => requestData(fetcher, withQuery('/api/v1/learning-notes', parameters => {
         appendQuery(parameters, 'path', query.path);

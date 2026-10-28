@@ -1,4 +1,5 @@
 import { createLearningNotesService } from '../learning/notes-service.js';
+import { registerWorkdiskSearchRoutes } from './routes/workdisk-search.js';
 import { registerLearningNotesRoutes } from './routes/learning-notes.js';
 import { registerProjectCreationRoutes } from './routes/project-creations.js';
 import { createCreationAssistant } from '../projects/creation-assistant.js';
@@ -93,6 +94,7 @@ export function registerApplicationRoutes(input: ApplicationRouteRegistryInput):
     } : undefined });
   registerIndexJobRoutes(app, indexJobs);
   if (runtimeMode === 'personal') {
+    registerWorkdiskSearchRoutes(app, options.assistantAdapters?.find(value => value.id === 'deepseek'));
     registerProjectRoutes(app, options.projectService, options.projectWritePlans);
     const adapter = options.assistantAdapters?.find(value => value.id === 'deepseek');
     const creations = options.projectCreations;

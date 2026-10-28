@@ -28,6 +28,7 @@ function contentSecurityPolicy(nonce: string): string {
     `style-src-elem 'self' 'nonce-${nonce}'`,
     "style-src-attr 'none'",
     "img-src 'self' data: blob:",
+    "media-src 'self' workdisk:",
     "object-src 'none'",
     "frame-ancestors 'none'",
     "base-uri 'none'",

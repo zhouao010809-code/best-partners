@@ -23,6 +23,7 @@ import { ASSISTANT_INTENT_EVENT } from '../../src/client/components/assistant/as
 
 const MAIN_NAVIGATION_NAMES = [
   '大脑总览',
+  '工作盘',
   '收件箱',
   '提炼队列',
   '档案库',
@@ -234,10 +235,11 @@ describe('black-glass application shell', () => {
 
     const navigation = screen.getByRole('navigation', { name: '主导航' });
     const links = within(navigation).getAllByRole('link');
-    expect(links).toHaveLength(9);
+    expect(links).toHaveLength(10);
     expect(links.map((link) => link.textContent?.trim())).toEqual(MAIN_NAVIGATION_NAMES);
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
       '/',
+      '/workdisk',
       '/intake',
       '/queue',
       '/library',
@@ -247,6 +249,12 @@ describe('black-glass application shell', () => {
       '/operations',
       '/settings'
     ]);
+  });
+
+  it('describes the working disk as local saving instead of read-only knowledge', () => {
+    setPath('/workdisk'); render(<App />);
+    expect(screen.getByLabelText('当前模式：文件保存在本地')).toHaveTextContent('本地保存');
+    expect(screen.getByText('本地文件工作台')).toBeVisible();
   });
 
   it('keeps the icon-only recycle link discoverable outside the main navigation', async () => {
@@ -301,7 +309,7 @@ describe('black-glass application shell', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
     const navigation = screen.getByRole('navigation', { name: '主导航' });
-    expect(within(navigation).getAllByRole('link')).toHaveLength(9);
+    expect(within(navigation).getAllByRole('link')).toHaveLength(10);
     expect(within(navigation).queryByText(heading)).not.toBeInTheDocument();
   });
 

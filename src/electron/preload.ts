@@ -1,8 +1,18 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { XiaozhaoDesktopApi } from '../shared/desktop/bridge.js';
 import type { UpdateSnapshot } from '../shared/desktop/update.js';
 
 contextBridge.exposeInMainWorld('xiaozhaoDesktop', Object.freeze({
+  workdisk: Object.freeze({
+    status: () => ipcRenderer.invoke('desktop:workdisk-status'),
+    connect: () => ipcRenderer.invoke('desktop:workdisk-connect'),
+    list: (request) => ipcRenderer.invoke('desktop:workdisk-list', request),
+    importFiles: (date) => ipcRenderer.invoke('desktop:workdisk-import', date),
+    importDroppedFiles: (files, date) => ipcRenderer.invoke('desktop:workdisk-drop', files.map(file => webUtils.getPathForFile(file)), date),
+    createNote: (input) => ipcRenderer.invoke('desktop:workdisk-create-note', input),
+    preview: (path) => ipcRenderer.invoke('desktop:workdisk-preview', path),
+    openFile: (path) => ipcRenderer.invoke('desktop:workdisk-open', path)
+  } satisfies NonNullable<XiaozhaoDesktopApi['workdisk']>),
   openAssistantLogin: (url) => ipcRenderer.invoke('desktop:assistant-login', url),
   getAppVersion: () => ipcRenderer.invoke('desktop:get-app-version'),
   chooseVaultDirectory: () => ipcRenderer.invoke('desktop:choose-vault-directory'),
