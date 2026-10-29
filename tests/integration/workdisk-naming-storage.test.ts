@@ -114,3 +114,21 @@ it('cancels active naming on close and copies remaining files under their origin
     await importing; await closing;
   }
 });
+it('passes supported images to the content namer and preserves their extension and bytes', async () => {
+  const namer = vi.fn<Namer>(async () => ({ title: '会议白板记录', reason: '根据图片文字命名' }));
+  const f = await setup(namer); const source = join(f.source, '83927.tif'); await writeFile(source, 'image fixture bytes');
+  const result = await f.service.importFiles([source], '2026-10-30', { nameFromContent: true });
+  expect(namer).toHaveBeenCalledTimes(1); expect(result.files[0]).toMatchObject({ name: '会议白板记录.tif', kind: 'image' });
+  expect(await readFile(join(f.root, result.files[0]!.path), 'utf8')).toBe('image fixture bytes');
+});
+it('renames only the workdisk copy, retaining its extension and refusing collision or path input', async () => {
+  const f = await setup(); const source = join(f.source, '83927.txt'); await writeFile(source, '原件正文');
+  const result = await f.service.importFiles([source], '2026-10-30'); const original = result.files[0]!;
+  const changed = await f.service.renameFile(original.path, '自己修改的名称');
+  expect(changed.name).toBe('自己修改的名称.txt'); expect(await readFile(join(f.root, changed.path), 'utf8')).toBe('原件正文');
+  expect(await readFile(source, 'utf8')).toBe('原件正文');
+  const second = await f.service.importFiles([source], '2026-10-30');
+  await expect(f.service.renameFile(second.files[0]!.path, '自己修改的名称')).rejects.toThrow();
+  await expect(f.service.renameFile(second.files[0]!.path, '../逃出目录')).rejects.toThrow();
+  expect(await readFile(join(f.root, second.files[0]!.path), 'utf8')).toBe('原件正文');
+});

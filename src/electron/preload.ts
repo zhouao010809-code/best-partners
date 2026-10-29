@@ -11,7 +11,13 @@ contextBridge.exposeInMainWorld('xiaozhaoDesktop', Object.freeze({
     importDroppedFiles: (files, date, options) => ipcRenderer.invoke('desktop:workdisk-drop', files.map(file => webUtils.getPathForFile(file)), date, options),
     createNote: (input) => ipcRenderer.invoke('desktop:workdisk-create-note', input),
     preview: (path) => ipcRenderer.invoke('desktop:workdisk-preview', path),
-    openFile: (path) => ipcRenderer.invoke('desktop:workdisk-open', path)
+    openFile: (path) => ipcRenderer.invoke('desktop:workdisk-open', path),
+    autoStatus: () => ipcRenderer.invoke('desktop:workdisk-auto-status'),
+    chooseAutoSource: (options) => ipcRenderer.invoke('desktop:workdisk-auto-choose', options),
+    setAutoEnabled: (enabled) => ipcRenderer.invoke('desktop:workdisk-auto-enable', enabled),
+    setAutoNaming: (enabled) => ipcRenderer.invoke('desktop:workdisk-auto-naming', enabled),
+    renameAutoReceipt: (id, title) => ipcRenderer.invoke('desktop:workdisk-auto-rename', id, title),
+    openAutoSource: () => ipcRenderer.invoke('desktop:workdisk-auto-open')
   } satisfies NonNullable<XiaozhaoDesktopApi['workdisk']>),
   openAssistantLogin: (url) => ipcRenderer.invoke('desktop:assistant-login', url),
   getAppVersion: () => ipcRenderer.invoke('desktop:get-app-version'),

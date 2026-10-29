@@ -6,6 +6,7 @@ import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { WorkdiskPreviewDialog } from '../components/workdisk/WorkdiskPreviewDialog.js';
 import { WorkdiskNote } from '../components/workdisk/WorkdiskNote.js';
 import { WorkdiskNamingResults } from '../components/workdisk/WorkdiskNamingResults.js';
+import { WorkdiskAutoCollection } from '../components/workdisk/WorkdiskAutoCollection.js';
 import '../styles/workdisk.css';
 
 const TYPES = [
@@ -47,12 +48,14 @@ export function WorkdiskPage() {
   const [dragging, setDragging] = useState(false);
   const generation = useRef(0);
   const searchAbort = useRef<AbortController | undefined>(undefined);
+  const backgroundRefresh = useRef(false);
   const activeSearch = useRef<WorkdiskListRequest | undefined>(undefined);
   const alive = useRef(true);
   const actionLock = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!disk) return;
+    backgroundRefresh.current = false;
     const sequence = ++generation.current;
     setLoading(true);
     try {
@@ -77,7 +80,13 @@ export function WorkdiskPage() {
     if (actionLock.current) return;
     actionLock.current = true; setBusy(true); setError(''); setNotice(''); setFailures([]); setNaming([]);
     try { await action(); } catch (cause) { if (alive.current) setError(errorText(cause)); }
-    finally { actionLock.current = false; if (alive.current) setBusy(false); }
+    finally {
+      actionLock.current = false;
+      if (alive.current) {
+        setBusy(false);
+        if (backgroundRefresh.current && !searchAbort.current) void refresh();
+      }
+    }
   }
   function clearSearch() {
     searchAbort.current?.abort(); searchAbort.current = undefined; generation.current++; setLoading(false); setSearching(false);
@@ -122,7 +131,11 @@ export function WorkdiskPage() {
       activeSearch.current = request; setResults(found); setBrowseDate(''); setKind('all');
       setSearchDescription(parsed?.ok && parsed.value.mode === 'ai' ? 'AI 已理解描述，以下是本地匹配结果' : parsed?.ok && parsed.value.message ? parsed.value.message : '正在使用本地查找；可输入文件名或正文中的关键词');
     } catch (cause) { if (!controller.signal.aborted && alive.current) setError(errorText(cause)); }
-    finally { if (searchAbort.current === controller) searchAbort.current = undefined; if (!controller.signal.aborted && alive.current && sequence === generation.current) setSearching(false); }
+    finally {
+      if (searchAbort.current === controller) searchAbort.current = undefined;
+      if (!controller.signal.aborted && alive.current && sequence === generation.current) setSearching(false);
+      if (alive.current && backgroundRefresh.current && !searchAbort.current && !actionLock.current) void refresh();
+    }
   }
   const inventory = snapshot?.files ?? [];
   const displayed = results?.files ?? inventory;
@@ -156,6 +169,9 @@ export function WorkdiskPage() {
     {!disk ? <div className="workdisk-empty"><HardDrive /><h3>请在桌面应用中打开工作盘</h3><p>桌面版可以直接连接和保存本地文件。</p></div>
       : !binding ? <div className="workdisk-empty workdisk-connect"><div className="workdisk-folder-art"><FolderOpen size={66} /></div><h3>{loading ? '正在读取工作盘…' : '给每天的工作，选一个家'}</h3><p>连接一个本地文件夹，就能在这里浏览、收纳和查找。<br />已有文件会保留在原来的位置。</p><button className="workdisk-primary" disabled={busy || loading} onClick={() => void connect()}><Plus size={17} />连接本地文件夹</button></div>
       : <>
+        <WorkdiskAutoCollection disk={disk} disabled={busy} onChanged={() => {
+          if (actionLock.current || searchAbort.current) backgroundRefresh.current = true; else void refresh();
+        }} />
         <div className="workdisk-collect"><div><Upload size={21} /><span><strong>文件放这里，名称帮你理</strong><small>按日期和类型收好 · 原件保留</small></span></div>
           <label>收纳日期<input type="date" aria-label="收纳日期" value={saveDate} onChange={event => { if (event.target.value) setSaveDate(event.target.value); }} disabled={busy} /></label>
           <button disabled={busy || searching} onClick={() => setWriting(value => !value)}><FileText size={16} />写文案</button>
@@ -163,7 +179,7 @@ export function WorkdiskPage() {
         </div>
         <div className="workdisk-naming-option">
           <label><input type="checkbox" checked={nameFromContent} disabled={busy} aria-describedby="workdisk-naming-detail" onChange={event => { const checked = event.target.checked; setNameFromContent(checked); try { sessionStorage.setItem('workdisk-content-naming', checked ? 'on' : 'off'); } catch { /* Current choice still applies. */ } }} /><span>根据内容命名</span><Sparkles size={14} /></label>
-          <p id="workdisk-naming-detail">{nameFromContent ? <>支持文本和有文字的 PDF。可读正文会发送给已连接的 AI，长文使用节选；未连接或读不出内容时按原名保存。<Link to="/settings">连接 AI</Link></> : '按原名保存，不会为命名发送正文。'}</p>
+          <p id="workdisk-naming-detail">{nameFromContent ? <>支持文本、有文字的 PDF 和可识别的图片。可读正文会发送给已连接的 AI，图片先在本机识别文字和画面类别，识别结果用于命名；长文使用节选，未连接或读不出内容时按原名保存。<Link to="/settings">连接 AI</Link></> : '按原名保存，不会为命名发送正文。'}</p>
         </div>
         {importing && <p className="workdisk-notice" role="status">{nameFromContent ? '正在读取正文、生成名称并保存，完成后会列出原名和新名。' : '正在复制文件到所选日期，原文件会保留。'}</p>}
         {naming.length > 0 && <WorkdiskNamingResults receipts={naming} onClose={() => setNaming([])} />}

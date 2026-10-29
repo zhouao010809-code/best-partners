@@ -124,4 +124,22 @@ describe('workdisk page', () => {
     await act(async () => finish({ files: [file], failures: [] }));
     expect(screen.getByRole('checkbox', { name: '根据内容命名' })).toBeEnabled();
   });
+  it('defers background collection refresh until an active search finishes', async () => {
+    let finish!: (value: unknown) => void;
+    planner.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const receipts = [{ id: 'receipt', sourceName: '001.txt', savedName: file.name, path: file.path, status: 'saved', reason: '', receivedAt: file.modifiedAt }];
+    Object.assign(window.xiaozhaoDesktop!.workdisk!, {
+      autoStatus: vi.fn().mockResolvedValue({ source: null, enabled: false, nameFromContent: true, phase: 'off', pendingCount: 0, receipts: [] }),
+      chooseAutoSource: vi.fn().mockResolvedValue({ source: { rootPath: '/tmp/downloads', displayName: '下载' }, enabled: true, nameFromContent: true, phase: 'watching', pendingCount: 0, receipts }),
+      setAutoEnabled: vi.fn(), setAutoNaming: vi.fn()
+    });
+    mount(); await screen.findByRole('button', { name: /预览 招生.txt/u });
+    await userEvent.type(screen.getByRole('searchbox'), '招生');
+    await userEvent.click(screen.getByRole('button', { name: '找文件' }));
+    await userEvent.click(screen.getByRole('button', { name: '开启自动收纳' }));
+    await act(async () => finish({ ok: true, value: { mode: 'local', plan: { terms: ['招生'] } } }));
+    expect(await screen.findByRole('button', { name: '退出搜索' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '找文件' })).toBeEnabled();
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ query: '招生' }));
+  });
 });

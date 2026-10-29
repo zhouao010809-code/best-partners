@@ -1,4 +1,5 @@
 import type { WorkdiskBinding, WorkdiskFile, WorkdiskImportOptions, WorkdiskImportResult, WorkdiskListRequest, WorkdiskPreview, WorkdiskSnapshot } from '../workdisk.js';
+import type { WorkdiskAutoState } from '../workdisk-auto.js';
 import type { UpdateCheckResult, UpdateSnapshot } from './update.js';
 
 export interface DesktopVaultSelection {
@@ -29,6 +30,12 @@ export interface DesktopWorkdiskApi {
   createNote(input: { title: string; body: string; date: string }): Promise<WorkdiskFile>;
   preview(path: string): Promise<WorkdiskPreview>;
   openFile(path: string): Promise<void>;
+  autoStatus?(): Promise<WorkdiskAutoState>;
+  chooseAutoSource?(options: { nameFromContent: boolean }): Promise<WorkdiskAutoState | null>;
+  setAutoEnabled?(enabled: boolean): Promise<WorkdiskAutoState>;
+  setAutoNaming?(enabled: boolean): Promise<WorkdiskAutoState>;
+  renameAutoReceipt?(id: string, title: string): Promise<WorkdiskAutoState>;
+  openAutoSource?(): Promise<void>;
 }
 
 export interface XiaozhaoDesktopApi {

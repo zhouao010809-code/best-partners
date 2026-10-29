@@ -151,3 +151,29 @@ it('cleans its incomplete fallback copy after a write failure and preserves the 
   expect(await readFile(join(f.root, '2026-10-28', '文档', '文案.md'), 'utf8')).toBe('existing');
   expect(await readdir(join(f.root, '2026-10-28', '文档'))).toEqual(['文案.md']);
 });
+it('renames a copy on filesystems without hard links while preserving the source and rejecting collisions', async () => {
+  const f = await setup(); await f.service.bind(f.root); const source = join(f.source, '原件.txt'); await writeFile(source, '原件完整正文');
+  const imported = await f.service.importFiles([source], '2026-10-30');
+  vi.mocked(link).mockRejectedValue(Object.assign(new Error('hard links unsupported'), { code: 'ENOTSUP' }));
+  const renamed = await f.service.renameFile(imported.files[0]!.path, '我的名称');
+  expect(await readFile(join(f.root, renamed.path), 'utf8')).toBe('原件完整正文');
+  expect(await readFile(source, 'utf8')).toBe('原件完整正文');
+  await expect(readFile(join(f.root, imported.files[0]!.path))).rejects.toMatchObject({ code: 'ENOENT' });
+  const again = await f.service.importFiles([source], '2026-10-30');
+  await expect(f.service.renameFile(again.files[0]!.path, '我的名称')).rejects.toThrow('已存在');
+  expect(await readFile(join(f.root, again.files[0]!.path), 'utf8')).toBe('原件完整正文');
+});
+it('preserves the old name and removes only its partial new copy if a fallback rename cannot finish', async () => {
+  const f = await setup(); await f.service.bind(f.root); const original = await f.service.createNote({ title: '原名称', body: '完整正文', date: '2026-10-30' });
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  vi.mocked(link).mockRejectedValue(Object.assign(new Error('no hard links'), { code: 'EPERM' }));
+  let attempted = false;
+  vi.mocked(open).mockImplementation(async (...args) => {
+    const handle = await actual.open(...args);
+    if (String(args[0]).endsWith('新名称.md')) vi.spyOn(handle, 'write').mockImplementationOnce(async () => { attempted = true; await handle.writeFile('partial'); throw Object.assign(new Error('full'), { code: 'ENOSPC' }); });
+    return handle;
+  });
+  await expect(f.service.renameFile(original.path, '新名称')).rejects.toThrow();
+  expect(attempted).toBe(true); expect(await readFile(join(f.root, original.path), 'utf8')).toBe('完整正文');
+  expect(await readdir(join(f.root, '2026-10-30', '文档'))).toEqual(['原名称.md']);
+});

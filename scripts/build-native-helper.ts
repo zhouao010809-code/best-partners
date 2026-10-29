@@ -12,3 +12,7 @@ await mkdir(outputDirectory, { recursive: true });
 await promisify(execFile)('xcrun', ['clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2',
   '-arch', 'arm64', '-mmacosx-version-min=13.0', resolve('native/macos/atomic-file-helper.c'), '-o', outputPath]);
 await chmod(outputPath, 0o755);
+const imageHelper = resolve(outputDirectory, 'image-evidence-helper');
+await promisify(execFile)('xcrun', ['swiftc', '-O', '-target', 'arm64-apple-macosx13.0',
+  resolve('native/macos/image-evidence-helper.swift'), '-o', imageHelper]);
+await chmod(imageHelper, 0o755);

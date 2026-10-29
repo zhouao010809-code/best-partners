@@ -48,6 +48,42 @@
 .workdisk-naming-results li strong { font-weight: 550; color: #cae4d2; }
 .workdisk-naming-results li p { color: #819b8b; font-size: 10px; margin: 6px 0 0; line-height: 1.7; }
 .workdisk-naming-results .workdisk-naming-kept p { color: #c5b493; }
+.workdisk-auto { margin: 0 0 20px; padding: 20px; border: 1px solid #45684d; border-radius: 12px; background: linear-gradient(125deg, #203327b0, #101b14c0); }
+.workdisk-auto header, .workdisk-auto header > div, .workdisk-auto-controls, .workdisk-auto-controls > div { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.workdisk-auto header { justify-content: space-between; }
+.workdisk-auto header > div { color: #b6ddc1; }
+.workdisk-auto h3 { margin: 0; font-size: 16px; color: #d9ebdf; font-weight: 550; }
+.workdisk-auto header p { margin: 4px 0 0; color: #96aa9d; font-size: 12px; }
+.workdisk-auto-state { font-size: 11px; color: #acb9b0; padding: 5px 10px; border: 1px solid #68786b55; border-radius: 20px; }
+.workdisk-auto-state.is-on { color: #b7edc4; border-color: #72b98566; background: #24483155; }
+.workdisk-auto-source { display: flex; gap: 7px; align-items: center; margin-top: 16px; min-width: 0; color: #a6b9ad; font-size: 11px; }
+.workdisk-auto-source > strong { white-space: nowrap; font-weight: 500; }
+.workdisk-auto-source > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8ca393; }
+.workdisk-auto-controls { margin-top: 16px; justify-content: space-between; }
+.workdisk-auto-controls > label { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #c3d8ca; cursor: pointer; }
+.workdisk-auto-controls input { accent-color: var(--disk-green); margin: 0; width: 15px; height: 15px; }
+.workdisk-auto-controls button { font-size: 11px; padding: 7px 10px; }
+.workdisk-auto-detail { color: #8fa596; font-size: 11px; line-height: 1.8; margin: 9px 0 0; overflow-wrap: anywhere; }
+.workdisk-auto-detail a { margin-left: 7px; color: #c0e5cc; text-underline-offset: 3px; }
+.workdisk-auto-message { font-size: 12px; color: #c2d4c8; margin: 13px 0 0; }
+.workdisk-auto-receipts { margin-top: 16px; border-top: 1px solid #64836e44; padding-top: 12px; }
+.workdisk-auto-receipts h4 { display: flex; gap: 12px; flex-wrap: wrap; margin: 0 0 5px; font-size: 12px; font-weight: 500; color: #bad1c2; }
+.workdisk-auto-receipts h4 > span { font-size: 10px; color: #819e8c; }
+.workdisk-auto-receipts h4 > button { margin-left: auto; font-size: 10px; padding: 2px 6px; }
+.workdisk-auto-receipts ul { list-style: none; padding: 0; margin: 0; }
+.workdisk-auto-receipts li { padding: 10px 0; border-top: 1px solid #ffffff0b; }
+.workdisk-auto-result { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; overflow-wrap: anywhere; color: #90aa9a; }
+.workdisk-auto-result > strong { font-weight: 550; color: #cce4d5; }
+.workdisk-auto-result-actions { display: flex; gap: 5px; margin-left: auto; }
+.workdisk-auto-result-actions button { padding: 3px 7px; font-size: 10px; }
+.workdisk-auto-receipts li > p { color: #8da594; margin: 5px 0 3px; font-size: 11px; overflow-wrap: anywhere; }
+.workdisk-auto-receipts li > small { color: #6e8b7a; font-size: 10px; overflow-wrap: anywhere; }
+.workdisk-auto-receipts .needs-attention > p { color: #d1bb8c; }
+.workdisk-auto-rename { display: flex; gap: 7px; align-items: end; flex-wrap: wrap; margin-top: 10px; }
+.workdisk-auto-rename label { display: grid; gap: 5px; flex: 1 1 200px; min-width: 0; color: #a7bcae; font-size: 11px; }
+.workdisk-auto-rename input { width: 100%; font-size: 12px; }
+.workdisk-auto-rename button { padding: 7px 9px; font-size: 11px; }
+.workdisk-auto-rename > small { flex-basis: 100%; color: #91a997; font-size: 10px; }
 .workdisk-search { display: flex; gap: 12px; align-items: center; margin: 22px 0; padding: 9px 10px 9px 16px; background: #171c19; border: 1px solid #36423a; border-radius: 11px; box-shadow: 0 5px 20px #0002; color: #8fae9a; }
 .workdisk-search input { flex: 1; min-width: 0; border: 0; background: transparent; font-size: 13px; padding: 6px 0; outline-offset: 0; }
 .workdisk-search input::placeholder { color: #7d8b81; }

@@ -26,6 +26,8 @@ import { clearPreviousUpdateDownloads, downloadUpdateInstaller } from './update-
 import { createUpdateDownloadFetcher } from './update-network.js';
 import { createWorkdiskService } from '../server/workdisk/service.js';
 import { createDesktopWorkdisk } from './workdisk-controller.js';
+import { createDesktopWorkdiskAuto } from './workdisk-auto-controller.js';
+import { createWorkdiskAutoCollector } from '../server/workdisk/auto-collector.js';
 import { createWorkdiskContentNamer } from '../server/workdisk/content-namer.js';
 import { createDeepSeekAssistantAdapter } from '../server/assistant/deepseek-adapter.js';
 
@@ -173,11 +175,19 @@ async function bootstrap(): Promise<void> {
   window = createMainWindow(started.origin);
   const workdiskService = createWorkdiskService({
     stateDirectory: join(appDataDir, 'workdisk'), protectedRoots: [settings.vaultRoot, userDataDir],
-    contentNamer: createWorkdiskContentNamer({ adapter: createDeepSeekAssistantAdapter({ credentials: modelCredentials }), parserWorkerPath: new URL('../server/pdf-worker.mjs', import.meta.url) })
+    contentNamer: createWorkdiskContentNamer({ adapter: createDeepSeekAssistantAdapter({ credentials: modelCredentials }), parserWorkerPath: new URL('../server/pdf-worker.mjs', import.meta.url), imageHelperPath: new URL('../native/image-evidence-helper', import.meta.url) })
   });
-  closeWorkdisk = () => workdiskService.close();
+  const autoCollector = createWorkdiskAutoCollector({
+    stateDirectory: join(appDataDir, 'workdisk-auto'), protectedRoots: [settings.vaultRoot, userDataDir], service: workdiskService,
+    ...(process.env.NODE_ENV === 'test' ? { pollMs: 100, settleMs: 1500 } : {})
+  });
+  closeWorkdisk = async () => { try { await autoCollector.close(); } finally { await workdiskService.close(); } };
+  await autoCollector.start();
   const workdisk = createDesktopWorkdisk({
-    service: workdiskService,
+    service: { ...workdiskService, bind: async selected => {
+      if ((await autoCollector.status()).source) await autoCollector.setEnabled(false);
+      return workdiskService.bind(selected);
+    } },
     chooseDirectory: async () => {
       if (process.env.NODE_ENV === 'test' && process.env.XIAOZHAO_TEST_WORKDISK_ROOT) return process.env.XIAOZHAO_TEST_WORKDISK_ROOT;
       const result = await dialog.showOpenDialog(window!, { title: '连接工作盘', properties: ['openDirectory', 'createDirectory'], message: '选择日常工作资料所在的文件夹。现有文件会保持原位，新资料按日期收纳。' });
@@ -190,6 +200,18 @@ async function bootstrap(): Promise<void> {
     },
     openPath: path => shell.openPath(path)
   });
+  const workdiskAuto = createDesktopWorkdiskAuto({
+    service: autoCollector,
+    chooseDirectory: async options => {
+      if (process.env.NODE_ENV === 'test' && process.env.XIAOZHAO_TEST_WORKDISK_AUTO_SOURCE) return process.env.XIAOZHAO_TEST_WORKDISK_AUTO_SOURCE;
+      const result = await dialog.showOpenDialog(window!, {
+        title: '选择自动接收文件夹', defaultPath: app.getPath('downloads'), properties: ['openDirectory'],
+        message: `仅接收连接后出现的新文件，原件保留。${options.nameFromContent ? '提取的正文与图片识别结果会发送给已连接的 AI，用于命名工作盘副本。' : '按原名保存，不会为命名向 AI 发送内容。'}`
+      });
+      return result.canceled ? undefined : result.filePaths[0];
+    },
+    openPath: path => shell.openPath(path)
+  });
   window.webContents.session.protocol.handle('workdisk', request => workdisk.media(request));
   ipcMain.handle('desktop:workdisk-status', event => { assertMainSender(event); return workdisk.status(); });
   ipcMain.handle('desktop:workdisk-connect', event => { assertMainSender(event); return workdisk.connect(); });
@@ -199,6 +221,12 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('desktop:workdisk-create-note', (event, request: unknown) => { assertMainSender(event); return workdisk.createNote(request); });
   ipcMain.handle('desktop:workdisk-preview', (event, path: unknown) => { assertMainSender(event); return workdisk.preview(path); });
   ipcMain.handle('desktop:workdisk-open', (event, path: unknown) => { assertMainSender(event); return workdisk.openFile(path); });
+  ipcMain.handle('desktop:workdisk-auto-status', event => { assertMainSender(event); return workdiskAuto.status(); });
+  ipcMain.handle('desktop:workdisk-auto-choose', (event, options: unknown) => { assertMainSender(event); return workdiskAuto.chooseSource(options); });
+  ipcMain.handle('desktop:workdisk-auto-enable', (event, enabled: unknown) => { assertMainSender(event); return workdiskAuto.setEnabled(enabled); });
+  ipcMain.handle('desktop:workdisk-auto-naming', (event, enabled: unknown) => { assertMainSender(event); return workdiskAuto.setNaming(enabled); });
+  ipcMain.handle('desktop:workdisk-auto-rename', (event, id: unknown, title: unknown) => { assertMainSender(event); return workdiskAuto.renameReceipt(id, title); });
+  ipcMain.handle('desktop:workdisk-auto-open', event => { assertMainSender(event); return workdiskAuto.openSource(); });
   const navigation = createDesktopVaultNavigation({ reader: await nativeReader.create(settings.vaultRoot), shell });
   const skillNavigation = createDesktopSkillNavigation({ catalog: skillCatalog, shell });
   ipcMain.handle('desktop:get-app-version', (event) => { assertMainSender(event); return app.getVersion(); });
