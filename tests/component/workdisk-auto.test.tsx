@@ -19,6 +19,7 @@ afterEach(() => { cleanup(); vi.useRealTimers(); });
 it('explains first-run scope and AI disclosure before choosing a source and enabling automatic collection', async () => {
   mount();
   expect(await screen.findByText(/仅接收启用后新增/u)).toBeVisible();
+  expect(screen.getByText(/接收范围包含上面的文件夹及其普通子文件夹/u)).toBeVisible();
   expect(screen.getByText(/文字和图片识别结果会发送给已连接的 AI/u)).toBeVisible();
   await userEvent.click(screen.getByRole('button', { name: '开启自动收纳' }));
   expect(chooseAutoSource).toHaveBeenCalledWith({ nameFromContent: true });

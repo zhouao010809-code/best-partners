@@ -142,7 +142,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
     } finally { await unlink(temporary).catch(() => undefined); }
     binding = value; loaded = true;
   }
-  async function publish(current: StoredBinding, name: string, date: string, fill: (handle: Awaited<ReturnType<typeof open>>) => Promise<void>): Promise<WorkdiskSavedFile> {
+  async function publish(current: StoredBinding, name: string, date: string, fill: (handle: Awaited<ReturnType<typeof open>>) => Promise<void>, beforePublish?: () => Promise<void>): Promise<WorkdiskSavedFile> {
     safeName(name);
     const parts = [date, category[fileKind(name)]]; const dir = await directory(current.rootPath, parts, current, true);
     const temp = join(dir, `.workdisk-${randomUUID()}.tmp`); let owned: FileIdentity | undefined;
@@ -155,6 +155,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
       const ext = extname(name); const stem = name.slice(0, name.length - ext.length);
       for (let number = 0; number < 10_000; number++) {
         const filename = number ? `${stem} (${number})${ext}` : name; const target = join(dir, filename);
+        await beforePublish?.();
         let publishedIdentity = owned;
         try {
           try { await link(temp, target); }
@@ -240,7 +241,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
       snapshot.files.sort((a, b) => b.date.localeCompare(a.date) || b.modifiedAt.localeCompare(a.modifiedAt) || a.path.localeCompare(b.path));
       return snapshot;
     },
-    importFiles(paths: string[], date: string, options: WorkdiskImportOptions = {}, signal?: AbortSignal): Promise<WorkdiskServiceImportResult> { return exclusive(async () => {
+    importFiles(paths: string[], date: string, options: WorkdiskImportOptions = {}, signal?: AbortSignal, guard?: (source: string) => Promise<void>): Promise<WorkdiskServiceImportResult> { return exclusive(async () => {
       parse(dateSchema, date); parse(z.array(z.string().min(1).max(4096)).min(1).max(100), paths); const requested = parse(importOptionsSchema, options); const current = await active();
       const namingSignal = signal ? AbortSignal.any([namingShutdown.signal, signal]) : namingShutdown.signal;
       const cancellationReason = () => closing ? NAMING_SHUTDOWN_REASON : '本次内容命名已停止，已按原名保存。';
@@ -248,10 +249,12 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
       for (const source of paths) {
         try {
           if (!isAbsolute(source)) throw problem('请选择本地文件。');
+          await guard?.(source);
           const before = await lstat(source); if (!before.isFile() || before.isSymbolicLink()) throw problem('仅支持普通文件，请勿选择文件夹或快捷链接。');
           const input = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
           try {
             const opened = await input.stat(); if (!opened.isFile() || !sameIdentity(before, opened)) throw problem('原文件已改变，请重试。');
+            await guard?.(source);
             const originalName = basename(source); const extension = extname(originalName);
             let filename = originalName; let reason = '';
             if (requested.nameFromContent) {
@@ -267,6 +270,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
                 }
                 if (position !== opened.size) throw problem('读取期间原文件发生变化，请重新导入。');
                 await verifySource(source, input, opened);
+                await guard?.(source);
                 try {
                   const suggested = await nameContent(config.contentNamer, { name: originalName, bytes }, namingSignal);
                   const title = namingTitle(suggested.title);
@@ -275,9 +279,12 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
                   else reason = typeof suggested.reason === 'string' && suggested.reason.trim() ? suggested.reason.trim().slice(0, 300) : '没有足够的可读正文生成名称，已保留原名。';
                 } catch { reason = namingSignal.aborted ? cancellationReason() : 'AI 本次未能完成内容命名，已保留原名。'; }
                 await verifySource(source, input, opened);
+                await guard?.(source);
               }
             }
+            await guard?.(source);
             const saved = await publish(current, filename, date, async output => {
+              await guard?.(source);
               const buffer = Buffer.alloc(1024 * 1024); let position = 0;
               while (position < opened.size) {
                 const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, opened.size - position), position);
@@ -288,7 +295,8 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
               }
               if (position !== opened.size) throw problem('复制期间原文件发生变化，请重试。');
               await verifySource(source, input, opened);
-            });
+              await guard?.(source);
+            }, guard ? () => guard(source) : undefined);
             result.files.push(saved);
             result.naming?.push({ originalName, savedName: saved.name, status: filename === originalName ? 'kept' : 'renamed', reason });
           } finally { await input.close(); }

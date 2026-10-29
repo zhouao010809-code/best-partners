@@ -1,5 +1,6 @@
 import { extname } from 'node:path';
 import { z } from 'zod';
+import { PublicApiError } from '../../shared/api/errors.js';
 import type { AssistantAdapter } from '../assistant/types.js';
 import { parseAttachment } from '../attachments/parser.js';
 import { createImageEvidenceReader, type ImageEvidenceReader } from './image-evidence.js';
@@ -109,13 +110,14 @@ export function createWorkdiskContentNamer(input: {
       let output = '';
       await abortable(input.adapter.run({
         model: model.id, system: isImage ? IMAGE_SYSTEM : SYSTEM, messages: [{ role: 'user', content: JSON.stringify(evidence) }], tools: [], signal: active,
-        ...(model.reasoningEfforts.includes('low') ? { effort: 'low' } : {}),
+        // A short title needs answer tokens; thinking shares the same small provider budget.
+        thinking: 'disabled',
         outputReserveTokens: Math.min(512, model.capacity?.maxOutputTokens ?? 512),
         ...(model.capacity ? { capacity: model.capacity } : {}),
         emit(event) {
           active.throwIfAborted();
           if (event.type !== 'text') return;
-          if (Buffer.byteLength(output) + Buffer.byteLength(event.text) > 8192) throw new Error('NAMING_OUTPUT_LIMIT');
+          if (Buffer.byteLength(output) + Buffer.byteLength(event.text) > 8192) throw new PublicApiError('ASSISTANT_OUTPUT_LIMIT', '命名输出达到长度上限。');
           output += event.text;
         }
       }), active);
@@ -124,9 +126,15 @@ export function createWorkdiskContentNamer(input: {
       if (!title) return keep('AI 没有给出可用的主题名称');
       if (isImage) return { title, reason: evidence.sampled ? '根据本机识别出的部分图片文字或画面标签命名，图片已缩小、只取首帧或识别结果有省略。' : '根据本机识别出的图片文字或画面标签生成名称。' };
       return { title, reason: evidence.sampled ? '根据正文节选命名（取开头、中间和结尾），未发送完整长文。' : '根据可读取正文生成名称。' };
-    } catch {
+    } catch (error) {
       signal?.throwIfAborted();
-      return keep(active.aborted ? '读取或 AI 命名超时' : 'AI 本次未能生成可用名称');
+      // Only known codes affect the receipt: never include a raw provider response or error message.
+      const code = error instanceof PublicApiError ? error.code : undefined;
+      if (active.aborted || code === 'ASSISTANT_TIMEOUT') return keep('读取或 AI 命名超时');
+      if (code === 'ASSISTANT_OUTPUT_LIMIT') return keep('AI 命名输出达到长度上限，未生成完整名称');
+      if (code === 'ASSISTANT_CONTEXT_LIMIT') return keep('内容超过当前 AI 的处理范围');
+      if (code === 'ASSISTANT_PROVIDER_FAILED') return keep('AI 服务本次响应未完成，请稍后重试');
+      return keep('AI 本次未能生成可用名称');
     } finally { stop.abort(); }
   };
 }

@@ -206,7 +206,7 @@ async function bootstrap(): Promise<void> {
       if (process.env.NODE_ENV === 'test' && process.env.XIAOZHAO_TEST_WORKDISK_AUTO_SOURCE) return process.env.XIAOZHAO_TEST_WORKDISK_AUTO_SOURCE;
       const result = await dialog.showOpenDialog(window!, {
         title: '选择自动接收文件夹', defaultPath: app.getPath('downloads'), properties: ['openDirectory'],
-        message: `仅接收连接后出现的新文件，原件保留。${options.nameFromContent ? '提取的正文与图片识别结果会发送给已连接的 AI，用于命名工作盘副本。' : '按原名保存，不会为命名向 AI 发送内容。'}`
+        message: `包含普通子文件夹，仅接收连接后出现的新文件，原件保留。${options.nameFromContent ? '提取的正文与图片识别结果会发送给已连接的 AI，用于命名工作盘副本。' : '按原名保存，不会为命名向 AI 发送内容。'}`
       });
       return result.canceled ? undefined : result.filePaths[0];
     },

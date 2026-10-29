@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AssistantAdapter, AssistantRunInput } from '../../src/server/assistant/types.js';
 import { createWorkdiskContentNamer } from '../../src/server/workdisk/content-namer.js';
+import { PublicApiError } from '../../src/shared/api/errors.js';
 import { createPasswordPdf, createTextPdf } from '../helpers/pdf-fixture.js';
 
 const parserWorkerPath = new URL('../../src/server/attachments/pdf-worker.mjs', import.meta.url);
@@ -91,5 +92,17 @@ describe('content-based workdisk naming', () => {
     const controller = new AbortController(); const pending = createWorkdiskContentNamer({ adapter: adapter(run) })(source, controller.signal);
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2)); controller.abort();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+  it.each([
+    ['ASSISTANT_OUTPUT_LIMIT', '长度上限'], ['ASSISTANT_TIMEOUT', '超时'],
+    ['ASSISTANT_CONTEXT_LIMIT', '处理范围'], ['ASSISTANT_PROVIDER_FAILED', '响应未完成']
+  ])('explains %s without exposing provider messages or partial output', async (code, description) => {
+    const failed = adapter(async input => {
+      input.emit({ type: 'text', text: '{"title":"不能采用的部分结果"}' });
+      throw new PublicApiError(code!, 'private-response-and-secret-key');
+    });
+    const result = await createWorkdiskContentNamer({ adapter: failed })({ name: '123.txt', bytes: Buffer.from(article) });
+    expect(result.title).toBeUndefined(); expect(result.reason).toContain(description); expect(result.reason).toContain('保留原名');
+    expect(JSON.stringify(result)).not.toMatch(/private-response|secret-key|部分结果/u);
   });
 });

@@ -25,6 +25,8 @@ export type AssistantEvent = { type: 'text'; text: string } | { type: 'activity'
 export interface AssistantRunInput {
   model: string;
   effort?: string;
+  /** Internal task-level override; omitted requests retain the provider's normal thinking behavior. */
+  thinking?: 'enabled' | 'disabled';
   system: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   tools: AssistantTool[];

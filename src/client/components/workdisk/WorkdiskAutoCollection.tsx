@@ -72,7 +72,7 @@ export function WorkdiskAutoCollection({ disk, disabled = false, onChanged }: { 
       </div>
     </div>
     <p id="workdisk-auto-disclosure" className="workdisk-auto-detail">{savingNaming ? '正在保存命名设置；保存完成前仍按之前的设置处理。' : naming ? <>文字和图片识别结果会发送给已连接的 AI，长文使用节选，原图留在本机；无法识别时保留原名。<Link to="/settings">连接 AI</Link></> : '按原名收纳，不会为自动命名发送内容。'}</p>
-    <p className="workdisk-auto-detail">仅接收启用后新增的文件，不处理以前的下载；原件保留。应用运行时后台接收，关闭或暂停期间的新文件会在下次启动或继续时补收。请将要收纳的文件保存到上面的接收文件夹。</p>
+    <p className="workdisk-auto-detail">接收范围包含上面的文件夹及其普通子文件夹。仅接收启用后新增的文件，不处理以前的下载；原件保留。应用运行时后台接收，关闭或暂停期间的新文件会在下次启动或继续时补收。</p>
     {state?.message && <p className="workdisk-auto-message">{state.message}</p>}
     {(error || readError) && <p className="workdisk-error" role="alert">{error || readError}</p>}
     {state && visibleReceipts.length > 0 && <div className="workdisk-auto-receipts"><h4>最近自动收纳 <span>保留最近 {state.receipts.length} 份结果</span>{(expanded || state.receipts.length > 5) && <button onClick={() => setExpanded(value => !value)}>{expanded ? '收起记录' : `查看全部 ${state.receipts.length} 条记录`}</button>}</h4><ul>

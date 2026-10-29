@@ -12,6 +12,9 @@ const text = '访谈时应记录受访者的原话和实际发生的行为，将
 const textTitle = '访谈证据记录方法';
 const imageTitle = '短视频选题与咨询转化方法';
 const renamedTitle = '访谈记录与原话核验';
+const textRelative = '1029/001.txt';
+const imageRelative = '1029/微信图片/random.png';
+const offlineRelative = '1029/离线下载/004.txt';
 const sentinel = '# 知识资料保持独立\n';
 const quietWindow = 3600; // The collector requires at least three seconds of unchanged source metadata.
 let helperRoot: string;
@@ -40,6 +43,8 @@ async function fixture() {
   }
   await writeFile(join(vault, '02知识库/哨兵.md'), sentinel);
   await writeFile(join(downloads, 'old.txt'), '连接接收目录以前的下载，不应进入工作盘。');
+  await mkdir(join(downloads, '1029'));
+  await writeFile(join(downloads, '1029/old.txt'), '连接接收目录以前的子目录下载，也不应进入工作盘。');
   return { vault, userData, workdisk, downloads };
 }
 async function launch(data: Awaited<ReturnType<typeof fixture>>, mode: 'development' | 'packaged') {
@@ -61,7 +66,8 @@ async function provider(instance: ElectronApplication) {
       const url = String(input); const capture = state.autoCollectionProvider; capture.urls.push(url);
       if (url === 'https://api.deepseek.com/models') return new Response(JSON.stringify({ data: [{ id: 'deepseek-v4-pro' }] }), { headers: { 'content-type': 'application/json' } });
       if (url !== 'https://api.deepseek.com/chat/completions') { capture.denied.push(url); throw new Error('AUTO_COLLECTION_FIXTURE_NETWORK_FORBIDDEN'); }
-      const payload = String(init?.body); const body = JSON.parse(payload) as { messages: { role: string; content: string }[]; tools?: unknown[] };
+      const payload = String(init?.body); const body = JSON.parse(payload) as { messages: { role: string; content: string }[]; tools?: unknown[]; thinking?: { type: string }; reasoning_effort?: string };
+      if (body.thinking?.type !== 'disabled' || body.reasoning_effort !== undefined) throw new Error('AUTO_COLLECTION_FIXTURE_NAMING_MODE_INVALID');
       const content = body.messages.filter(message => message.role === 'user').map(message => message.content).join('\n');
       capture.inputs.push(content); capture.payloads.push(payload); capture.tools.push(body.tools?.length ?? 0);
       const title = content.includes('Audience research') ? titles.image : content.includes('访谈') ? titles.text : undefined;
@@ -96,7 +102,7 @@ async function received(page: Page, name: string) {
 }
 
 for (const mode of ['development', 'packaged'] as const) {
-  test(`${mode}: collects new downloads in the background, names pixels and text, edits copies, pauses and resumes after restart`, async ({}, info) => {
+  test(`${mode}: collects top-level and nested downloads in the background, names pixels and text, edits copies, pauses and resumes after restart`, async ({}, info) => {
     test.setTimeout(180_000);
     const data = await fixture(); let instance: ElectronApplication | undefined;
     try {
@@ -117,7 +123,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect.poll(() => state(page)).toMatchObject({ enabled: true, nameFromContent: true, source: { rootPath: data.downloads } });
 
       const articleBytes = Buffer.from(text);
-      const partial = join(data.downloads, 'partial.crdownload'); const textSource = join(data.downloads, '001.txt');
+      const partial = join(data.downloads, '1029/partial.crdownload'); const textSource = join(data.downloads, textRelative);
       await writeFile(partial, articleBytes);
       // A negative observation must span the real settle interval, not merely the first empty scan.
       await page.waitForTimeout(quietWindow);
@@ -130,7 +136,9 @@ for (const mode of ['development', 'packaged'] as const) {
 
       await page.getByRole('link', { name: '设置', exact: true }).click();
       await expect(page).toHaveURL(/\/settings$/u);
-      const imageSource = join(data.downloads, 'random.png'); await writeFile(imageSource, imageBytes);
+      // The first-level folder existed at enablement; this second-level folder is created afterwards.
+      const imageSource = join(data.downloads, imageRelative);
+      await mkdir(dirname(imageSource), { recursive: true }); await writeFile(imageSource, imageBytes);
       const picture = await received(page, `${imageTitle}.png`);
       await expect(page).toHaveURL(/\/settings$/u);
       expect(picture.path).toMatch(new RegExp(`^\\d{4}-\\d{2}-\\d{2}/图片/${imageTitle}\\.png$`, 'u'));
@@ -138,7 +146,8 @@ for (const mode of ['development', 'packaged'] as const) {
       expect((await readFile(imageSource)).equals(imageBytes)).toBe(true);
       await page.getByRole('link', { name: '工作盘', exact: true }).click();
       auto = page.getByRole('region', { name: '自动收纳', exact: true });
-      await expect(auto).toContainText('001.txt'); await expect(auto).toContainText('random.png');
+      await expect(auto).toContainText(textRelative); await expect(auto).toContainText(imageRelative);
+      await expect.poll(async () => (await state(page)).receipts.map(receipt => receipt.sourceName).sort()).toEqual([textRelative, imageRelative].sort());
       await expect(auto).toContainText(`${imageTitle}.png`);
       const sent = await captured(instance);
       expect(sent.inputs).toHaveLength(2); expect(sent.tools).toEqual([0, 0]); expect(sent.denied).toEqual([]);
@@ -147,7 +156,7 @@ for (const mode of ['development', 'packaged'] as const) {
       const imageEvidence = evidence.find(value => value.text.includes('Audience research'));
       expect(imageEvidence?.labels).toBeInstanceOf(Array);
       for (const value of evidence) expect(Object.keys(value).sort()).toEqual(value.labels ? ['labels', 'sampled', 'text'] : ['sampled', 'text']);
-      for (const forbidden of ['001.txt', 'random.png', data.downloads, 'base64', imageBytes.toString('base64').slice(0, 80)]) expect(sent.payloads.join('\n')).not.toContain(forbidden);
+      for (const forbidden of ['001.txt', 'random.png', textRelative, imageRelative, '1029', '微信图片', data.downloads, 'base64', imageBytes.toString('base64').slice(0, 80)]) expect(sent.payloads.join('\n')).not.toContain(forbidden);
 
       await auto.getByRole('button', { name: `修改 ${textTitle}.txt 的名称`, exact: true }).click();
       await auto.getByRole('textbox', { name: '新的文件名称', exact: true }).fill(renamedTitle);
@@ -164,6 +173,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(auto.getByRole('button', { name: '继续自动收纳', exact: true })).toBeVisible();
       await expect.poll(async () => (await state(page)).enabled).toBe(false);
       const pausedBytes = Buffer.from('暂停期间新下载的访谈记录，应在继续后以原名收纳。');
+      // Retain a top-level new file alongside the recursive collection cases.
       await writeFile(join(data.downloads, '003.txt'), pausedBytes);
       await page.waitForTimeout(quietWindow);
       expect(await names(page)).toEqual([`${renamedTitle}.txt`, `${imageTitle}.png`].sort());
@@ -191,21 +201,23 @@ for (const mode of ['development', 'packaged'] as const) {
       const existingPaths = (await listed(page)).files.map(file => file.path).sort(); expect(existingPaths).toHaveLength(3);
       await instance.close(); instance = undefined;
       const offlineBytes = Buffer.from('应用关闭以后保存的工作资料，下次启动应补收一次。');
-      await writeFile(join(data.downloads, '004.txt'), offlineBytes);
+      const offlineSource = join(data.downloads, offlineRelative);
+      await mkdir(dirname(offlineSource), { recursive: true }); await writeFile(offlineSource, offlineBytes);
       instance = await launch(data, mode); await provider(instance); page = await instance.firstWindow();
       await page.getByRole('link', { name: '工作盘', exact: true }).click();
       await expect.poll(() => state(page)).toMatchObject({ enabled: true, nameFromContent: false, source: { rootPath: data.downloads } });
       const offline = await received(page, '004.txt');
       expect(offline.path).toMatch(/^\d{4}-\d{2}-\d{2}\/文档\/004\.txt$/u);
       expect((await readFile(join(data.workdisk, offline.path))).equals(offlineBytes)).toBe(true);
-      expect((await readFile(join(data.downloads, '004.txt'))).equals(offlineBytes)).toBe(true);
+      expect((await readFile(offlineSource)).equals(offlineBytes)).toBe(true);
       await page.waitForTimeout(quietWindow);
       expect((await listed(page)).files.map(file => file.path).sort()).toEqual([...existingPaths, offline.path].sort());
       await expect.poll(async () => (await state(page)).receipts.filter(receipt => receipt.status === 'saved').length).toBe(4);
-      expect((await state(page)).receipts.map(receipt => receipt.sourceName).sort()).toEqual(['001.txt', '003.txt', '004.txt', 'random.png']);
+      expect((await state(page)).receipts.map(receipt => receipt.sourceName).sort()).toEqual([textRelative, '003.txt', offlineRelative, imageRelative].sort());
       expect((await captured(instance)).inputs).toEqual([]); expect((await captured(instance)).denied).toEqual([]);
       expect((await readFile(textSource)).equals(articleBytes)).toBe(true); expect((await readFile(imageSource)).equals(imageBytes)).toBe(true);
       expect(await readFile(join(data.downloads, 'old.txt'), 'utf8')).toBe('连接接收目录以前的下载，不应进入工作盘。');
+      expect(await readFile(join(data.downloads, '1029/old.txt'), 'utf8')).toBe('连接接收目录以前的子目录下载，也不应进入工作盘。');
       expect(await readFile(join(data.vault, '02知识库/哨兵.md'), 'utf8')).toBe(sentinel);
     } finally {
       await instance?.close();

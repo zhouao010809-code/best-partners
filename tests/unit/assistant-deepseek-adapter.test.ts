@@ -21,6 +21,18 @@ describe('DeepSeek assistant adapter', () => {
     expect(info.models.map((model) => model.id)).toEqual(['deepseek-v4-pro', 'deepseek-v4-flash']);
   });
 
+  it('allows an internal non-thinking request without an effort field and keeps subsequent ordinary requests unchanged', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = createDeepSeekAssistantAdapter({ credentials, fetch: async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body))); return completion([{ delta: { content: '{"title":"合成测试标题"}' }, finish_reason: 'stop' }]);
+    } });
+    await adapter.run(request({ thinking: 'disabled', outputReserveTokens: 512 }));
+    await adapter.run(request());
+    expect(bodies[0]).toMatchObject({ thinking: { type: 'disabled' }, max_tokens: 512 });
+    expect(bodies[0]!.reasoning_effort).toBeUndefined();
+    expect(bodies[1]).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max', max_tokens: 32768 });
+  });
+
   it('uses the real SDK stream and tool loop with the selected model and retained reasoning', async () => {
     const bodies: Record<string, unknown>[] = [];
     const search = vi.fn(async () => ({ items: [{ title: '短视频开头', path: '02知识库/短视频.md' }] }));

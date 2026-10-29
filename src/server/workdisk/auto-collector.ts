@@ -5,29 +5,33 @@ import { basename, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import type { WorkdiskAutoReceipt, WorkdiskAutoState } from '../../shared/workdisk-auto.js';
 import type { WorkdiskFileIdentity, WorkdiskService } from './service.js';
-import { assertRoot, contained, sameIdentity, type FileIdentity } from './paths.js';
+import { assertRoot, contained, safeRelative, sameIdentity, type FileIdentity } from './paths.js';
 
 const RECORD_LIMIT = 10_000;
+const DEPTH_LIMIT = 16;
 const STATE_LIMIT = 8 * 1024 * 1024;
 const partialName = /(?:\.(?:crdownload|part|partial|download|tmp|temp|opdownload|filepart)|~)$/iu;
+const packageName = /\.(?:app|bundle|framework|plugin|kext|appex|prefpane|pkg|playground|photolibrary|photoslibrary|rtfd|pages|numbers|key)$/iu;
+const relativeNameSchema = z.string().min(1).max(2048).refine(value => { try { safeRelative(value); return true; } catch { return false; } });
 const sourceSchema = z.object({ rootPath: z.string().min(1).max(4096), displayName: z.string().max(4096), dev: z.number(), ino: z.number() }).strict();
 const recordSchema = z.object({
-  id: z.uuid(), key: z.string().max(200), name: z.string().min(1).max(1024), fingerprint: z.string().max(200), stableSince: z.number().finite(),
+  id: z.uuid(), key: z.string().max(200), name: relativeNameSchema, fingerprint: z.string().max(200), stableSince: z.number().finite(),
   status: z.enum(['baseline', 'pending', 'processing', 'saved', 'failed', 'uncertain'])
 }).strict();
 const receiptSchema = z.object({
-  id: z.uuid(), sourceName: z.string().max(1024), savedName: z.string().max(1024).optional(), path: z.string().max(4096).optional(),
+  id: z.uuid(), sourceName: z.string().max(2048), savedName: z.string().max(1024).optional(), path: z.string().max(4096).optional(),
   status: z.enum(['saved', 'failed', 'uncertain']), reason: z.string().max(1000), receivedAt: z.string().max(100),
   savedIdentity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }).strict().optional()
 }).strict();
 const storedSchema = z.object({
-  version: z.literal(1), source: sourceSchema, target: z.object({ id: z.string(), rootPath: z.string().max(4096) }).strict(),
+  version: z.literal(1), scanScope: z.literal('recursive-v1').optional(), source: sourceSchema, target: z.object({ id: z.string(), rootPath: z.string().max(4096) }).strict(),
   enabled: z.boolean(), nameFromContent: z.boolean(), records: z.array(recordSchema).max(RECORD_LIMIT), receipts: z.array(receiptSchema).max(50), message: z.string().max(1000).optional()
 }).strict();
 type Stored = z.infer<typeof storedSchema>;
 type RecordEntry = Stored['records'][number];
 type Source = Stored['source'];
-interface ScannedFile { name: string; key: string; fingerprint: string; size: number }
+interface DirectorySnapshot extends WorkdiskFileIdentity { relativePath: string }
+interface ScannedFile { name: string; key: string; fingerprint: string; size: number; parents: DirectorySnapshot[] }
 function key(info: Stats): string { return `${info.dev}:${info.ino}:${info.birthtimeMs}`; }
 function fingerprint(info: Stats): string { return `${info.size}:${info.mtimeMs}:${info.ctimeMs}`; }
 function localDate(time: number): string { const date = new Date(time); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
@@ -122,6 +126,10 @@ export function createWorkdiskAutoCollector(config: {
       }
       message = stored.message; phase = stored.enabled ? 'watching' : 'paused';
       if (recovered) { message = '有上次中断的收纳记录，请核对源文件与工作盘。'; stored.message = message; await persist(stored); }
+      if (!stored.scanScope) {
+        try { const next = await upgradeScope(stored); await persist(next); stored = next; }
+        catch (error) { await pauseError(error); }
+      }
     } catch {
       if (stored) stored.enabled = false;
       phase = 'error'; message = '自动收纳记录无法读取，已停止接收；请重新选择接收文件夹。';
@@ -144,16 +152,55 @@ export function createWorkdiskAutoCollector(config: {
       if (contained(protectedPath, sourcePath) || contained(sourcePath, protectedPath)) throw new Error('接收文件夹需要独立，不能与工作盘、知识库或应用设置目录重叠。');
     }
   }
-  async function scan(source: Source): Promise<ScannedFile[]> {
-    await verifySource(source); const found: ScannedFile[] = []; let count = 0;
-    for await (const entry of await opendir(source.rootPath)) {
-      if (++count > RECORD_LIMIT) throw new Error('接收文件夹项目过多，已暂停；请手动收纳或选择较小的文件夹。');
-      if (entry.name.startsWith('.') || partialName.test(entry.name) || !entry.isFile() || entry.isSymbolicLink()) continue;
-      const info = await lstat(join(source.rootPath, entry.name)).catch(error => { if (error?.code === 'ENOENT') return undefined; throw error; });
-      if (!info || !info.isFile() || info.isSymbolicLink()) continue;
-      found.push({ name: entry.name, key: key(info), fingerprint: fingerprint(info), size: info.size });
+  async function verifyParents(source: Source, parents: DirectorySnapshot[]): Promise<void> {
+    await verifySource(source);
+    for (const parent of parents) {
+      const path = join(source.rootPath, ...safeRelative(parent.relativePath)); const current = await lstat(path);
+      if (!current.isDirectory() || current.isSymbolicLink() || !sameIdentity(parent, current) || parent.birthtimeMs !== current.birthtimeMs || await realpath(path) !== path) throw new Error('接收文件的上级文件夹发生变化，请核对后手动收纳。');
     }
-    await verifySource(source); return found.sort((a, b) => a.name.localeCompare(b.name));
+    await verifySource(source);
+  }
+  function sourceGuard(source: Source, file: ScannedFile): (path: string) => Promise<void> {
+    const expectedPath = join(source.rootPath, ...safeRelative(file.name));
+    return async path => {
+      if (path !== expectedPath) throw new Error('接收文件路径发生变化，请重新选择。');
+      await verifyParents(source, file.parents);
+      const current = await lstat(path);
+      if (!current.isFile() || current.isSymbolicLink() || key(current) !== file.key || fingerprint(current) !== file.fingerprint || await realpath(path) !== path) throw new Error('接收文件发生变化，请核对后手动收纳。');
+      await verifyParents(source, file.parents);
+    };
+  }
+  async function scan(source: Source): Promise<ScannedFile[]> {
+    const found: ScannedFile[] = []; let count = 0;
+    async function visit(parts: string[], parents: DirectorySnapshot[]): Promise<void> {
+      await verifyParents(source, parents);
+      for await (const entry of await opendir(join(source.rootPath, ...parts))) {
+        if (++count > RECORD_LIMIT) throw new Error('接收文件夹项目过多，已暂停；请手动收纳或选择较小的文件夹。');
+        if (entry.name.startsWith('.') || partialName.test(entry.name) || entry.isSymbolicLink()) continue;
+        const childParts = [...parts, entry.name]; const relativePath = childParts.join('/'); safeRelative(relativePath);
+        await verifyParents(source, parents);
+        const info = await lstat(join(source.rootPath, ...childParts)).catch(error => { if (error?.code === 'ENOENT') return undefined; throw error; });
+        if (!info || info.isSymbolicLink()) continue;
+        if (info.isDirectory()) {
+          if (packageName.test(entry.name)) continue;
+          if (childParts.length > DEPTH_LIMIT) throw new Error('接收文件夹层级过深，已暂停；请手动收纳或选择较浅的文件夹。');
+          await visit(childParts, [...parents, { relativePath, dev: info.dev, ino: info.ino, birthtimeMs: info.birthtimeMs }]);
+        } else if (info.isFile()) found.push({ name: relativePath, key: key(info), fingerprint: fingerprint(info), size: info.size, parents });
+      }
+      await verifyParents(source, parents);
+    }
+    await visit([], []);
+    const seen = new Set<string>();
+    return found.sort((a, b) => a.name.localeCompare(b.name)).filter(file => { if (seen.has(file.key)) return false; seen.add(file.key); return true; });
+  }
+  async function upgradeScope(value: Stored): Promise<Stored> {
+    const records = [...value.records]; const seen = new Set(records.map(entry => entry.key));
+    for (const file of await scan(value.source)) {
+      if (!file.name.includes('/') || seen.has(file.key)) continue;
+      if (records.length >= RECORD_LIMIT) throw new Error('自动收纳记录已达上限，已暂停；请手动收纳新文件。');
+      records.push({ id: randomUUID(), key: file.key, name: file.name, fingerprint: file.fingerprint, stableSince: now(), status: 'baseline' }); seen.add(file.key);
+    }
+    return { ...value, scanScope: 'recursive-v1', records };
   }
   async function pauseError(error: unknown): Promise<void> {
     phase = 'error'; message = userError(error, '自动收纳暂时无法继续，已暂停；请检查接收目录和磁盘后重新开启。');
@@ -164,6 +211,7 @@ export function createWorkdiskAutoCollector(config: {
     const controller = new AbortController(); active = controller;
     const running = () => !closed && !controller.signal.aborted && currentGeneration === generation;
     try {
+      if (!stored.scanScope) { const next = await upgradeScope(stored); await persist(next); stored = next; }
       await verifySource(stored.source); await verifyTarget(stored); const files = await scan(stored.source); if (!running()) return;
       const byKey = new Map(stored.records.map(entry => [entry.key, entry])); const present = new Set(files.map(file => file.key));
       let dirty = false;
@@ -187,14 +235,15 @@ export function createWorkdiskAutoCollector(config: {
         const entry = byKey.get(file.key);
         if (!file.size || !entry || entry.status !== 'pending' || now() - entry.stableSince < settleMs) continue;
         await verifySource(stored.source); await verifyTarget(stored); if (!running()) break;
-        const sourcePath = join(stored.source.rootPath, entry.name); const latest = await lstat(sourcePath).catch(() => undefined);
+        const sourcePath = join(stored.source.rootPath, ...safeRelative(entry.name)); const guard = sourceGuard(stored.source, file);
+        await verifyParents(stored.source, file.parents); const latest = await lstat(sourcePath).catch(() => undefined);
         if (!latest?.isFile() || latest.isSymbolicLink() || key(latest) !== entry.key || fingerprint(latest) !== entry.fingerprint) continue;
         entry.status = 'processing'; await persist(stored);
         await verifySource(stored.source); await verifyTarget(stored);
         if (!running()) { entry.status = 'pending'; await persist(stored); break; }
         phase = 'processing';
         try {
-          const result = await config.service.importFiles([sourcePath], localDate(now()), { nameFromContent: stored.nameFromContent }, controller.signal);
+          const result = await config.service.importFiles([sourcePath], localDate(now()), { nameFromContent: stored.nameFromContent }, controller.signal, guard);
           const saved = result.files[0];
           if (saved) {
             entry.status = 'saved'; receipt({ id: entry.id, sourceName: entry.name, savedName: saved.name, path: saved.path, ...(saved.identity ? { savedIdentity: saved.identity } : {}), status: 'saved', reason: result.naming?.[0]?.reason || '已保存到工作盘，原件保留。', receivedAt: new Date(now()).toISOString() });
@@ -234,9 +283,9 @@ export function createWorkdiskAutoCollector(config: {
         await verifySeparation(path, target.rootPath);
         const source: Source = { rootPath: path, displayName: basename(path), dev: identity.dev, ino: identity.ino };
         const reuse = stored?.source.rootPath === path && sameIdentity(stored.source, source);
-        const records = reuse ? stored!.records : (await scan(source)).map(file => ({ id: randomUUID(), key: file.key, name: file.name, fingerprint: file.fingerprint, stableSince: now(), status: 'baseline' as const }));
+        const records = reuse ? (stored!.scanScope ? stored!.records : (await upgradeScope(stored!)).records) : (await scan(source)).map(file => ({ id: randomUUID(), key: file.key, name: file.name, fingerprint: file.fingerprint, stableSince: now(), status: 'baseline' as const }));
         const sameTarget = stored?.target.id === target.id && stored.target.rootPath === target.rootPath;
-        const next: Stored = { version: 1, source, target: { id: target.id, rootPath: target.rootPath }, enabled: true, nameFromContent: options.nameFromContent, records, receipts: reuse && sameTarget ? stored!.receipts : [] };
+        const next: Stored = { version: 1, scanScope: 'recursive-v1', source, target: { id: target.id, rootPath: target.rootPath }, enabled: true, nameFromContent: options.nameFromContent, records, receipts: reuse && sameTarget ? stored!.receipts : [] };
         await persist(next); stored = next; message = undefined; phase = 'watching'; return snapshot();
       });
     },

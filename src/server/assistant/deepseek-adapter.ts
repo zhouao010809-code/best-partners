@@ -132,7 +132,9 @@ export function createDeepSeekAssistantAdapter(input: { credentials: ModelCreden
           const proposed = proposedWrite && request.shouldStopAfterTool?.() === true;
           return proposed ? { activeTools: [], toolChoice: 'none' } : undefined;
         },
-        ...(knownV4(request.model) ? { providerOptions: { deepseek: { thinking: { type: 'enabled' }, reasoningEffort: request.effort ?? 'max' } } } : {}),
+        ...(request.thinking === 'disabled' ? { providerOptions: { deepseek: { thinking: { type: 'disabled' } } } }
+          : knownV4(request.model) ? { providerOptions: { deepseek: { thinking: { type: 'enabled' }, reasoningEffort: request.effort ?? 'max' } } }
+            : request.thinking === 'enabled' ? { providerOptions: { deepseek: { thinking: { type: 'enabled' } } } } : {}),
         onToolExecutionStart: ({ toolCall }) => {
           request.emit({ type: 'step', id: toolCall.toolCallId, toolName: toolCall.toolName, label: toolLabel(toolCall.toolName, toolCall.input), status: 'running' });
           request.emit({ type: 'activity', text: toolActivity(toolCall.toolName) });

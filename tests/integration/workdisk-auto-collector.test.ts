@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { appendFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkdiskService } from '../../src/server/workdisk/service.js';
@@ -23,19 +23,22 @@ async function setup(namer?: WorkdiskContentNamer) {
   return { base, source, root, vault, stateDirectory, service, importFiles, collector, make, tick: async (target = collector) => { time += 3001; await target.poll(); } };
 }
 
-it('baselines existing files and copies only stable new top-level files while preserving originals', async () => {
+it('baselines existing files recursively and copies stable new files while preserving originals', async () => {
   const f = await setup(); await writeFile(join(f.source, '旧资料.txt'), '旧资料');
+  await mkdir(join(f.source, '子目录')); await writeFile(join(f.source, '子目录', 'nested-old.txt'), '旧资料不收');
   await f.collector.configure(f.source, { nameFromContent: false });
   expect((await f.collector.status()).phase).toBe('watching');
   await appendFile(join(f.source, '旧资料.txt'), '后续修改也不是新文件');
-  await mkdir(join(f.source, '子目录')); await writeFile(join(f.source, '子目录', 'nested.txt'), '不要收');
+  await writeFile(join(f.source, '子目录', 'nested.txt'), '新资料要收');
   await writeFile(join(f.source, '新资料.txt'), '完整正文');
   await f.collector.poll(); expect(f.importFiles).not.toHaveBeenCalled(); await f.tick();
-  expect(f.importFiles).toHaveBeenCalledTimes(1);
-  const state = await f.collector.status(); expect(state.receipts[0]).toMatchObject({ sourceName: '新资料.txt', status: 'saved', savedName: '新资料.txt' });
-  expect(await readFile(join(f.root, state.receipts[0]!.path!), 'utf8')).toBe('完整正文');
+  expect(f.importFiles).toHaveBeenCalledTimes(2);
+  const state = await f.collector.status(); const top = state.receipts.find(entry => entry.sourceName === '新资料.txt')!;
+  expect(top).toMatchObject({ status: 'saved', savedName: '新资料.txt' });
+  expect(state.receipts.find(entry => entry.sourceName === '子目录/nested.txt')).toMatchObject({ status: 'saved', savedName: 'nested.txt' });
+  expect(await readFile(join(f.root, top.path!), 'utf8')).toBe('完整正文');
   expect(await readFile(join(f.source, '新资料.txt'), 'utf8')).toBe('完整正文');
-  await f.tick(); expect(f.importFiles).toHaveBeenCalledTimes(1); expect(await readdir(f.vault)).toEqual([]);
+  await f.tick(); expect(f.importFiles).toHaveBeenCalledTimes(2); expect(await readdir(f.vault)).toEqual([]);
 });
 
 it('waits for size and time stability, skips partial/hidden/link/empty files and accepts completed download rename', async () => {
@@ -232,3 +235,89 @@ it('does not resume collecting when persisting the enable setting fails', async 
   await writeFile(join(f.source, '暂不收纳.txt'), '正文'); await f.collector.poll(); await f.tick();
   expect(f.importFiles).not.toHaveBeenCalled();
 });
+it('skips hidden, partial, package and symlink directories but accepts a completed directory rename', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false });
+  for (const name of ['.hidden', 'file.download', 'file.part', 'Tool.app', 'Data.bundle', 'Code.framework']) {
+    await mkdir(join(f.source, name)); await writeFile(join(f.source, name, 'inside.txt'), '不能提前收');
+  }
+  await writeFile(join(f.base, 'outside.txt'), '外部文件');
+  await symlink(f.vault, join(f.source, 'linked-directory')); await symlink(join(f.base, 'outside.txt'), join(f.source, 'linked-file.txt'));
+  await f.collector.poll(); await f.tick(); expect(f.importFiles).not.toHaveBeenCalled();
+  await rename(join(f.source, 'file.download'), join(f.source, '1029')); await f.collector.poll(); expect(f.importFiles).not.toHaveBeenCalled(); await f.tick();
+  expect((await f.collector.status()).receipts[0]?.sourceName).toBe('1029/inside.txt'); expect(f.importFiles).toHaveBeenCalledTimes(1);
+});
+it('retains nested dedupe across pauses and restarts and keeps same basenames in different folders', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false }); await f.collector.setEnabled(false);
+  for (const folder of ['1029', '1030']) { await mkdir(join(f.source, folder)); await writeFile(join(f.source, folder, 'image.png'), folder); }
+  await f.collector.close(); const resumed = await f.make(); await resumed.poll(); expect(f.importFiles).not.toHaveBeenCalled();
+  await resumed.setEnabled(true); await resumed.poll(); await f.tick(resumed); expect(f.importFiles).toHaveBeenCalledTimes(2);
+  expect((await resumed.status()).receipts.map(entry => entry.sourceName).sort()).toEqual(['1029/image.png', '1030/image.png']);
+  await resumed.close(); const again = await f.make(); await again.poll(); await f.tick(again); expect(f.importFiles).toHaveBeenCalledTimes(2);
+  expect(await readFile(join(f.source, '1029', 'image.png'), 'utf8')).toBe('1029');
+});
+it('migrates an unmarked ledger by baselining current nested files while preserving paused top-level pending work', async () => {
+  const f = await setup(); await writeFile(join(f.source, '旧顶层.txt'), 'old'); await f.collector.configure(f.source, { nameFromContent: false });
+  await writeFile(join(f.source, '待收顶层.txt'), 'pending'); await f.collector.poll(); await f.collector.setEnabled(false); await f.collector.close();
+  const path = join(f.stateDirectory, 'workdisk-auto.json'); const data = JSON.parse(await readFile(path, 'utf8')); delete data.scanScope; await writeFile(path, JSON.stringify(data));
+  await mkdir(join(f.source, '1029')); await writeFile(join(f.source, '1029', '旧子目录.txt'), '不得批量发送');
+  const resumed = await f.make(); expect((await resumed.status()).enabled).toBe(false); expect(f.importFiles).not.toHaveBeenCalled();
+  const migrated = JSON.parse(await readFile(path, 'utf8'));
+  expect(migrated.scanScope).toBe('recursive-v1'); expect(migrated.records.filter((entry: { name: string }) => !entry.name.includes('/'))).toEqual(data.records);
+  expect(migrated.records.find((entry: { name: string }) => entry.name === '1029/旧子目录.txt')?.status).toBe('baseline');
+  await resumed.setEnabled(true); await f.tick(resumed); expect(f.importFiles).toHaveBeenCalledTimes(1);
+  await resumed.close(); await writeFile(join(f.source, '1029', '重启前新文件.txt'), 'new'); const again = await f.make();
+  await again.poll(); await f.tick(again); expect(f.importFiles).toHaveBeenCalledTimes(2);
+  expect((await again.status()).receipts.map(entry => entry.sourceName).sort()).toEqual(['1029/重启前新文件.txt', '待收顶层.txt']);
+});
+it.each(['symlink', 'ordinary'])('does not send a nested file when its parent is replaced with a %s directory while service import waits', async replacement => {
+  let entered!: () => void; const started = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void; const blocked = new Promise<void>(resolve => { release = resolve; });
+  const namer = vi.fn<WorkdiskContentNamer>(async input => { if (input.name === 'blocker.txt') { entered(); await blocked; } return { title: '测试标题', reason: 'test' }; });
+  const f = await setup(namer); await f.collector.configure(f.source, { nameFromContent: true });
+  const folder = join(f.source, '1029'); await mkdir(folder); await writeFile(join(folder, 'nested.txt'), '不应发送');
+  const alternate = join(f.base, 'alternate'); await mkdir(alternate); await link(join(folder, 'nested.txt'), join(alternate, 'nested.txt'));
+  await f.collector.poll();
+  const blocker = join(f.base, 'blocker.txt'); await writeFile(blocker, 'blocker');
+  const manual = f.service.importFiles([blocker], '2026-10-30', { nameFromContent: true }); await started;
+  const processing = f.tick();
+  try {
+    await vi.waitFor(() => expect(f.importFiles).toHaveBeenCalledTimes(1));
+    const moved = join(f.base, 'moved'); await rename(folder, moved);
+    if (replacement === 'symlink') await symlink(moved, folder); else await rename(alternate, folder);
+  } finally { release(); await manual; await processing; }
+  expect(namer).toHaveBeenCalledTimes(1); expect((await f.collector.status()).receipts[0]?.status).toBe('failed');
+  expect((await f.service.list()).files).toHaveLength(1);
+});
+it('refuses to publish if a nested parent becomes a symlink during content naming', async () => {
+  let folder = ''; let moved = '';
+  const namer = vi.fn<WorkdiskContentNamer>(async () => { await rename(folder, moved); await symlink(moved, folder); return { title: '不应发布', reason: 'test' }; });
+  const f = await setup(namer); folder = join(f.source, '1029'); moved = join(f.base, 'moved');
+  await f.collector.configure(f.source, { nameFromContent: true }); await mkdir(folder); await writeFile(join(folder, 'nested.txt'), '原文');
+  await f.collector.poll(); await f.tick(); expect(namer).toHaveBeenCalledTimes(1);
+  expect((await f.collector.status()).receipts[0]?.status).toBe('failed'); expect((await f.service.list()).files).toEqual([]);
+  expect(await readFile(join(moved, 'nested.txt'), 'utf8')).toBe('原文');
+});
+it('pauses on excessive recursive depth without forgetting already pending files', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false }); await writeFile(join(f.source, 'pending.txt'), 'A'); await f.collector.poll();
+  const deep = join(f.source, ...Array.from({ length: 17 }, (_, index) => `level${index}`)); await mkdir(deep, { recursive: true }); await writeFile(join(deep, 'deep.txt'), 'deep');
+  await f.tick(); expect((await f.collector.status()).enabled).toBe(false); expect((await f.collector.status()).pendingCount).toBe(1); expect(f.importFiles).not.toHaveBeenCalled();
+});
+it('never starts recursive imports when persisting a legacy scope migration fails', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: true }); await f.collector.close();
+  const path = join(f.stateDirectory, 'workdisk-auto.json'); const old = JSON.parse(await readFile(path, 'utf8')); delete old.scanScope; await writeFile(path, JSON.stringify(old));
+  await mkdir(join(f.source, '1029')); await writeFile(join(f.source, '1029', '旧图片.png'), '不得发送');
+  await chmod(f.stateDirectory, 0o500);
+  try {
+    const resumed = await f.make(); expect((await resumed.status()).phase).toBe('error'); expect((await resumed.status()).enabled).toBe(false);
+    await resumed.poll(); await f.tick(resumed); expect(f.importFiles).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(path, 'utf8')).scanScope).toBeUndefined();
+  } finally { await chmod(f.stateDirectory, 0o700); }
+});
+it('applies the scan limit across sibling trees without forgetting already pending files', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false }); await writeFile(join(f.source, 'pending.txt'), 'A'); await f.collector.poll();
+  for (const folder of ['left', 'right']) {
+    const parent = join(f.source, folder); await mkdir(parent);
+    for (let offset = 0; offset < 5000; offset += 100) await Promise.all(Array.from({ length: 100 }, (_, index) => writeFile(join(parent, `${offset + index}.txt`), '')));
+  }
+  await f.tick(); expect((await f.collector.status()).enabled).toBe(false); expect((await f.collector.status()).pendingCount).toBe(1); expect(f.importFiles).not.toHaveBeenCalled();
+}, 30_000);
