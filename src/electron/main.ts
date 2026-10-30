@@ -185,8 +185,12 @@ async function bootstrap(): Promise<void> {
   await autoCollector.start();
   const workdisk = createDesktopWorkdisk({
     service: { ...workdiskService, bind: async selected => {
-      if ((await autoCollector.status()).source) await autoCollector.setEnabled(false);
-      return workdiskService.bind(selected);
+      const previous = await workdiskService.status().catch(() => null);
+      const receiving = await autoCollector.status();
+      if (receiving.source) await autoCollector.setEnabled(false);
+      const connected = await workdiskService.bind(selected);
+      if (receiving.enabled && previous?.id === connected.id) await autoCollector.setEnabled(true);
+      return connected;
     } },
     chooseDirectory: async () => {
       if (process.env.NODE_ENV === 'test' && process.env.XIAOZHAO_TEST_WORKDISK_ROOT) return process.env.XIAOZHAO_TEST_WORKDISK_ROOT;

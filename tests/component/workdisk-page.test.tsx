@@ -8,7 +8,7 @@ import { WorkdiskPage } from '../../src/client/pages/WorkdiskPage.js';
 
 const binding = { id: 'disk-a', rootPath: '/tmp/工作盘', displayName: '工作盘', connectedAt: '2026-10-29T00:00:00Z' };
 const file = { path: '2026-09-28/文档/招生.txt', name: '招生.txt', kind: 'document', size: 24, date: '2026-09-28', modifiedAt: '2026-09-28T00:00:00Z' };
-const list = vi.fn(), connect = vi.fn(), importFiles = vi.fn(), importDroppedFiles = vi.fn(), createNote = vi.fn(), preview = vi.fn(), planner = vi.fn();
+const list = vi.fn(), status = vi.fn(), connect = vi.fn(), importFiles = vi.fn(), importDroppedFiles = vi.fn(), createNote = vi.fn(), preview = vi.fn(), planner = vi.fn();
 const runtime = { api: { workdiskSearchPlan: planner } };
 vi.mock('../../src/client/app/ConsoleRuntime.js', () => ({ useConsoleRuntime: () => runtime }));
 const snapshot = (files: unknown[] = [file]) => ({ binding, files, scannedAt: '2026-10-29T00:00:00Z', truncated: false, skippedCount: 0 });
@@ -16,16 +16,44 @@ function mount() { render(<MemoryRouter><WorkdiskPage /></MemoryRouter>); }
 
 beforeEach(() => {
   sessionStorage.clear();
-  list.mockResolvedValue(snapshot()); connect.mockResolvedValue(binding);
+  list.mockResolvedValue(snapshot()); status.mockResolvedValue(binding); connect.mockResolvedValue(binding);
   importFiles.mockResolvedValue({ files: [file], failures: [] }); createNote.mockResolvedValue(file);
   importDroppedFiles.mockResolvedValue({ files: [file], failures: [] });
   preview.mockResolvedValue({ kind: 'text', text: '招生说明正文' });
   planner.mockResolvedValue({ ok: true, value: { mode: 'ai', plan: { terms: ['招生'], startDate: '2026-09-28', endDate: '2026-09-28' } } });
-  Object.defineProperty(window, 'xiaozhaoDesktop', { configurable: true, value: { workdisk: { list, connect, importFiles, importDroppedFiles, createNote, preview, openFile: vi.fn() } } });
+  Object.defineProperty(window, 'xiaozhaoDesktop', { configurable: true, value: { workdisk: { status, list, connect, importFiles, importDroppedFiles, createNote, preview, openFile: vi.fn() } } });
 });
 afterEach(() => { cleanup(); Reflect.deleteProperty(window, 'xiaozhaoDesktop'); vi.resetAllMocks(); });
 
 describe('workdisk page', () => {
+  it('keeps the remembered folder and recovery controls visible when the initial scan is unavailable', async () => {
+    list.mockRejectedValue(new Error('工作盘暂时未连接'));
+    Object.assign(window.xiaozhaoDesktop!.workdisk!, {
+      autoStatus: vi.fn().mockResolvedValue({ source: { rootPath: '/tmp/downloads', displayName: '下载' }, enabled: true, nameFromContent: true, phase: 'waiting', pendingCount: 0, receipts: [] }),
+      chooseAutoSource: vi.fn(), setAutoEnabled: vi.fn(), setAutoNaming: vi.fn()
+    });
+    mount();
+    expect(await screen.findByText(binding.rootPath)).toBeVisible();
+    expect(screen.getByRole('button', { name: '重新连接' })).toBeVisible();
+    expect(screen.getByText('暂时未连接')).toBeVisible();
+    expect(screen.getByRole('region', { name: '自动收纳' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: '连接本地文件夹' })).not.toBeInTheDocument();
+    expect(document.querySelector('.workdisk-online')).toBeNull();
+    list.mockResolvedValue(snapshot());
+    await userEvent.click(screen.getByRole('button', { name: '重试读取' }));
+    expect(await screen.findByRole('button', { name: /预览 招生.txt/u })).toBeVisible();
+    expect(screen.queryByText('暂时未连接')).not.toBeInTheDocument();
+  });
+  it('removes an old import success notice and naming result when the disk becomes unavailable', async () => {
+    importFiles.mockResolvedValue({ files: [file], failures: [], naming: [{ originalName: '001.txt', savedName: file.name, status: 'renamed', reason: '根据正文命名' }] });
+    mount(); await userEvent.click(await screen.findByRole('button', { name: '收文件' }));
+    expect(await screen.findByText(/已收好 1 个文件/u)).toBeVisible();
+    expect(screen.getByRole('region', { name: '本次收纳命名结果' })).toBeVisible();
+    list.mockRejectedValue(new Error('工作盘暂时未连接')); fireEvent.focus(window);
+    await screen.findByText('工作盘暂时未连接');
+    expect(screen.queryByText(/已收好 1 个文件/u)).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '本次收纳命名结果' })).not.toBeInTheDocument();
+  });
   it('connects an ordinary folder and shows existing local files with separate knowledge entry', async () => {
     list.mockResolvedValueOnce({ ...snapshot([]), binding: null }); mount();
     await userEvent.click(await screen.findByRole('button', { name: '连接本地文件夹' }));

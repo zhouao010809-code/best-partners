@@ -102,6 +102,64 @@ async function received(page: Page, name: string) {
 }
 
 for (const mode of ['development', 'packaged'] as const) {
+  test(`${mode}: recovers automatic collection after the same disk returns, including an offline restart`, async () => {
+    test.setTimeout(90_000);
+    const data = await fixture(); const disconnected = `${data.workdisk}-disconnected`; let instance: ElectronApplication | undefined;
+    try {
+      instance = await launch(data, mode); await provider(instance); let page = await instance.firstWindow();
+      await page.getByRole('link', { name: '工作盘', exact: true }).click();
+      await page.getByRole('button', { name: '连接本地文件夹', exact: true }).click();
+      let auto = page.getByRole('region', { name: '自动收纳', exact: true });
+      await auto.getByRole('checkbox', { name: '自动根据内容命名', exact: true }).uncheck();
+      await auto.getByRole('button', { name: '开启自动收纳', exact: true }).click();
+      await expect.poll(() => state(page)).toMatchObject({ enabled: true, phase: 'watching', nameFromContent: false });
+
+      // Move only this isolated fixture, preserving its directory identity for reconnect verification.
+      await rename(data.workdisk, disconnected);
+      await expect.poll(() => state(page)).toMatchObject({ enabled: true, phase: 'waiting' });
+      const source = join(data.downloads, '1029/断开期间下载.txt'); const bytes = Buffer.from('硬盘重新连接后应自动补收一次，下载原件仍保留。');
+      await writeFile(source, bytes);
+      await page.getByRole('link', { name: '设置', exact: true }).click();
+      await page.getByRole('link', { name: '工作盘', exact: true }).click();
+      await expect(page.getByText(data.workdisk, { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '重新连接', exact: true })).toBeVisible();
+      await expect(page.getByRole('region', { name: '自动收纳', exact: true })).toContainText('等待工作盘连接');
+      await expect(page.getByRole('button', { name: '连接本地文件夹', exact: true })).toHaveCount(0);
+      await expect(page.locator('.workdisk-online')).toHaveCount(0);
+      await instance.close(); instance = undefined;
+
+      instance = await launch(data, mode); await provider(instance); page = await instance.firstWindow();
+      await page.getByRole('link', { name: '工作盘', exact: true }).click();
+      auto = page.getByRole('region', { name: '自动收纳', exact: true });
+      await expect(auto).toContainText('等待工作盘连接');
+      await expect.poll(() => state(page)).toMatchObject({ enabled: true, phase: 'waiting', receipts: [] });
+      await page.waitForTimeout(quietWindow);
+      expect((await captured(instance)).inputs).toEqual([]);
+
+      await rename(disconnected, data.workdisk);
+      const saved = await received(page, '断开期间下载.txt');
+      await expect(page.getByRole('button', { name: '预览 断开期间下载.txt', exact: true })).toBeVisible();
+      await expect(auto).not.toContainText('等待工作盘连接');
+      await expect(page.getByRole('button', { name: '更换', exact: true })).toBeVisible();
+      expect((await readFile(join(data.workdisk, saved.path))).equals(bytes)).toBe(true);
+      expect((await readFile(source)).equals(bytes)).toBe(true);
+      await page.waitForTimeout(quietWindow);
+      expect(await names(page)).toEqual(['断开期间下载.txt']);
+      expect((await state(page)).receipts).toHaveLength(1);
+      const beforeReconnect = await state(page);
+      const bindingId = (await listed(page)).binding!.id;
+      await page.getByRole('button', { name: '更换', exact: true }).click();
+      await expect.poll(() => state(page)).toMatchObject({ enabled: true, phase: 'watching', receipts: beforeReconnect.receipts });
+      expect((await listed(page)).binding?.id).toBe(bindingId);
+      await page.waitForTimeout(quietWindow);
+      expect(await names(page)).toEqual(['断开期间下载.txt']);
+      expect((await state(page)).receipts).toEqual(beforeReconnect.receipts);
+      expect((await captured(instance)).inputs).toEqual([]); expect((await captured(instance)).denied).toEqual([]);
+    } finally {
+      await instance?.close();
+      for (const path of [data.vault, data.userData, data.workdisk, disconnected, data.downloads]) await rm(path, { recursive: true, force: true });
+    }
+  });
   test(`${mode}: collects top-level and nested downloads in the background, names pixels and text, edits copies, pauses and resumes after restart`, async ({}, info) => {
     test.setTimeout(180_000);
     const data = await fixture(); let instance: ElectronApplication | undefined;

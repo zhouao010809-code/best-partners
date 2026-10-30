@@ -16,16 +16,22 @@ export function WorkdiskAutoCollection({ disk, disabled = false, onChanged }: { 
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState<{ id: string; title: string; receipt: WorkdiskAutoReceipt }>();
   const alive = useRef(true), action = useRef(false), generation = useRef(0), fingerprint = useRef('');
+  const previousPhase = useRef<WorkdiskAutoState['phase'] | undefined>(undefined);
   const changed = useRef(onChanged); changed.current = onChanged;
   const accept = useCallback((next: WorkdiskAutoState) => {
     if (!alive.current) return;
+    const recovered = previousPhase.current === 'waiting' && (next.phase === 'watching' || next.phase === 'processing');
+    const disconnected = previousPhase.current !== undefined && previousPhase.current !== 'waiting' && next.phase === 'waiting';
+    previousPhase.current = next.phase;
     setState(next);
     if (next.source) setNaming(next.nameFromContent);
     const signature = JSON.stringify(next.receipts.filter(receipt => receipt.status === 'saved').map(receipt => [receipt.id, receipt.path]));
+    let refresh = recovered || disconnected;
     if (signature !== fingerprint.current) {
       const hadFiles = fingerprint.current && fingerprint.current !== '[]'; fingerprint.current = signature;
-      if (hadFiles || signature !== '[]') changed.current();
+      if (hadFiles || signature !== '[]') refresh = true;
     }
+    if (refresh) changed.current();
   }, []);
   useEffect(() => {
     alive.current = true; let live = true, reading = false;
@@ -49,11 +55,11 @@ export function WorkdiskAutoCollection({ disk, disabled = false, onChanged }: { 
   if (!disk.autoStatus || !disk.chooseAutoSource || !disk.setAutoEnabled || !disk.setAutoNaming) return null;
   const blocked = busy || disabled;
   const savingNaming = Boolean(state?.source && naming !== state.nameFromContent);
-  const phase = state?.phase === 'processing' ? '正在收纳' : state?.phase === 'error' ? '需要处理' : state?.enabled ? '正在接收' : state?.source ? '已暂停' : '尚未开启';
+  const phase = state?.phase === 'waiting' ? '等待工作盘连接' : state?.phase === 'processing' ? '正在收纳' : state?.phase === 'error' ? '需要处理' : state?.enabled ? '正在接收' : state?.source ? '已暂停' : '尚未开启';
   const visibleReceipts = state?.receipts.slice(0, expanded ? undefined : 5) ?? [];
   if (editing && !visibleReceipts.some(receipt => receipt.id === editing.id)) visibleReceipts.push(editing.receipt);
   return <section className="workdisk-auto" aria-label="自动收纳">
-    <header><div><Download size={22} /><span><h3>下载以后，自动收好</h3><p>照常保存文件，工作盘在后台接收、命名和分类。</p></span></div><span className={`workdisk-auto-state${state?.enabled ? ' is-on' : ''}`} role="status">{state ? phase : '正在读取设置…'}{state?.pendingCount ? ` · ${state.pendingCount} 份待收纳` : ''}</span></header>
+    <header><div><Download size={22} /><span><h3>下载以后，自动收好</h3><p>照常保存文件，工作盘在后台接收、命名和分类。</p></span></div><span className={`workdisk-auto-state${state?.enabled && state.phase !== 'waiting' ? ' is-on' : ''}`} role="status">{state ? phase : '正在读取设置…'}{state?.pendingCount ? ` · ${state.pendingCount} 份待收纳` : ''}</span></header>
     {state?.source && <div className="workdisk-auto-source"><FolderOpen size={15} /><strong>{state.source.displayName}</strong><span title={state.source.rootPath}>{state.source.rootPath}</span></div>}
     <div className="workdisk-auto-controls">
       <label><input type="checkbox" checked={naming} disabled={blocked || !state} aria-describedby="workdisk-auto-disclosure" onChange={event => {

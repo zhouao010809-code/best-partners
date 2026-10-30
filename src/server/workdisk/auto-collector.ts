@@ -10,6 +10,8 @@ import { assertRoot, contained, safeRelative, sameIdentity, type FileIdentity } 
 const RECORD_LIMIT = 10_000;
 const DEPTH_LIMIT = 16;
 const STATE_LIMIT = 8 * 1024 * 1024;
+const WAITING_MESSAGE = '工作盘暂时未连接，接回原硬盘后会继续收纳。';
+class TargetUnavailable extends Error {}
 const partialName = /(?:\.(?:crdownload|part|partial|download|tmp|temp|opdownload|filepart)|~)$/iu;
 const packageName = /\.(?:app|bundle|framework|plugin|kext|appex|prefpane|pkg|playground|photolibrary|photoslibrary|rtfd|pages|numbers|key)$/iu;
 const relativeNameSchema = z.string().min(1).max(2048).refine(value => { try { safeRelative(value); return true; } catch { return false; } });
@@ -25,7 +27,8 @@ const receiptSchema = z.object({
 }).strict();
 const storedSchema = z.object({
   version: z.literal(1), scanScope: z.literal('recursive-v1').optional(), source: sourceSchema, target: z.object({ id: z.string(), rootPath: z.string().max(4096) }).strict(),
-  enabled: z.boolean(), nameFromContent: z.boolean(), records: z.array(recordSchema).max(RECORD_LIMIT), receipts: z.array(receiptSchema).max(50), message: z.string().max(1000).optional()
+  enabled: z.boolean(), nameFromContent: z.boolean(), waitingForTarget: z.literal(true).optional(),
+  records: z.array(recordSchema).max(RECORD_LIMIT), receipts: z.array(receiptSchema).max(50), message: z.string().max(1000).optional()
 }).strict();
 type Stored = z.infer<typeof storedSchema>;
 type RecordEntry = Stored['records'][number];
@@ -124,7 +127,7 @@ export function createWorkdiskAutoCollector(config: {
         entry.status = 'uncertain'; recovered = true;
         receipt({ id: entry.id, sourceName: entry.name, status: 'uncertain', reason: '上次收纳中断，可能已经保存；请核对源文件与工作盘后手动处理，不会自动重试。', receivedAt: new Date(now()).toISOString() });
       }
-      message = stored.message; phase = stored.enabled ? 'watching' : 'paused';
+      message = stored.message; phase = stored.enabled ? stored.waitingForTarget ? 'waiting' : 'watching' : 'paused';
       if (recovered) { message = '有上次中断的收纳记录，请核对源文件与工作盘。'; stored.message = message; await persist(stored); }
       if (!stored.scanScope) {
         try { const next = await upgradeScope(stored); await persist(next); stored = next; }
@@ -141,7 +144,13 @@ export function createWorkdiskAutoCollector(config: {
     catch { throw new Error('接收文件夹已断开或位置发生变化，请重新选择。'); }
   }
   async function verifyTarget(value: Stored): Promise<void> {
-    const target = await config.service.validateBinding();
+    let target: Awaited<ReturnType<typeof config.service.validateBinding>>;
+    try { target = await config.service.validateBinding(); }
+    catch (error) {
+      // Only failure to validate the intended target is retryable. Source/settings failures stay fatal.
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'WORKDISK_UNAVAILABLE') throw new TargetUnavailable(WAITING_MESSAGE);
+      throw error;
+    }
     if (!target || target.id !== value.target.id || target.rootPath !== value.target.rootPath) throw new Error('工作盘已改变，自动收纳已暂停；请重新确认接收文件夹。');
     await verifySeparation(value.source.rootPath, target.rootPath);
   }
@@ -204,7 +213,21 @@ export function createWorkdiskAutoCollector(config: {
   }
   async function pauseError(error: unknown): Promise<void> {
     phase = 'error'; message = userError(error, '自动收纳暂时无法继续，已暂停；请检查接收目录和磁盘后重新开启。');
-    if (stored) { stored.enabled = false; stored.message = message; try { await persist(stored); } catch { /* Keep the known ledger and stop all work. */ } }
+    if (stored) { stored.enabled = false; delete stored.waitingForTarget; stored.message = message; try { await persist(stored); } catch { /* Keep the known ledger and stop all work. */ } }
+  }
+  async function pollFailure(error: unknown): Promise<void> {
+    if (!(error instanceof TargetUnavailable) || !stored?.enabled) { await pauseError(error); return; }
+    phase = 'waiting'; message = WAITING_MESSAGE;
+    if (stored.waitingForTarget && stored.message === WAITING_MESSAGE) return;
+    const next: Stored = { ...stored, waitingForTarget: true, message: WAITING_MESSAGE };
+    try { await persist(next); stored = next; }
+    catch (failure) { await pauseError(failure); }
+  }
+  async function recoverTarget(): Promise<void> {
+    if (!stored?.waitingForTarget) return;
+    const next = { ...stored }; delete next.waitingForTarget;
+    if (next.message === WAITING_MESSAGE) delete next.message;
+    await persist(next); stored = next; message = next.message; phase = next.enabled ? 'watching' : 'paused';
   }
   async function runPoll(currentGeneration: number): Promise<void> {
     await ensureLoaded(); if (closed || !stored?.enabled || currentGeneration !== generation) return;
@@ -212,7 +235,8 @@ export function createWorkdiskAutoCollector(config: {
     const running = () => !closed && !controller.signal.aborted && currentGeneration === generation;
     try {
       if (!stored.scanScope) { const next = await upgradeScope(stored); await persist(next); stored = next; }
-      await verifySource(stored.source); await verifyTarget(stored); const files = await scan(stored.source); if (!running()) return;
+      await verifySource(stored.source); await verifyTarget(stored); if (!running()) return;
+      await recoverTarget(); const files = await scan(stored.source); if (!running()) return;
       const byKey = new Map(stored.records.map(entry => [entry.key, entry])); const present = new Set(files.map(file => file.key));
       let dirty = false;
       // Only disappeared, unprocessed candidates can be forgotten; dedupe history is never evicted.
@@ -239,7 +263,11 @@ export function createWorkdiskAutoCollector(config: {
         await verifyParents(stored.source, file.parents); const latest = await lstat(sourcePath).catch(() => undefined);
         if (!latest?.isFile() || latest.isSymbolicLink() || key(latest) !== entry.key || fingerprint(latest) !== entry.fingerprint) continue;
         entry.status = 'processing'; await persist(stored);
-        await verifySource(stored.source); await verifyTarget(stored);
+        try { await verifySource(stored.source); await verifyTarget(stored); }
+        catch (error) {
+          // The durable intent is reversible until importFiles starts; a disconnection must not strand it.
+          entry.status = 'pending'; await persist(stored); throw error;
+        }
         if (!running()) { entry.status = 'pending'; await persist(stored); break; }
         phase = 'processing';
         try {
@@ -256,7 +284,7 @@ export function createWorkdiskAutoCollector(config: {
         await persist(stored);
       }
       phase = stored.enabled ? 'watching' : 'paused';
-    } catch (error) { await pauseError(error); }
+    } catch (error) { await pollFailure(error); }
     finally { if (active === controller) active = undefined; }
   }
   function poll(): Promise<void> {
@@ -269,7 +297,7 @@ export function createWorkdiskAutoCollector(config: {
   return {
     async start(): Promise<void> {
       if (closed || started) return; started = true;
-      await queue(async () => { await ensureLoaded(); if (stored?.enabled) { try { await verifySource(stored.source); await verifyTarget(stored); } catch (error) { await pauseError(error); } } });
+      await queue(async () => { await ensureLoaded(); if (stored?.enabled) { try { await verifySource(stored.source); await verifyTarget(stored); await recoverTarget(); } catch (error) { await pollFailure(error); } } });
       if (!closed) { timer = setInterval(() => { void poll().catch(() => undefined); }, Math.max(100, config.pollMs ?? 3000)); timer.unref(); }
     },
     async status(): Promise<WorkdiskAutoState> { await ensureLoaded(); return snapshot(); },
@@ -294,7 +322,7 @@ export function createWorkdiskAutoCollector(config: {
         await ensureLoaded(); if (typeof enabled !== 'boolean') throw new Error('自动收纳开关无效。');
         if (!stored && !enabled) return snapshot(); const value = requireStored();
         if (enabled) { await verifySource(value.source); await verifyTarget(value); }
-        const next = { ...value, enabled }; delete next.message;
+        const next = { ...value, enabled }; delete next.message; delete next.waitingForTarget;
         // A failed resume must stay paused; a requested pause still stops work if saving fails.
         if (!enabled) { value.enabled = false; phase = 'paused'; }
         await persist(next); stored = next; message = undefined; phase = enabled ? 'watching' : 'paused'; return snapshot();

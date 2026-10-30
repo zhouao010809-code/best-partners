@@ -41,6 +41,32 @@ it('pauses and resumes the same source without opening a new picker', async () =
   await userEvent.click(await screen.findByRole('button', { name: '继续自动收纳' }));
   expect(setAutoEnabled.mock.calls.map(args => args[0])).toEqual([false, true]); expect(chooseAutoSource).not.toHaveBeenCalled();
 });
+it('shows a waiting disk as waiting rather than receiving and allows a manual pause', async () => {
+  autoStatus.mockResolvedValue({ ...running, phase: 'waiting', message: '工作盘暂时未连接，接回原硬盘后会继续收纳。' });
+  setAutoEnabled.mockResolvedValue({ ...running, enabled: false, phase: 'paused' });
+  mount();
+  expect(await screen.findByRole('status')).toHaveTextContent('等待工作盘连接');
+  await userEvent.click(screen.getByRole('button', { name: '暂停自动收纳' }));
+  expect(setAutoEnabled).toHaveBeenCalledWith(false);
+  expect(screen.getByRole('status')).toHaveTextContent('已暂停');
+});
+it('refreshes files when a waiting disk recovers even before a new receipt appears', async () => {
+  vi.useFakeTimers(); autoStatus.mockResolvedValue({ ...running, phase: 'waiting' }); mount(); await act(async () => {});
+  expect(onChanged).not.toHaveBeenCalled();
+  autoStatus.mockResolvedValue(running);
+  await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+  expect(onChanged).toHaveBeenCalledOnce();
+  await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+  expect(onChanged).toHaveBeenCalledOnce();
+});
+it('refreshes the disk connection display once when active collection starts waiting', async () => {
+  vi.useFakeTimers(); autoStatus.mockResolvedValue(running); mount(); await act(async () => {});
+  autoStatus.mockResolvedValue({ ...running, phase: 'waiting' });
+  await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+  expect(onChanged).toHaveBeenCalledOnce();
+  await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+  expect(onChanged).toHaveBeenCalledOnce();
+});
 it('changes the persisted automatic naming preference separately from manual imports', async () => {
   autoStatus.mockResolvedValue(running); setAutoNaming.mockResolvedValue({ ...running, nameFromContent: false }); mount();
   await userEvent.click(await screen.findByRole('checkbox', { name: '自动根据内容命名' }));

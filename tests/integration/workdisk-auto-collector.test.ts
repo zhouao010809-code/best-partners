@@ -16,12 +16,68 @@ async function setup(namer?: WorkdiskContentNamer) {
   const service = createWorkdiskService({ stateDirectory, protectedRoots: [vault], ...(namer ? { contentNamer: namer } : {}) });
   await service.bind(root); cleanups.push(() => service.close());
   const importFiles = vi.fn(service.importFiles);
+  const validateBinding = vi.fn(service.validateBinding);
   let time = new Date(2026, 9, 30, 12).getTime();
-  const config = { stateDirectory, protectedRoots: [vault], service: { ...service, importFiles }, pollMs: 60_000, settleMs: 3000, now: () => time };
+  const config = { stateDirectory, protectedRoots: [vault], service: { ...service, importFiles, validateBinding }, pollMs: 60_000, settleMs: 3000, now: () => time };
   const make = async () => { const value = createWorkdiskAutoCollector(config); await value.start(); cleanups.push(() => value.close()); return value; };
   const collector = await make();
-  return { base, source, root, vault, stateDirectory, service, importFiles, collector, make, tick: async (target = collector) => { time += 3001; await target.poll(); } };
+  return { base, source, root, vault, stateDirectory, service, importFiles, validateBinding, collector, make, tick: async (target = collector) => { time += 3001; await target.poll(); } };
 }
+
+const targetUnavailable = () => Object.assign(new Error('private device diagnostic'), { code: 'WORKDISK_UNAVAILABLE' });
+it('waits for a temporarily unavailable target then resumes its existing ledger without baselining offline arrivals', async () => {
+  const f = await setup(); await writeFile(join(f.source, '旧文件.txt'), 'old'); await f.collector.configure(f.source, { nameFromContent: false });
+  await writeFile(join(f.source, '已收好.txt'), 'saved'); await f.collector.poll(); await f.tick();
+  await writeFile(join(f.source, '待收.txt'), 'pending'); await f.collector.poll();
+  const path = join(f.stateDirectory, 'workdisk-auto.json');
+  const before = JSON.parse(await readFile(path, 'utf8'));
+  f.validateBinding.mockRejectedValue(targetUnavailable()); await f.tick();
+  expect(await f.collector.status()).toMatchObject({ enabled: true, phase: 'waiting', pendingCount: 1, message: '工作盘暂时未连接，接回原硬盘后会继续收纳。' });
+  const waiting = JSON.parse(await readFile(path, 'utf8')); expect(waiting.records).toEqual(before.records); expect(waiting.enabled).toBe(true);
+  const stamp = await lstat(path); await f.collector.poll(); const repeated = await lstat(path);
+  expect([repeated.ino, repeated.mtimeMs, repeated.ctimeMs]).toEqual([stamp.ino, stamp.mtimeMs, stamp.ctimeMs]);
+  await writeFile(join(f.source, '离线时新增.txt'), 'new'); expect(f.importFiles).toHaveBeenCalledTimes(1);
+  f.validateBinding.mockImplementation(f.service.validateBinding); await f.collector.poll(); await f.tick();
+  const resumed = await f.collector.status(); expect(resumed).toMatchObject({ enabled: true, phase: 'watching', pendingCount: 0 }); expect(resumed.message).toBeUndefined();
+  expect(resumed.receipts.map(item => item.sourceName).sort()).toEqual(['已收好.txt', '待收.txt', '离线时新增.txt'].sort());
+  expect(f.importFiles).toHaveBeenCalledTimes(3); expect(JSON.parse(await readFile(path, 'utf8')).message).toBeUndefined();
+  await f.collector.poll(); expect(f.importFiles).toHaveBeenCalledTimes(3);
+});
+it('retains waiting across restart and honors a manual pause when the original target returns', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false });
+  f.validateBinding.mockRejectedValue(targetUnavailable()); await f.collector.poll(); await f.collector.close();
+  await writeFile(join(f.source, '重启时新增.txt'), 'new');
+  const resumed = await f.make(); expect(await resumed.status()).toMatchObject({ enabled: true, phase: 'waiting' });
+  await resumed.setEnabled(false); expect(await resumed.status()).toMatchObject({ enabled: false, phase: 'paused' });
+  f.validateBinding.mockImplementation(f.service.validateBinding); await resumed.poll(); await f.tick(resumed); expect(f.importFiles).not.toHaveBeenCalled();
+  await resumed.close(); const paused = await f.make(); expect(await paused.status()).toMatchObject({ enabled: false, phase: 'paused' });
+  await paused.setEnabled(true); await paused.poll(); await f.tick(paused); expect(f.importFiles).toHaveBeenCalledTimes(1);
+});
+it('recovers at startup after a waiting target returns without replaying completed receipts', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false });
+  await writeFile(join(f.source, '已收好.txt'), 'saved'); await f.collector.poll(); await f.tick();
+  f.validateBinding.mockRejectedValue(targetUnavailable()); await f.collector.poll(); await f.collector.close();
+  await writeFile(join(f.source, '等待时新增.txt'), 'new'); f.validateBinding.mockImplementation(f.service.validateBinding);
+  const resumed = await f.make(); expect(await resumed.status()).toMatchObject({ enabled: true, phase: 'watching' }); expect((await resumed.status()).message).toBeUndefined();
+  await resumed.poll(); await f.tick(resumed); expect(f.importFiles).toHaveBeenCalledTimes(2);
+});
+it('returns a pre-copy processing intent to pending if the target disconnects before import begins', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false }); await writeFile(join(f.source, '待收.txt'), 'pending'); await f.collector.poll();
+  const valid = await f.service.validateBinding();
+  f.validateBinding.mockResolvedValueOnce(valid).mockResolvedValueOnce(valid).mockRejectedValueOnce(targetUnavailable());
+  await f.tick(); expect(f.importFiles).not.toHaveBeenCalled();
+  expect(await f.collector.status()).toMatchObject({ phase: 'waiting', pendingCount: 1 });
+  const data = JSON.parse(await readFile(join(f.stateDirectory, 'workdisk-auto.json'), 'utf8')); expect(data.records[0].status).toBe('pending');
+  await f.tick(); expect(f.importFiles).toHaveBeenCalledTimes(1);
+});
+it('pauses for a changed target or a source failure instead of treating either as a remount', async () => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false });
+  f.validateBinding.mockRejectedValue(targetUnavailable()); await f.collector.poll();
+  const other = join(f.base, '其他工作盘'); await mkdir(other); await f.service.bind(other); f.validateBinding.mockImplementation(f.service.validateBinding);
+  await f.collector.poll(); expect(await f.collector.status()).toMatchObject({ enabled: false, phase: 'error', message: expect.stringContaining('工作盘已改变') });
+  await f.collector.configure(f.source, { nameFromContent: false }); await rename(f.source, `${f.source}-moved`);
+  await f.collector.poll(); expect(await f.collector.status()).toMatchObject({ enabled: false, phase: 'error', message: expect.stringContaining('接收文件夹') });
+});
 
 it('baselines existing files recursively and copies stable new files while preserving originals', async () => {
   const f = await setup(); await writeFile(join(f.source, '旧资料.txt'), '旧资料');
@@ -182,12 +238,17 @@ it('does not rewrite the durable ledger during unchanged polling', async () => {
   await f.collector.poll(); await f.tick(); const after = await lstat(path);
   expect({ ino: after.ino, mtime: after.mtimeMs, ctime: after.ctimeMs }).toEqual({ ino: before.ino, mtime: before.mtimeMs, ctime: before.ctimeMs });
 });
-it('pauses before importing when the destination folder is replaced at the same path', async () => {
+it('waits without importing into a replacement at the target path, then resumes only after the original root returns', async () => {
   const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false });
   await writeFile(join(f.source, 'A.txt'), 'A'); await writeFile(join(f.source, 'B.txt'), 'B'); await f.collector.poll();
   await rename(f.root, `${f.root}-old`); await mkdir(f.root); await f.tick();
-  expect(f.importFiles).not.toHaveBeenCalled(); expect((await f.collector.status()).enabled).toBe(false);
+  expect(f.importFiles).not.toHaveBeenCalled(); expect(await f.collector.status()).toMatchObject({ enabled: true, phase: 'waiting' });
   expect((await f.collector.status()).receipts).toEqual([]); expect((await f.collector.status()).pendingCount).toBe(2);
+  expect(await readdir(f.root)).toEqual([]);
+  await rm(f.root, { recursive: true }); await rename(`${f.root}-old`, f.root);
+  await f.tick(); expect(f.importFiles).toHaveBeenCalledTimes(2);
+  expect(await f.collector.status()).toMatchObject({ enabled: true, phase: 'watching', pendingCount: 0 });
+  expect((await f.collector.status()).message).toBeUndefined();
 });
 it('persists processing before copying and retains the renamed result after restart', async () => {
   const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false });

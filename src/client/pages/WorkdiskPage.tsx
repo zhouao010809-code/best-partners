@@ -28,6 +28,7 @@ export function WorkdiskPage() {
   const [snapshot, setSnapshot] = useState<WorkdiskSnapshot>();
   const [results, setResults] = useState<WorkdiskSnapshot>();
   const [loading, setLoading] = useState(Boolean(disk));
+  const [unavailable, setUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [importing, setImporting] = useState(false);
   const [nameFromContent, setNameFromContent] = useState(() => {
@@ -61,12 +62,19 @@ export function WorkdiskPage() {
     try {
       const data = await disk.list();
       if (!alive.current || sequence !== generation.current) return;
-      setSnapshot(data); setError('');
+      setSnapshot(data); setError(''); setUnavailable(false);
       if (activeSearch.current) {
         const found = await disk.list(activeSearch.current);
         if (alive.current && sequence === generation.current) setResults(found);
       }
-    } catch (cause) { if (alive.current && sequence === generation.current) setError(errorText(cause)); }
+    } catch (cause) {
+      if (!alive.current || sequence !== generation.current) return;
+      setError(errorText(cause)); setUnavailable(true); setNotice(''); setNaming([]);
+      // Remembered configuration remains useful even while the disk cannot be read.
+      const remembered = await disk.status().catch(() => null);
+      if (alive.current && sequence === generation.current && remembered) setSnapshot(current => current?.binding ? current
+        : { binding: remembered, files: [], scannedAt: new Date().toISOString(), truncated: false, skippedCount: 0 });
+    }
     finally { if (alive.current && sequence === generation.current) setLoading(false); }
   }, [disk]);
   useEffect(() => {
@@ -159,7 +167,7 @@ export function WorkdiskPage() {
     </nav>
     <section className="workdisk-hero">
       <div><p className="workdisk-eyebrow">YOUR EVERYDAY WORKSPACE</p><h2>把今天的工作，收好。</h2><p>视频、录音、文案，各有位置。需要的时候，再找回来。</p>
-        {binding && <div className="workdisk-location" title={binding.rootPath}><span className="workdisk-online" /><FolderOpen size={14} /><strong>{binding.displayName}</strong><span>{binding.rootPath}</span><button disabled={busy || searching} onClick={() => void connect()}>更换</button></div>}
+        {binding && <div className="workdisk-location" title={binding.rootPath}>{!unavailable && <span className="workdisk-online" />}<FolderOpen size={14} /><strong>{binding.displayName}</strong><span>{binding.rootPath}</span>{unavailable && <small>暂时未连接</small>}<button disabled={busy || searching} onClick={() => void connect()}>{unavailable ? '重新连接' : '更换'}</button></div>}
       </div>
       <div className="workdisk-date-art" aria-hidden="true"><span>{saveDate.slice(0, 4)} / {saveDate.slice(5, 7)}</span><strong>{saveDate.slice(8)}</strong><small>让工作留下足迹</small></div>
     </section>

@@ -2,7 +2,11 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
-export interface FileIdentity { dev: number; ino: number }
+export interface FileIdentity { dev: number; ino: number; birthtimeMs?: number | undefined }
+export class WorkdiskUnavailableError extends Error {
+  readonly code = 'WORKDISK_UNAVAILABLE';
+  constructor() { super('工作盘已断开或位置发生变化，请重新连接原文件夹。'); this.name = 'WorkdiskUnavailableError'; }
+}
 export function problem(message: string): Error { return new Error(message); }
 export function sameIdentity(a: FileIdentity, b: FileIdentity): boolean { return a.dev === b.dev && a.ino === b.ino; }
 export function contained(root: string, path: string): boolean {
@@ -18,8 +22,8 @@ export function safeRelative(path: string): string[] {
 export async function assertRoot(root: string, identity: FileIdentity): Promise<void> {
   try {
     const info = await lstat(root);
-    if (!info.isDirectory() || info.isSymbolicLink() || !sameIdentity(info, identity) || await realpath(root) !== root) throw problem('changed');
-  } catch { throw problem('工作盘已断开或位置发生变化，请重新连接原文件夹。'); }
+    if (!info.isDirectory() || info.isSymbolicLink() || !sameIdentity(info, identity) || (identity.birthtimeMs !== undefined && info.birthtimeMs !== identity.birthtimeMs) || await realpath(root) !== root) throw problem('changed');
+  } catch { throw new WorkdiskUnavailableError(); }
 }
 export async function directory(root: string, parts: string[], identity: FileIdentity, create = false): Promise<string> {
   await assertRoot(root, identity);

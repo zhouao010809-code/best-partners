@@ -4,9 +4,10 @@ import { link, lstat, mkdir, open, readdir, realpath, rename, unlink } from 'nod
 import { basename, extname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import type { WorkdiskBinding, WorkdiskFile, WorkdiskImportOptions, WorkdiskImportResult, WorkdiskKind, WorkdiskListRequest, WorkdiskPreview, WorkdiskSnapshot } from '../../shared/workdisk.js';
-import { assertRoot, contained, directory, problem, readBounded, regularFile, safeRelative, sameIdentity, type FileIdentity } from './paths.js';
+import { assertRoot, contained, directory, problem, readBounded, regularFile, safeRelative, sameIdentity, WorkdiskUnavailableError, type FileIdentity } from './paths.js';
 import { copyExclusive } from './publication.js';
 import type { WorkdiskContentNamer } from './content-namer.js';
+import { normalizeVolumeUuid, resolveVolumeIdentity, type VolumeIdentityResolver } from './volume-identity.js';
 
 export interface WorkdiskFileIdentity extends FileIdentity { birthtimeMs: number }
 export interface WorkdiskSavedFile extends WorkdiskFile { identity?: WorkdiskFileIdentity }
@@ -31,7 +32,7 @@ function validDate(value: string): boolean {
 const dateSchema = z.string().refine(validDate);
 const planSchema = z.object({ terms: z.array(z.string().trim().min(1).max(100)).max(12), startDate: dateSchema.optional(), endDate: dateSchema.optional(), kind: kinds.optional() }).strict();
 const requestSchema = z.object({ query: z.string().max(1000).optional(), plan: planSchema.optional(), date: dateSchema.optional(), kind: kinds.optional() }).strict();
-const storedSchema = z.object({ id: z.uuid(), rootPath: z.string().min(1), displayName: z.string(), connectedAt: z.string(), dev: z.number(), ino: z.number() }).strict();
+const storedSchema = z.object({ id: z.uuid(), rootPath: z.string().min(1), displayName: z.string(), connectedAt: z.string(), dev: z.number(), ino: z.number(), birthtimeMs: z.number().finite().optional(), volumeUuid: z.string().refine(value => normalizeVolumeUuid(value) !== undefined).optional() }).strict();
 type StoredBinding = z.infer<typeof storedSchema>;
 const noteSchema = z.object({ title: z.string().trim().min(1).max(120), body: z.string().max(250_000), date: dateSchema }).strict();
 const importOptionsSchema = z.object({ nameFromContent: z.boolean().optional() }).strict();
@@ -54,7 +55,7 @@ function savedFileRecord(path: string, info: Stats): WorkdiskSavedFile {
   return { ...fileRecord(path, info), identity: { dev: info.dev, ino: info.ino, birthtimeMs: info.birthtimeMs } };
 }
 function sameSavedFile(expected: WorkdiskFileIdentity, actual: Stats): boolean { return sameIdentity(expected, actual) && expected.birthtimeMs === actual.birthtimeMs; }
-function publicBinding(binding: StoredBinding): WorkdiskBinding { const { dev: _dev, ino: _ino, ...result } = binding; return result; }
+function publicBinding(binding: StoredBinding): WorkdiskBinding { const { dev: _dev, ino: _ino, birthtimeMs: _birthtime, volumeUuid: _volume, ...result } = binding; return result; }
 function normalize(value: string): string { return value.normalize('NFKC').toLocaleLowerCase(); }
 function snippet(text: string, terms: string[]): string {
   const normalized = normalize(text); const positions = terms.map(term => normalized.indexOf(term)).filter(index => index >= 0);
@@ -93,7 +94,8 @@ async function nameContent(namer: WorkdiskContentNamer, input: Parameters<Workdi
   } finally { signal.removeEventListener('abort', abort); }
 }
 
-export function createWorkdiskService(config: { stateDirectory: string; protectedRoots: string[]; contentNamer?: WorkdiskContentNamer }) {
+export function createWorkdiskService(config: { stateDirectory: string; protectedRoots: string[]; contentNamer?: WorkdiskContentNamer; volumeIdentityResolver?: VolumeIdentityResolver }) {
+  const volumeIdentity = config.volumeIdentityResolver ?? resolveVolumeIdentity;
   let loaded = false; let binding: StoredBinding | null = null; let stateRoot: string | undefined;
   let loading: Promise<StoredBinding | null> | undefined;
   let closing = false;
@@ -128,9 +130,26 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
     }
     loaded = true; return binding;
   }
-  async function active(): Promise<StoredBinding> {
+  async function rootInfo(current: StoredBinding): Promise<Stats> {
+    try {
+      const info = await lstat(current.rootPath);
+      if (!info.isDirectory() || info.isSymbolicLink() || info.ino !== current.ino || (current.birthtimeMs !== undefined && info.birthtimeMs !== current.birthtimeMs) || await realpath(current.rootPath) !== current.rootPath) throw new WorkdiskUnavailableError();
+      return info;
+    } catch { throw new WorkdiskUnavailableError(); }
+  }
+  async function active(inExclusive = false): Promise<StoredBinding> {
     const current = await load(); if (!current) throw problem('请先连接一个工作盘文件夹。');
-    await assertRoot(current.rootPath, current); return current;
+    const before = await rootInfo(current);
+    if (before.dev === current.dev && current.birthtimeMs !== undefined) { await assertRoot(current.rootPath, current); return current; }
+    if (!inExclusive) return exclusive(() => active(true));
+    // Never learn a new volume identity from an untrusted remount of a legacy binding.
+    if (before.dev !== current.dev && (!current.volumeUuid || current.birthtimeMs === undefined)) throw new WorkdiskUnavailableError();
+    const volumeUuid = normalizeVolumeUuid(await volumeIdentity(current.rootPath).catch(() => undefined));
+    const after = await rootInfo(current);
+    if (!sameIdentity(before, after) || before.birthtimeMs !== after.birthtimeMs) throw new WorkdiskUnavailableError();
+    if (before.dev !== current.dev && (!volumeUuid || volumeUuid !== normalizeVolumeUuid(current.volumeUuid))) throw new WorkdiskUnavailableError();
+    const next: StoredBinding = { ...current, dev: after.dev, birthtimeMs: after.birthtimeMs, ...(volumeUuid ? { volumeUuid } : {}) };
+    await assertRoot(current.rootPath, after); await persist(next); await assertRoot(next.rootPath, next); return next;
   }
   async function persist(value: StoredBinding): Promise<void> {
     const root = await state(); const temporary = join(root, `.workdisk-${randomUUID()}.tmp`);
@@ -181,7 +200,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
     bind(selectedPath: string): Promise<WorkdiskBinding> { return exclusive(async () => {
       // A pending status read must finish before replacing the remembered root.
       // An explicit folder choice also repairs a damaged connection record.
-      await load().catch(() => null);
+      const previous = await load().catch(() => null);
       if (typeof selectedPath !== 'string' || !isAbsolute(selectedPath)) throw problem('请选择一个本地文件夹。');
       const before = await lstat(selectedPath); if (before.isSymbolicLink() || !before.isDirectory()) throw problem('请选择普通文件夹，不能使用快捷链接。');
       const rootPath = await realpath(selectedPath); const info = await lstat(rootPath);
@@ -190,11 +209,13 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
         const protectedRoot = await realpath(path);
         if (contained(rootPath, protectedRoot) || contained(protectedRoot, rootPath)) throw problem('工作盘需要使用独立文件夹，不能与知识库或应用设置目录重叠。');
       }
-      const current: StoredBinding = { id: randomUUID(), rootPath, displayName: basename(rootPath), connectedAt: new Date().toISOString(), dev: info.dev, ino: info.ino };
+      const volumeUuid = normalizeVolumeUuid(await volumeIdentity(rootPath).catch(() => undefined));
+      await assertRoot(rootPath, info);
+      const current: StoredBinding = { id: previous?.rootPath === rootPath ? previous.id : randomUUID(), rootPath, displayName: basename(rootPath), connectedAt: new Date().toISOString(), dev: info.dev, ino: info.ino, birthtimeMs: info.birthtimeMs, ...(volumeUuid ? { volumeUuid } : {}) };
       await persist(current); return publicBinding(current);
     }); },
     async list(input: WorkdiskListRequest = {}): Promise<WorkdiskSnapshot> {
-      const request = parse(requestSchema, input); const current = await load();
+      const request = parse(requestSchema, input); const current = await load() ? await active() : null;
       const snapshot: WorkdiskSnapshot = { binding: current ? publicBinding(current) : null, files: [], scannedAt: new Date().toISOString(), truncated: false, skippedCount: 0 };
       if (!current) return snapshot;
       await assertRoot(current.rootPath, current);
@@ -242,7 +263,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
       return snapshot;
     },
     importFiles(paths: string[], date: string, options: WorkdiskImportOptions = {}, signal?: AbortSignal, guard?: (source: string) => Promise<void>): Promise<WorkdiskServiceImportResult> { return exclusive(async () => {
-      parse(dateSchema, date); parse(z.array(z.string().min(1).max(4096)).min(1).max(100), paths); const requested = parse(importOptionsSchema, options); const current = await active();
+      parse(dateSchema, date); parse(z.array(z.string().min(1).max(4096)).min(1).max(100), paths); const requested = parse(importOptionsSchema, options); const current = await active(true);
       const namingSignal = signal ? AbortSignal.any([namingShutdown.signal, signal]) : namingShutdown.signal;
       const cancellationReason = () => closing ? NAMING_SHUTDOWN_REASON : '本次内容命名已停止，已按原名保存。';
       const result: WorkdiskServiceImportResult = { files: [], failures: [], ...(requested.nameFromContent ? { naming: [] } : {}) };
@@ -306,7 +327,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
     }); },
     renameFile(path: string, title: string, expectedIdentity?: WorkdiskFileIdentity): Promise<WorkdiskSavedFile> { return exclusive(async () => {
       const stem = namingTitle(title); if (!stem) throw problem('名称不能包含路径、扩展名或特殊字符，最多 60 个字。');
-      const current = await active(); const source = await regularFile(current.rootPath, path, current); const before = await lstat(source);
+      const current = await active(true); const source = await regularFile(current.rootPath, path, current); const before = await lstat(source);
       if (expectedIdentity && !sameSavedFile(expectedIdentity, before)) throw problem('这份文件已被替换，不能通过旧收纳记录改名；请在工作盘查看。');
       const parts = safeRelative(path); const oldName = parts.pop()!; const name = safeName(`${stem}${extname(oldName)}`);
       if (name === oldName) return savedFileRecord(path, before);
@@ -341,7 +362,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
       }
     }); },
     createNote(input: { title: string; body: string; date: string }): Promise<WorkdiskFile> { return exclusive(async () => {
-      const request = parse(noteSchema, input); safeName(request.title); const current = await active();
+      const request = parse(noteSchema, input); safeName(request.title); const current = await active(true);
       const name = request.title.endsWith('.md') ? request.title : `${request.title}.md`;
       return publish(current, name, request.date, async handle => { await handle.writeFile(request.body, 'utf8'); });
     }); },
