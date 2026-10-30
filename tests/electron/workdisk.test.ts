@@ -32,6 +32,61 @@ async function launch(data: Awaited<ReturnType<typeof fixture>>, mode: 'developm
 }
 
 for (const mode of ['development', 'packaged'] as const) {
+  test(`${mode}: a long workdisk preview keeps its close button reachable halfway down and at the bottom`, async ({}, info) => {
+    const data = await fixture();
+    const filename = '长文预览样本.txt';
+    let instance: ElectronApplication | undefined;
+    try {
+      const lines = Array.from({ length: 180 }, (_, index) => `第 ${index + 1} 段：记录这次访谈的具体经过和原话。`);
+      await writeFile(join(data.workdisk, '2026-09-28/文档', filename), lines.join('\n\n'));
+      instance = await launch(data, mode);
+      const page = await instance.firstWindow();
+      await page.getByRole('link', { name: '工作盘', exact: true }).click();
+      await page.getByRole('button', { name: '连接本地文件夹', exact: true }).click();
+      const open = page.getByRole('button', { name: `预览 ${filename}`, exact: true });
+      const dialog = page.getByRole('dialog', { name: filename, exact: true });
+      for (const fraction of [0.5, 1]) {
+        await open.click();
+        await expect(dialog).toContainText('第 180 段');
+        const position = await dialog.evaluate((node, fraction) => {
+          const scroller = [node, ...node.querySelectorAll<HTMLElement>('*')].find(element =>
+            /^(auto|scroll)$/u.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1);
+          if (!scroller) throw new Error('Long preview has no scrollable reading area');
+          const end = scroller.scrollHeight - scroller.clientHeight;
+          scroller.scrollTop = Math.floor(end * fraction);
+          return { end, top: scroller.scrollTop, height: scroller.clientHeight };
+        }, fraction);
+        expect(position.end).toBeGreaterThan(3 * position.height);
+        expect(Math.abs(position.top - Math.floor(position.end * fraction))).toBeLessThanOrEqual(1);
+
+        const closeButton = dialog.getByRole('button', { name: '关闭预览', exact: true });
+        const target = await closeButton.evaluate(button => {
+          const box = button.getBoundingClientRect();
+          const bounds = button.closest('dialog')!.getBoundingClientRect();
+          const x = box.left + box.width / 2;
+          const y = box.top + box.height / 2;
+          return { x, y, top: box.top, visibleTop: Math.max(bounds.top, 0),
+            fullyInside: box.left >= Math.max(bounds.left, 0) && box.right <= Math.min(bounds.right, innerWidth)
+              && box.bottom <= Math.min(bounds.bottom, innerHeight),
+            hit: button.contains(document.elementFromPoint(x, y)) };
+        });
+        expect(target.top, 'Close button scrolled above the visible dialog').toBeGreaterThanOrEqual(target.visibleTop);
+        expect(target.fullyInside).toBe(true);
+        expect(target.hit, 'A mouse click at the visible button center should reach the button').toBe(true);
+        await expect(closeButton).toContainText('关闭');
+        if (fraction === 0.5) await page.keyboard.press('Escape');
+        else {
+          await page.screenshot({ path: info.outputPath('long-preview-close.png') });
+          // Locator.click() would scroll an offscreen button back into view.
+          await page.mouse.click(target.x, target.y);
+        }
+        await expect(dialog).toHaveCount(0);
+      }
+    } finally {
+      await instance?.close();
+      for (const path of [data.vault, data.userData, data.workdisk, data.source]) await rm(path, { recursive: true, force: true });
+    }
+  });
   test(`${mode}: workdisk connects, collects, previews, searches and persists without altering knowledge`, async ({}, info) => {
     test.setTimeout(120_000); const data = await fixture(); let instance: ElectronApplication | undefined;
     try {

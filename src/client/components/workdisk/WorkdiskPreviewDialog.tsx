@@ -18,7 +18,10 @@ export function WorkdiskPreviewDialog({ file, disk, onClose }: { file: WorkdiskF
     return () => { live = false; };
   }, [disk, file.path]);
   return <dialog className="workdisk-preview" ref={dialog} aria-labelledby="workdisk-preview-title" onCancel={onClose}>
-    <header><div><h3 id="workdisk-preview-title">{file.name}</h3><p>{file.path}</p></div><button aria-label="关闭预览" onClick={onClose}><X size={19} /></button></header>
+    <header>
+      <div><h3 id="workdisk-preview-title">{file.name}</h3><p title={file.path}>{file.path}</p></div>
+      <button type="button" aria-label="关闭预览" title="关闭预览（Esc）" onClick={onClose}><X size={16} aria-hidden="true" />关闭</button>
+    </header>
     {error ? <p role="alert">{error}</p> : !preview ? <p role="status">正在打开文件…</p>
       : preview.kind === 'text' ? <div className="workdisk-text-preview"><pre>{preview.text}</pre>{preview.truncated && <p>这里只显示文件的前一部分，完整内容可用系统应用打开。</p>}</div>
         : preview.kind === 'image' && preview.url ? <img className="workdisk-image-preview" src={preview.url} alt={file.name} />

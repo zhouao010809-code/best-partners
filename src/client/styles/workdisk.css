@@ -147,10 +147,11 @@
 .workdisk-preview { padding: 0; width: min(820px, 88vw); max-height: 85vh; border: 1px solid #455c4e; border-radius: 14px; color: #d3e2d8; background: #111a15; box-shadow: 0 30px 100px #0009; }
 .workdisk-preview::backdrop { background: #020a06bd; backdrop-filter: blur(7px); }
 .workdisk-preview header, .workdisk-preview footer { display: flex; justify-content: space-between; align-items: center; gap: 15px; padding: 18px 23px; }
-.workdisk-preview header { border-bottom: 1px solid #ffffff12; }
+.workdisk-preview header { position: sticky; top: 0; z-index: 1; background: #111a15; border-bottom: 1px solid #ffffff12; }
 .workdisk-preview header > div { min-width: 0; }
+.workdisk-preview header > button { flex: none; white-space: nowrap; }
 .workdisk-preview h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
-.workdisk-preview header p { font-size: 10px; color: #89a191; overflow-wrap: anywhere; margin: 7px 0 0; }
+.workdisk-preview header p { font-size: 10px; color: #89a191; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 7px 0 0; }
 .workdisk-preview footer { border-top: 1px solid #ffffff12; font-size: 11px; color: #89a191; }
 .workdisk-preview > p { padding: 20px; font-size: 13px; }
 .workdisk-text-preview { padding: 25px; }
