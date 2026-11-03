@@ -8,6 +8,7 @@ import { assertRoot, contained, directory, problem, readBounded, regularFile, sa
 import { copyExclusive } from './publication.js';
 import type { WorkdiskContentNamer } from './content-namer.js';
 import { normalizeVolumeUuid, resolveVolumeIdentity, type VolumeIdentityResolver } from './volume-identity.js';
+import { cancellableSearch, createSearchContentCache, createWorkdiskSearchContentReader, SEARCH_CONTENT_INPUT_LIMIT, supportsSearchContent, type WorkdiskSearchContentReader } from './content-search.js';
 
 export interface WorkdiskFileIdentity extends FileIdentity { birthtimeMs: number }
 export interface WorkdiskSavedFile extends WorkdiskFile { identity?: WorkdiskFileIdentity }
@@ -94,12 +95,15 @@ async function nameContent(namer: WorkdiskContentNamer, input: Parameters<Workdi
   } finally { signal.removeEventListener('abort', abort); }
 }
 
-export function createWorkdiskService(config: { stateDirectory: string; protectedRoots: string[]; contentNamer?: WorkdiskContentNamer; volumeIdentityResolver?: VolumeIdentityResolver }) {
+export function createWorkdiskService(config: { stateDirectory: string; protectedRoots: string[]; contentNamer?: WorkdiskContentNamer; contentReader?: WorkdiskSearchContentReader; volumeIdentityResolver?: VolumeIdentityResolver }) {
   const volumeIdentity = config.volumeIdentityResolver ?? resolveVolumeIdentity;
   let loaded = false; let binding: StoredBinding | null = null; let stateRoot: string | undefined;
   let loading: Promise<StoredBinding | null> | undefined;
   let closing = false;
   const namingShutdown = new AbortController();
+  const contentReader = config.contentReader ?? createWorkdiskSearchContentReader();
+  const contentCache = createSearchContentCache();
+  let extractionTail: Promise<unknown> = Promise.resolve();
   let tail: Promise<unknown> = Promise.resolve();
   function exclusive<T>(action: () => Promise<T>): Promise<T> {
     if (closing) return Promise.reject(problem('应用正在关闭，请重新打开后再保存。'));
@@ -194,7 +198,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
     }
   }
   return {
-    async close(): Promise<void> { closing = true; namingShutdown.abort(); await tail; },
+    async close(): Promise<void> { closing = true; namingShutdown.abort(); contentCache.clear(); await tail; await extractionTail; },
     async status(): Promise<WorkdiskBinding | null> { const current = await load(); return current ? publicBinding(current) : null; },
     async validateBinding(): Promise<WorkdiskBinding> { return publicBinding(await active()); },
     bind(selectedPath: string): Promise<WorkdiskBinding> { return exclusive(async () => {
@@ -212,7 +216,7 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
       const volumeUuid = normalizeVolumeUuid(await volumeIdentity(rootPath).catch(() => undefined));
       await assertRoot(rootPath, info);
       const current: StoredBinding = { id: previous?.rootPath === rootPath ? previous.id : randomUUID(), rootPath, displayName: basename(rootPath), connectedAt: new Date().toISOString(), dev: info.dev, ino: info.ino, birthtimeMs: info.birthtimeMs, ...(volumeUuid ? { volumeUuid } : {}) };
-      await persist(current); return publicBinding(current);
+      await persist(current); contentCache.clear(); return publicBinding(current);
     }); },
     async list(input: WorkdiskListRequest = {}): Promise<WorkdiskSnapshot> {
       const request = parse(requestSchema, input); const current = await load() ? await active() : null;
@@ -221,6 +225,8 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
       await assertRoot(current.rootPath, current);
       if (request.plan?.startDate && request.plan.endDate && request.plan.startDate > request.plan.endDate) throw problem('开始日期不能晚于结束日期。');
       const terms = (request.plan ? request.plan.terms : (request.query?.trim().split(/\s+/u).filter(Boolean) ?? [])).map(normalize);
+      // Cached text remains searchable after this deadline. Only new decoding is stopped.
+      const contentSignal = AbortSignal.any([namingShutdown.signal, AbortSignal.timeout(10_000)]);
       let entries = 0; let readBytes = 0;
       const pending: string[][] = [[]];
       while (pending.length && !snapshot.truncated) {
@@ -250,6 +256,31 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
                 const text = new TextDecoder('utf-8', { fatal: false }).decode(content.bytes);
                 if (terms.some(term => normalize(text).includes(term))) { file.matchedBy = 'content'; file.excerpt = snippet(text, terms); }
                 if (content.truncated) snapshot.skippedCount++;
+              } else if (supportsSearchContent(path)) {
+                const key = JSON.stringify([current.id, current.rootPath, current.dev, path, info.dev, info.ino, info.birthtimeMs, info.size, info.mtimeMs, info.ctimeMs]);
+                let content = contentCache.get(key);
+                if (!content) {
+                  if (contentSignal.aborted || info.size > SEARCH_CONTENT_INPUT_LIMIT || readBytes + info.size > TEXT_SCAN_LIMIT) { snapshot.skippedCount++; continue; }
+                  readBytes += info.size;
+                  const operation = extractionTail.then(async () => {
+                    contentSignal.throwIfAborted();
+                    const cached = contentCache.get(key); if (cached) return cached;
+                    const source = await readBounded(current.rootPath, path, current, SEARCH_CONTENT_INPUT_LIMIT);
+                    if (source.truncated) throw problem('文件超出内容查找范围。');
+                    const fileSignal = AbortSignal.any([contentSignal, AbortSignal.timeout(3_000)]);
+                    let result;
+                    try { result = await cancellableSearch(contentReader({ name: file.name, bytes: source.bytes }, fileSignal), fileSignal); }
+                    catch (error) { contentSignal.throwIfAborted(); result = { text: '', partial: true }; }
+                    contentSignal.throwIfAborted();
+                    const after = await lstat(await regularFile(current.rootPath, path, current));
+                    if (!sameIdentity(info, after) || info.birthtimeMs !== after.birthtimeMs || info.size !== after.size || info.mtimeMs !== after.mtimeMs || info.ctimeMs !== after.ctimeMs) throw problem('读取期间文件发生变化，请重试。');
+                    return contentCache.set(key, result);
+                  });
+                  extractionTail = operation.catch(() => undefined);
+                  content = await cancellableSearch(operation, contentSignal);
+                }
+                if (terms.some(term => normalize(content.text).includes(term))) { file.matchedBy = 'content'; file.excerpt = snippet(content.text, terms); }
+                if (content.partial) snapshot.skippedCount++;
               }
               if (!file.matchedBy) continue;
             }

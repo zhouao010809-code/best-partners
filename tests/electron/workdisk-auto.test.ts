@@ -204,6 +204,8 @@ for (const mode of ['development', 'packaged'] as const) {
       expect((await readFile(imageSource)).equals(imageBytes)).toBe(true);
       await page.getByRole('link', { name: '工作盘', exact: true }).click();
       auto = page.getByRole('region', { name: '自动收纳', exact: true });
+      await expect(auto.getByRole('checkbox', { name: '自动根据内容命名', exact: true })).toHaveCount(0);
+      await auto.getByRole('button', { name: '查看全部 2 条记录', exact: true }).click();
       await expect(auto).toContainText(textRelative); await expect(auto).toContainText(imageRelative);
       await expect.poll(async () => (await state(page)).receipts.map(receipt => receipt.sourceName).sort()).toEqual([textRelative, imageRelative].sort());
       await expect(auto).toContainText(`${imageTitle}.png`);
@@ -236,6 +238,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await page.waitForTimeout(quietWindow);
       expect(await names(page)).toEqual([`${renamedTitle}.txt`, `${imageTitle}.png`].sort());
       expect((await captured(instance)).inputs).toHaveLength(2);
+      await auto.getByRole('button', { name: '自动收纳设置', exact: true }).click();
       await auto.getByRole('checkbox', { name: '自动根据内容命名', exact: true }).uncheck();
       await expect.poll(async () => (await state(page)).nameFromContent).toBe(false);
       await auto.getByRole('button', { name: '继续自动收纳', exact: true }).click();
@@ -245,6 +248,10 @@ for (const mode of ['development', 'packaged'] as const) {
       expect((await readFile(join(data.downloads, '003.txt'))).equals(pausedBytes)).toBe(true);
       expect((await captured(instance)).inputs).toHaveLength(2);
       await expect(auto).toContainText('003.txt');
+      await auto.getByRole('button', { name: '自动收纳设置', exact: true }).click();
+      await auto.getByRole('button', { name: '收起记录', exact: true }).click();
+      await expect(auto.getByRole('checkbox', { name: '自动根据内容命名', exact: true })).toHaveCount(0);
+      await expect(auto.getByRole('button', { name: '打开 003.txt', exact: true })).toBeVisible();
       await auto.scrollIntoViewIfNeeded();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); window.scrollTo(0, 0); });

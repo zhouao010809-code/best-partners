@@ -1,5 +1,8 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createTextPdf } from '../helpers/pdf-fixture.js';
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js';
@@ -32,6 +35,65 @@ async function launch(data: Awaited<ReturnType<typeof fixture>>, mode: 'developm
 }
 
 for (const mode of ['development', 'packaged'] as const) {
+  test(`${mode}: finds randomly named PDFs and images by their actual local text`, async ({}, info) => {
+    const data = await fixture(); let instance: ElectronApplication | undefined;
+    try {
+      const execute = promisify(execFile);
+      const fixtureHelper = join(data.source, 'image-fixture');
+      await execute('xcrun', ['swiftc', resolve('tests/native/fixtures/image-evidence-fixture.swift'), '-o', fixtureHelper]);
+      const image = (await execute(fixtureHelper, ['text', 'public.png'], { encoding: 'buffer', maxBuffer: 20 * 1024 * 1024 })).stdout;
+      await writeFile(join(data.workdisk, '73901.png'), image);
+      await writeFile(join(data.workdisk, '48271.pdf'), createTextPdf(['Audience research and conversion tracking']));
+      instance = await launch(data, mode); const page = await instance.firstWindow();
+      await page.getByRole('link', { name: '工作盘', exact: true }).click();
+      await page.getByRole('button', { name: '连接本地文件夹', exact: true }).click();
+      for (const [query, name] of [['conversion', '48271.pdf'], ['短视频', '73901.png']]) {
+        await page.getByRole('searchbox', { name: '描述要找的文件' }).fill(query!);
+        await page.getByRole('button', { name: '找文件', exact: true }).click();
+        const result = page.getByRole('button', { name: `预览 ${name}`, exact: true });
+        await expect(result).toContainText('正文匹配', { timeout: 20000 });
+        await expect(result).toContainText(query!);
+        await expect(page.getByRole('button', { name: '退出搜索', exact: true })).toBeVisible();
+      }
+      await page.screenshot({ path: info.outputPath('local-image-content-search.png') });
+    } finally {
+      await instance?.close();
+      for (const path of [data.vault, data.userData, data.workdisk, data.source]) await rm(path, { recursive: true, force: true });
+    }
+  });
+
+  test(`${mode}: workdisk shows actual image pixels and a video frame in file cards`, async ({}, info) => {
+    const data = await fixture(); let instance: ElectronApplication | undefined;
+    try {
+      await cp(resolve('tests/fixtures/workdisk-red.png'), join(data.workdisk, 'red.png'));
+      await cp(resolve('tests/fixtures/workdisk-green.mp4'), join(data.workdisk, 'green.mp4'));
+      instance = await launch(data, mode);
+      const page = await instance.firstWindow();
+      await page.getByRole('link', { name: '工作盘', exact: true }).click();
+      await page.getByRole('button', { name: '连接本地文件夹', exact: true }).click();
+      for (const [name, channel] of [['red.png', 0], ['green.mp4', 1]] as const) {
+        const card = page.getByRole('button', { name: `预览 ${name}`, exact: true });
+        await card.scrollIntoViewIfNeeded();
+        const thumbnail = card.locator('.workdisk-card-art img');
+        await expect(thumbnail).toBeVisible({ timeout: 15000 });
+        await expect.poll(() => thumbnail.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+        const pixel = await thumbnail.evaluate(element => {
+          const image = element as HTMLImageElement;
+          const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+          const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0, 1, 1);
+          return [...context.getImageData(0, 0, 1, 1).data];
+        });
+        expect(pixel[channel]).toBeGreaterThan(150);
+        expect(pixel[channel]! - pixel[(channel + 1) % 3]!).toBeGreaterThan(80);
+      }
+      await page.screenshot({ path: info.outputPath('workdisk-real-thumbnails.png') });
+      // A stale renderer cannot ask the newly connected disk for an old binding's file.
+      await expect(page.evaluate(() => window.xiaozhaoDesktop!.workdisk!.thumbnail!('red.png', 'previous-disk'))).resolves.toBeNull();
+    } finally {
+      await instance?.close();
+      for (const path of [data.vault, data.userData, data.workdisk, data.source]) await rm(path, { recursive: true, force: true });
+    }
+  });
   test(`${mode}: a long workdisk preview keeps its close button reachable halfway down and at the bottom`, async ({}, info) => {
     const data = await fixture();
     const filename = '长文预览样本.txt';

@@ -23,7 +23,8 @@ it('explains first-run scope and AI disclosure before choosing a source and enab
   expect(screen.getByText(/文字和图片识别结果会发送给已连接的 AI/u)).toBeVisible();
   await userEvent.click(screen.getByRole('button', { name: '开启自动收纳' }));
   expect(chooseAutoSource).toHaveBeenCalledWith({ nameFromContent: true });
-  expect(await screen.findByText('/tmp/downloads')).toBeVisible();
+  await userEvent.click(await screen.findByRole('button', { name: '自动收纳设置' }));
+  expect(screen.getByText('/tmp/downloads')).toBeVisible();
   expect(screen.getByRole('button', { name: '暂停自动收纳' })).toBeVisible();
 });
 it('permits original-name collection and retains the selection when the directory picker is cancelled', async () => {
@@ -69,7 +70,8 @@ it('refreshes the disk connection display once when active collection starts wai
 });
 it('changes the persisted automatic naming preference separately from manual imports', async () => {
   autoStatus.mockResolvedValue(running); setAutoNaming.mockResolvedValue({ ...running, nameFromContent: false }); mount();
-  await userEvent.click(await screen.findByRole('checkbox', { name: '自动根据内容命名' }));
+  await userEvent.click(await screen.findByRole('button', { name: '自动收纳设置' }));
+  await userEvent.click(screen.getByRole('checkbox', { name: '自动根据内容命名' }));
   expect(setAutoNaming).toHaveBeenCalledWith(false);
   expect(screen.getByRole('checkbox', { name: '自动根据内容命名' })).not.toBeChecked();
 });
@@ -78,7 +80,8 @@ it('updates the naming checkbox immediately while saving and restores it when sa
   autoStatus.mockResolvedValue(running);
   setAutoNaming.mockImplementation(() => new Promise<WorkdiskAutoState>((_resolve, fail) => { reject = fail; }));
   mount();
-  const checkbox = await screen.findByRole('checkbox', { name: '自动根据内容命名' });
+  await userEvent.click(await screen.findByRole('button', { name: '自动收纳设置' }));
+  const checkbox = screen.getByRole('checkbox', { name: '自动根据内容命名' });
   await userEvent.click(checkbox);
   expect(setAutoNaming).toHaveBeenCalledWith(false);
   expect(checkbox).not.toBeChecked();
@@ -103,7 +106,8 @@ it('shows saved names, real paths and uncertain recovery without claiming a fail
 it('allows correcting a saved name without editing the original download and keeps a failed edit', async () => {
   const state: WorkdiskAutoState = { ...running, receipts: [{ id: 'saved', sourceName: '001.txt', savedName: '访谈方法.txt', path: '2026-10-30/文档/访谈方法.txt', status: 'saved', reason: '根据正文命名', receivedAt: '2026-10-30T00:00:00Z' }] };
   autoStatus.mockResolvedValue(state); renameAutoReceipt.mockRejectedValueOnce(new Error('同名文件已存在')); mount();
-  await userEvent.click(await screen.findByRole('button', { name: '修改 访谈方法.txt 的名称' }));
+  await userEvent.click(await screen.findByRole('button', { name: '查看全部 1 条记录' }));
+  await userEvent.click(screen.getByRole('button', { name: '修改 访谈方法.txt 的名称' }));
   await userEvent.clear(screen.getByRole('textbox', { name: '新的文件名称' }));
   await userEvent.type(screen.getByRole('textbox', { name: '新的文件名称' }), '我的访谈提纲');
   await userEvent.click(screen.getByRole('button', { name: '保存名称' }));
@@ -137,4 +141,37 @@ it('allows reviewing all returned receipts and keeps a name draft visible when n
   autoStatus.mockResolvedValue({ ...running, receipts: [] });
   await waitFor(() => expect(autoStatus.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 4000 });
   expect(screen.getByRole('textbox')).toHaveValue('未提交的新名称');
+});
+
+it('keeps configured collection compact while the latest saved file remains directly accessible', async () => {
+  autoStatus.mockResolvedValue({ ...running, receipts: [{ id: 'saved', sourceName: '001.txt', savedName: '访谈方法.txt', path: '2026-11-03/文档/访谈方法.txt', status: 'saved', reason: '根据正文命名', receivedAt: '2026-11-03T00:00:00Z' }] });
+  mount();
+  expect(await screen.findByRole('status')).toHaveTextContent('正在接收');
+  expect(screen.queryByRole('checkbox', { name: '自动根据内容命名' })).not.toBeInTheDocument();
+  expect(screen.queryByText('001.txt')).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '打开 访谈方法.txt' }));
+  expect(openFile).toHaveBeenCalledWith('2026-11-03/文档/访谈方法.txt');
+  await userEvent.click(screen.getByRole('button', { name: '查看全部 1 条记录' }));
+  expect(screen.getByText('001.txt')).toBeVisible();
+});
+it('keeps older failures visible when records and settings are collapsed', async () => {
+  const saved = Array.from({ length: 6 }, (_, index) => ({ id: `saved-${index}`, sourceName: `${index}.txt`, savedName: `主题${index}.txt`, path: `2026-11-03/文档/主题${index}.txt`, status: 'saved' as const, reason: '', receivedAt: '2026-11-03T00:00:00Z' }));
+  autoStatus.mockResolvedValue({ ...running, receipts: [...saved, { id: 'failed', sourceName: '大文件.pdf', status: 'failed', reason: '保存失败，请打开接收文件夹后手动收纳。', receivedAt: '2026-11-02T00:00:00Z' }] });
+  mount();
+  expect(await screen.findByText(/保存失败，请打开接收文件夹后手动收纳/u)).toBeVisible();
+  await userEvent.click(screen.getByRole('button', { name: '查看 1 份待处理' }));
+  expect(screen.getByText('大文件.pdf')).toBeVisible();
+  await userEvent.click(screen.getByRole('button', { name: '打开接收文件夹' }));
+  expect(openAutoSource).toHaveBeenCalledOnce();
+});
+it('does not keep claiming collection is running after status reads fail', async () => {
+  vi.useFakeTimers(); autoStatus.mockResolvedValue(running); mount(); await act(async () => {});
+  autoStatus.mockRejectedValue(new Error('本地连接暂时中断'));
+  await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+  expect(screen.getByRole('status')).toHaveTextContent('状态暂时无法确认');
+  expect(screen.getByRole('status')).not.toHaveClass('is-on');
+  expect(screen.getByRole('alert')).toHaveTextContent('本地连接暂时中断');
+  autoStatus.mockResolvedValue(running);
+  await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+  expect(screen.getByRole('status')).toHaveTextContent('正在接收');
 });

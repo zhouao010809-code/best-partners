@@ -5,6 +5,7 @@ import { extname, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import type { WorkdiskService } from '../server/workdisk/service.js';
 import type { WorkdiskImportOptions, WorkdiskListRequest, WorkdiskPreview } from '../shared/workdisk.js';
+import { createWorkdiskThumbnails } from './workdisk-thumbnails.js';
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).refine(value => {
   const date = new Date(`${value}T12:00:00Z`);
@@ -39,21 +40,25 @@ export function createDesktopWorkdisk(input: {
   chooseDirectory(): Promise<string | undefined>;
   chooseFiles(): Promise<string[] | undefined>;
   openPath(path: string): Promise<string>;
+  renderThumbnail?(fd: number, kind: 'image' | 'video', signal: AbortSignal): Promise<string | null>;
 }) {
   let picking = false;
   const tickets = new Map<string, { bindingId: string; path: string }>();
+  const thumbnails = createWorkdiskThumbnails({ service: input.service, render: (fd, kind, signal) => input.renderThumbnail?.(fd, kind, signal) ?? Promise.resolve(null) });
   async function pick<T>(action: () => Promise<T>): Promise<T> {
     if (picking) throw new Error('请先完成已打开的文件选择窗口。');
     picking = true;
     try { return await action(); } finally { picking = false; }
   }
   return {
+    close: () => thumbnails.close(),
     status: () => safe(() => input.service.status(), '无法读取工作盘连接，请重试。'),
     connect: () => pick(async () => {
       const directory = await safe(input.chooseDirectory, '无法打开文件选择窗口。');
       if (!directory) return null;
       const binding = await safe(() => input.service.bind(directory), '无法连接这个文件夹。请选择独立于知识库、可读写的本地文件夹。');
       tickets.clear();
+      thumbnails.clear();
       return binding;
     }),
     list: async (request?: unknown) => {
@@ -89,6 +94,9 @@ export function createDesktopWorkdisk(input: {
     createNote: async (request: unknown) => {
       const parsed = parse(noteSchema, request);
       return safe(() => input.service.createNote(parsed), '文档未能保存，请检查工作盘后重试；编辑内容仍保留。');
+    },
+    async thumbnail(path: unknown, bindingId: unknown): Promise<string | null> {
+      return thumbnails.thumbnail(parse(relativePathSchema, path), parse(z.string().min(1).max(200), bindingId));
     },
     async preview(path: unknown): Promise<WorkdiskPreview> {
       const validPath = parse(relativePathSchema, path);

@@ -11,7 +11,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'build-provenance-')); roots.push(root);
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'xiaozhao-brain-console', version: '1.0.0', main: 'dist/electron/main.js', type: 'module', devDependencies: { electron: '44.1.0' } }));
   for (const path of ['src/server', 'dist/client', 'dist/server', 'dist/electron', 'dist/native', 'browser-extension', 'templates/default-vault']) await mkdir(join(root, path), { recursive: true });
-  for (const path of ['src/server/index.ts', ...rebuilt, 'dist/native/atomic-file-helper', 'dist/native/personal-archive.node', 'dist/native/image-evidence-helper', 'browser-extension/manifest.json', 'templates/default-vault/readme.md']) await writeFile(join(root, path), path);
+  for (const path of ['src/server/index.ts', ...rebuilt, 'dist/native/atomic-file-helper', 'dist/native/personal-archive.node', 'dist/native/image-evidence-helper', 'dist/native/workdisk-thumbnail-helper', 'browser-extension/manifest.json', 'templates/default-vault/readme.md']) await writeFile(join(root, path), path);
   return root;
 }
 async function regenerate(root: string, paths = rebuilt) {

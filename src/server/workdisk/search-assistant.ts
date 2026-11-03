@@ -14,6 +14,7 @@ const SYSTEM = `你只负责把用户的一句找文件描述转换成检索条�
 只输出 JSON 对象：{"terms":["主题关键词","紧密相关的同义词"],"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD","kind":"video"}。
 terms 必填，0 到 12 个字符串，每个最多 100 字，作为 OR 关键词用于文件名、路径和可读取正文的检索。只保留具有辨识度的主题、人物、项目词；可扩展紧密同义词，不加入宽泛的文件、视频、资料、帮我找等词。不知道主题时 terms 为 []。
 日期和 kind 可省略。kind 只能是 video、audio、image、document、other。发布文案属于 document。不要仅因“文件”推断类型。
+区分主题与载体：“短视频”“视频剪辑教程”“图片压缩方法”都是主题，不能据此限制文件类型；“短视频方法的图片”只限制为 image 并保留“短视频方法”主题。用户未明确载体或同时提到多种载体时省略 kind，原始主题词不得拆坏或丢弃。
 日期必须真实且完整，startDate 和 endDate 一起出现，顺序从早到晚。相对日期按 today 计算。上个月28号表示上一个自然月的28号，不是28天前。上个月表示整个上月。年份跨界和闰年必须正确。模糊的以前、之前、很久前不推断日期。query 没有时间限制时不输出日期。不存在的日期不输出日期。
 只理解用户明确的条件，不猜文件位置，不声称已经找到文件，不返回文件路径、文件正文、说明或其他字段。`;
 
@@ -72,21 +73,24 @@ export function localWorkdiskSearchPlan(request: WorkdiskSearchRequest): Workdis
     startDate = iso(now - (Number(recentDays[1]) - 1) * DAY); endDate = today;
     remaining = remaining.replace(recentDays[0], ' ');
   }
-  const kinds: NonNullable<WorkdiskSearchPlan['kind']>[] = [];
+  const kinds = new Set<NonNullable<WorkdiskSearchPlan['kind']>>();
   for (const [candidate, pattern] of KIND_RULES) {
     pattern.lastIndex = 0;
-    if (pattern.test(remaining)) {
-      // Multiple explicit types should not be narrowed arbitrarily to one.
-      kinds.push(candidate);
-      pattern.lastIndex = 0;
-      remaining = remaining.replace(pattern, ' ');
-    }
+    remaining = remaining.replace(pattern, (match: string, offset: number, source: string) => {
+      // A topic can contain a format word. Keep it intact unless the word is a
+      // standalone type or a trailing carrier noun, as in “招生视频”.
+      if (match === '视频' && source[offset - 1] === '短') return match;
+      const after = source.slice(offset + match.length);
+      if (!/^(?:$|\s|[，。！？、；：,.!?;:“”"'「」]|和|或|与|以及|文件(?:$|\s|[，。！？、；]))/u.test(after)) return match;
+      kinds.add(candidate); return ' ';
+    });
   }
-  const kind = kinds.length === 1 ? kinds[0] : undefined;
+  // Multiple explicit types should not be narrowed arbitrarily to one.
+  const kind = kinds.size === 1 ? kinds.values().next().value : undefined;
   remaining = remaining
     .replace(/请帮我|帮我|给我|我记得|我想(?:要)?|想要|查找|搜索|找一下|找找|找出|找到|找|看看|看一下/gu, ' ')
     .replace(/以前|之前|以前存的|之前存的|很久前|文件|资料|保存的|存的|做的|拍的|录的|写的|那份|那个|那篇|那条|一份|一下|有关|相关/gu, ' ')
-    .replace(/(?:^|\s)(?:从|到|至|所有|全部|一个|一篇|一条)(?=\s|$)/gu, ' ');
+    .replace(/(?:^|\s)(?:从|到|至|所有|全部|一个|一篇|一条|和|或|与|以及)(?=\s|$)/gu, ' ');
   const terms = [...new Set(remaining.split(/(?:关于|的|[\s，。！？、；：,.!?;:“”"'「」])+/u).map(value => value.trim()).filter(value => value && value !== '我' && value !== '请'))].map(value => value.slice(0, 100)).slice(0, 12);
   return { terms, ...(startDate && endDate ? { startDate, endDate } : {}), ...(kind ? { kind } : {}) };
 }
@@ -130,7 +134,11 @@ export function createWorkdiskSearchPlanner(input: { adapter?: AssistantAdapter;
       active.throwIfAborted();
       const content = text.trim().replace(/^```(?:json)?\s*\n([\s\S]*)\n```$/u, '$1');
       const plan = workdiskSearchPlanSchema.parse(JSON.parse(content));
-      return { mode: 'ai', plan: { ...plan, terms: [...new Set(plan.terms)] } };
+      // An inferred file type can exclude the only matching OCR/PDF document.
+      // Restrict only explicit locally recognized carriers; preserve the query's
+      // own topic alongside any model-provided synonyms.
+      const { kind: _inferredKind, ...understood } = plan;
+      return { mode: 'ai', plan: { ...understood, terms: [...new Set([...local.terms, ...plan.terms])].slice(0, 12), ...(local.kind ? { kind: local.kind } : {}) } };
     } catch {
       signal?.throwIfAborted();
       return fallback('AI 本次未能完成理解，已使用本地关键词、日期和类型查找。');

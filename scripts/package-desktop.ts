@@ -18,7 +18,7 @@ const paths = await packager({
   icon: resolve('assets/best-partners-icon.icns'),
   ignore: (path) => {
     if (path === '') return false;
-    if (path.startsWith('/dist/native/')) return !['/dist/native/atomic-file-helper', '/dist/native/personal-archive.node', '/dist/native/image-evidence-helper'].includes(path);
+    if (path.startsWith('/dist/native/')) return !['/dist/native/atomic-file-helper', '/dist/native/personal-archive.node', '/dist/native/image-evidence-helper', '/dist/native/workdisk-thumbnail-helper'].includes(path);
     return !/^\/(?:package\.json$|node_modules(?:\/|$)|dist(?:$|\/(?:client|server|electron|native)(?:\/|$)))/u.test(path);
   },
   afterPrune: [async ({ buildPath, electronVersion, arch }) => {

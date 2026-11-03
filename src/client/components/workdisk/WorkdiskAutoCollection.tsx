@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Download, FolderOpen, Pause, Pencil, Play, Sparkles } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Download, FolderOpen, Pause, Pencil, Play, Settings2, Sparkles } from 'lucide-react';
 import type { DesktopWorkdiskApi } from '../../../shared/desktop/bridge.js';
 import type { WorkdiskAutoReceipt, WorkdiskAutoState } from '../../../shared/workdisk-auto.js';
+import '../../styles/workdisk-auto.css';
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /u, '') : '自动收纳暂时未完成，请稍后重试。';
@@ -14,6 +15,7 @@ export function WorkdiskAutoCollection({ disk, disabled = false, onChanged }: { 
   const [error, setError] = useState('');
   const [readError, setReadError] = useState('');
   const [expanded, setExpanded] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<{ id: string; title: string; receipt: WorkdiskAutoReceipt }>();
   const alive = useRef(true), action = useRef(false), generation = useRef(0), fingerprint = useRef('');
   const previousPhase = useRef<WorkdiskAutoState['phase'] | undefined>(undefined);
@@ -48,40 +50,63 @@ export function WorkdiskAutoCollection({ disk, disabled = false, onChanged }: { 
   async function run(operation: () => Promise<WorkdiskAutoState | null | void>, after?: () => void) {
     if (action.current) return;
     action.current = true; generation.current++; setBusy(true); setError('');
-    try { const next = await operation(); if (alive.current) { if (next) accept(next); after?.(); } }
+    try { const next = await operation(); if (alive.current) { if (next) { accept(next); setReadError(''); } after?.(); } }
     catch (cause) { if (alive.current) setError(message(cause)); }
     finally { action.current = false; if (alive.current) setBusy(false); }
   }
   if (!disk.autoStatus || !disk.chooseAutoSource || !disk.setAutoEnabled || !disk.setAutoNaming) return null;
   const blocked = busy || disabled;
   const savingNaming = Boolean(state?.source && naming !== state.nameFromContent);
-  const phase = state?.phase === 'waiting' ? '等待工作盘连接' : state?.phase === 'processing' ? '正在收纳' : state?.phase === 'error' ? '需要处理' : state?.enabled ? '正在接收' : state?.source ? '已暂停' : '尚未开启';
-  const visibleReceipts = state?.receipts.slice(0, expanded ? undefined : 5) ?? [];
+  const phase = readError ? '状态暂时无法确认' : state?.phase === 'waiting' ? '等待工作盘连接' : state?.phase === 'processing' ? '正在收纳' : state?.phase === 'error' ? '需要处理' : state?.enabled ? '正在接收' : state?.source ? '已暂停' : '尚未开启';
+  const settingsVisible = !state?.source || settingsOpen;
+  const attention = state?.receipts.filter(receipt => receipt.status !== 'saved') ?? [];
+  const latest = state?.receipts.find(receipt => receipt.status === 'saved');
+  // Put unresolved results first when expanded, including failures older than the latest five files.
+  const visibleReceipts = expanded ? [...attention, ...(state?.receipts.filter(receipt => receipt.status === 'saved') ?? [])] : [];
   if (editing && !visibleReceipts.some(receipt => receipt.id === editing.id)) visibleReceipts.push(editing.receipt);
   return <section className="workdisk-auto" aria-label="自动收纳">
-    <header><div><Download size={22} /><span><h3>下载以后，自动收好</h3><p>照常保存文件，工作盘在后台接收、命名和分类。</p></span></div><span className={`workdisk-auto-state${state?.enabled && state.phase !== 'waiting' ? ' is-on' : ''}`} role="status">{state ? phase : '正在读取设置…'}{state?.pendingCount ? ` · ${state.pendingCount} 份待收纳` : ''}</span></header>
-    {state?.source && <div className="workdisk-auto-source"><FolderOpen size={15} /><strong>{state.source.displayName}</strong><span title={state.source.rootPath}>{state.source.rootPath}</span></div>}
-    <div className="workdisk-auto-controls">
-      <label><input type="checkbox" checked={naming} disabled={blocked || !state} aria-describedby="workdisk-auto-disclosure" onChange={event => {
-        if (action.current) return;
-        const value = event.target.checked, previous = naming;
-        setNaming(value);
-        if (state?.source) void run(async () => {
-          try { return await disk.setAutoNaming!(value); }
-          catch (cause) { if (alive.current) setNaming(previous); throw cause; }
-        });
-      }} /><span>自动根据内容命名</span><Sparkles size={14} /></label>
-      <div>{!state?.source ? <button className="workdisk-primary" disabled={blocked || !state} onClick={() => void run(() => disk.chooseAutoSource!({ nameFromContent: naming }))}><Play size={14} />开启自动收纳</button>
-        : <><button disabled={blocked} onClick={() => void run(() => disk.setAutoEnabled!(!state.enabled))}>{state.enabled ? <Pause size={14} /> : <Play size={14} />}{state.enabled ? '暂停自动收纳' : '继续自动收纳'}</button>
-          <button disabled={blocked} onClick={() => void run(() => disk.chooseAutoSource!({ nameFromContent: naming }))}>更换接收文件夹</button>
-          {disk.openAutoSource && <button disabled={busy} onClick={() => void run(() => disk.openAutoSource!())}>打开接收文件夹</button>}</>}
+    <header className="workdisk-auto-header">
+      <div className="workdisk-auto-heading"><Download size={17} /><h3>自动收纳</h3>
+        <span className={`workdisk-auto-state${!readError && (state?.phase === 'watching' || state?.phase === 'processing') ? ' is-on' : ''}`} role="status">{state || readError ? phase : '正在读取设置…'}{state?.pendingCount ? ` · ${state.pendingCount} 份待收纳` : ''}</span>
+        {state?.source && <span className="workdisk-auto-folder" title={state.source.rootPath}>{state.source.displayName}</span>}
       </div>
-    </div>
-    <p id="workdisk-auto-disclosure" className="workdisk-auto-detail">{savingNaming ? '正在保存命名设置；保存完成前仍按之前的设置处理。' : naming ? <>文字和图片识别结果会发送给已连接的 AI，长文使用节选，原图留在本机；无法识别时保留原名。<Link to="/settings">连接 AI</Link></> : '按原名收纳，不会为自动命名发送内容。'}</p>
-    <p className="workdisk-auto-detail">接收范围包含上面的文件夹及其普通子文件夹。仅接收启用后新增的文件，不处理以前的下载；原件保留。应用运行时后台接收，关闭或暂停期间的新文件会在下次启动或继续时补收。</p>
+      {state?.source && <div className="workdisk-auto-actions">
+        <button disabled={blocked} onClick={() => void run(() => disk.setAutoEnabled!(!state.enabled))}>{state.enabled ? <Pause size={13} /> : <Play size={13} />}{state.enabled ? '暂停自动收纳' : '继续自动收纳'}</button>
+        <button disabled={busy} aria-label="自动收纳设置" aria-expanded={settingsOpen} aria-controls="workdisk-auto-settings" onClick={() => setSettingsOpen(value => !value)}><Settings2 size={13} />设置</button>
+        {state.receipts.length > 0 && <button aria-expanded={expanded} aria-controls="workdisk-auto-receipts" onClick={() => setExpanded(value => !value)}><ChevronDown size={13} />{expanded ? '收起记录' : `查看全部 ${state.receipts.length} 条记录`}</button>}
+      </div>}
+    </header>
+    {!expanded && !editing && latest && <div className="workdisk-auto-latest"><Check size={13} /><span>最近收好</span><strong title={latest.savedName}>{latest.savedName}</strong>
+      {latest.path && <button disabled={busy} aria-label={`打开 ${latest.savedName}`} onClick={() => void run(() => disk.openFile(latest.path!))}>打开</button>}
+    </div>}
+    {attention.length > 0 && <div className="workdisk-auto-attention"><AlertCircle size={15} /><div><strong>{attention.length} 份文件需要处理</strong>{!expanded && <p>{attention[0]?.sourceName}：{attention[0]?.reason}</p>}</div>
+      {!expanded && <button onClick={() => setExpanded(true)}>查看 {attention.length} 份待处理</button>}
+      {!settingsVisible && disk.openAutoSource && <button disabled={busy} onClick={() => void run(() => disk.openAutoSource!())}>打开接收文件夹</button>}
+    </div>}
     {state?.message && <p className="workdisk-auto-message">{state.message}</p>}
     {(error || readError) && <p className="workdisk-error" role="alert">{error || readError}</p>}
-    {state && visibleReceipts.length > 0 && <div className="workdisk-auto-receipts"><h4>最近自动收纳 <span>保留最近 {state.receipts.length} 份结果</span>{(expanded || state.receipts.length > 5) && <button onClick={() => setExpanded(value => !value)}>{expanded ? '收起记录' : `查看全部 ${state.receipts.length} 条记录`}</button>}</h4><ul>
+    {settingsVisible && <div className="workdisk-auto-settings" id="workdisk-auto-settings">
+      {state?.source && <div className="workdisk-auto-source"><FolderOpen size={15} /><strong>{state.source.displayName}</strong><span title={state.source.rootPath}>{state.source.rootPath}</span></div>}
+      {!state?.source && <p className="workdisk-auto-detail">选择下载文件夹，之后照常保存文件，工作盘会在后台接收。</p>}
+      <div className="workdisk-auto-controls">
+        <label><input type="checkbox" checked={naming} disabled={blocked || !state} aria-describedby="workdisk-auto-disclosure" onChange={event => {
+          if (action.current) return;
+          const value = event.target.checked, previous = naming;
+          setNaming(value);
+          if (state?.source) void run(async () => {
+            try { return await disk.setAutoNaming!(value); }
+            catch (cause) { if (alive.current) setNaming(previous); throw cause; }
+          });
+        }} /><span>自动根据内容命名</span><Sparkles size={14} /></label>
+        <div>{!state?.source ? <button className="workdisk-primary" disabled={blocked || !state} onClick={() => void run(() => disk.chooseAutoSource!({ nameFromContent: naming }))}><Play size={14} />开启自动收纳</button>
+          : <><button disabled={blocked} onClick={() => void run(() => disk.chooseAutoSource!({ nameFromContent: naming }))}>更换接收文件夹</button>
+            {disk.openAutoSource && <button disabled={busy} onClick={() => void run(() => disk.openAutoSource!())}>打开接收文件夹</button>}</>}
+        </div>
+      </div>
+      <p id="workdisk-auto-disclosure" className="workdisk-auto-detail">{savingNaming ? '正在保存命名设置；保存完成前仍按之前的设置处理。' : naming ? <>文字和图片识别结果会发送给已连接的 AI，长文使用节选，原图留在本机；无法识别时保留原名。<Link to="/settings">连接 AI</Link></> : '按原名收纳，不会为自动命名发送内容。'}</p>
+      <p className="workdisk-auto-detail">接收范围包含上面的文件夹及其普通子文件夹。仅接收启用后新增的文件，不处理以前的下载；原件保留。应用运行时后台接收，关闭或暂停期间的新文件会在下次启动或继续时补收。</p>
+    </div>}
+    {state && visibleReceipts.length > 0 && <div className="workdisk-auto-receipts" id="workdisk-auto-receipts"><h4>{expanded ? '最近自动收纳' : '正在修改名称'}<span>保留最近 {state.receipts.length} 份结果</span></h4><ul>
       {visibleReceipts.map(receipt => <li key={receipt.id} className={receipt.status === 'saved' ? '' : 'needs-attention'}>
         <div className="workdisk-auto-result"><span>{receipt.sourceName}</span><span aria-hidden="true">→</span><strong>{receipt.savedName ?? (receipt.status === 'uncertain' ? '需核对结果' : '未收好')}</strong>
           {receipt.status === 'saved' && receipt.path && <div className="workdisk-auto-result-actions"><button disabled={busy} aria-label={`打开 ${receipt.savedName}`} onClick={() => void run(() => disk.openFile(receipt.path!))}>打开</button>

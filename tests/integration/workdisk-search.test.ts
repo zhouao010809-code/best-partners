@@ -36,8 +36,22 @@ describe('local query understanding', () => {
     expect(localWorkdiskSearchPlan({ query: '关于关键词的文案', today }).terms).toEqual(['关键词']);
     expect(localWorkdiskSearchPlan({ query: '招生视频 图片 录音', today })).not.toHaveProperty('kind');
   });
+  it('keeps media topics searchable across file types instead of interpreting part of a topic as a type', () => {
+    expect(localWorkdiskSearchPlan({ query: '短视频', today })).toEqual({ terms: ['短视频'] });
+    expect(localWorkdiskSearchPlan({ query: '短视频方法的图片', today })).toEqual({ terms: ['短视频方法'], kind: 'image' });
+    expect(localWorkdiskSearchPlan({ query: '视频剪辑教程的PDF', today })).toEqual({ terms: ['视频剪辑教程'], kind: 'document' });
+    expect(localWorkdiskSearchPlan({ query: '图片压缩方法', today })).toEqual({ terms: ['图片压缩方法'] });
+    expect(localWorkdiskSearchPlan({ query: '招生视频和图片', today })).toEqual({ terms: ['招生'] });
+  });
 });
 describe('bounded AI planning', () => {
+  it('does not let an AI inferred type hide a topic in images or PDFs, and retains the original topic terms', async () => {
+    const planner = createWorkdiskSearchPlanner({ adapter: adapter(async input => input.emit({ type: 'text', text: JSON.stringify({ terms: ['创作方法'], kind: 'video' }) })) });
+    expect(await planner({ query: '短视频', today })).toMatchObject({ mode: 'ai', plan: { terms: ['短视频', '创作方法'] } });
+    expect((await planner({ query: '短视频', today })).plan).not.toHaveProperty('kind');
+    expect((await planner({ query: '短视频方法的图片', today })).plan).toEqual({ terms: ['短视频方法', '创作方法'], kind: 'image' });
+    expect((await planner({ query: '招生视频和图片', today })).plan).not.toHaveProperty('kind');
+  });
   it('sends only the query and local date, with no filesystem tools or candidate content', async () => {
     let received: AssistantRunInput | undefined;
     const planner = createWorkdiskSearchPlanner({ adapter: adapter(async input => { received = input; input.emit({ type: 'text', text: JSON.stringify({ terms: ['招生', '招新'], startDate: '2026-09-28', endDate: '2026-09-28', kind: 'video' }) }); }) });

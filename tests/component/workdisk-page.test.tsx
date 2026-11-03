@@ -23,9 +23,51 @@ beforeEach(() => {
   planner.mockResolvedValue({ ok: true, value: { mode: 'ai', plan: { terms: ['招生'], startDate: '2026-09-28', endDate: '2026-09-28' } } });
   Object.defineProperty(window, 'xiaozhaoDesktop', { configurable: true, value: { workdisk: { status, list, connect, importFiles, importDroppedFiles, createNote, preview, openFile: vi.fn() } } });
 });
-afterEach(() => { cleanup(); Reflect.deleteProperty(window, 'xiaozhaoDesktop'); vi.resetAllMocks(); });
+afterEach(() => { cleanup(); Reflect.deleteProperty(window, 'xiaozhaoDesktop'); vi.useRealTimers(); vi.resetAllMocks(); });
 
 describe('workdisk page', () => {
+  it('updates the default date at midnight without a focus event', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(new Date(2026, 9, 31, 23, 59, 59));
+    await act(async () => mount());
+    expect(screen.getByLabelText('收纳日期')).toHaveValue('2026-10-31');
+    await act(async () => vi.advanceTimersByTime(1500));
+    expect(screen.getByLabelText('收纳日期')).toHaveValue('2026-11-01');
+  });
+  it('follows today after waking on a later day and submits the current date', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 31, 23, 59));
+    mount(); await screen.findByRole('button', { name: /预览 招生.txt/u });
+    expect(screen.getByLabelText('收纳日期')).toHaveValue('2026-10-31');
+    vi.setSystemTime(new Date(2026, 10, 3, 9));
+    fireEvent.focus(window);
+    expect(screen.getByLabelText('收纳日期')).toHaveValue('2026-11-03');
+    await userEvent.click(screen.getByRole('button', { name: '收文件' }));
+    expect(importFiles).toHaveBeenCalledWith('2026-11-03', { nameFromContent: true });
+  });
+  it('preserves a deliberately selected date across days until switched back to today', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 31, 23, 59));
+    mount(); await screen.findByRole('button', { name: /预览 招生.txt/u });
+    fireEvent.change(screen.getByLabelText('收纳日期'), { target: { value: '2026-10-28' } });
+    vi.setSystemTime(new Date(2026, 10, 3, 9)); fireEvent.focus(window);
+    expect(screen.getByLabelText('收纳日期')).toHaveValue('2026-10-28');
+    await userEvent.click(screen.getByRole('button', { name: '改回今天' }));
+    expect(screen.getByLabelText('收纳日期')).toHaveValue('2026-11-03');
+  });
+  it('uses the submission date when a default-date import crosses midnight', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 31, 23, 59));
+    let finish!: (value: unknown) => void;
+    importFiles.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    mount(); await screen.findByRole('button', { name: /预览 招生.txt/u });
+    await userEvent.click(screen.getByRole('button', { name: '收文件' }));
+    vi.setSystemTime(new Date(2026, 10, 1, 0, 1)); fireEvent.focus(window);
+    await act(async () => finish({ files: [file], failures: [] }));
+    expect(importFiles).toHaveBeenCalledWith('2026-10-31', { nameFromContent: true });
+    expect(screen.getByText('已收好 1 个文件 · 2026-10-31')).toBeVisible();
+    expect(screen.getByLabelText('收纳日期')).toHaveValue('2026-11-01');
+  });
   it('keeps the remembered folder and recovery controls visible when the initial scan is unavailable', async () => {
     list.mockRejectedValue(new Error('工作盘暂时未连接'));
     Object.assign(window.xiaozhaoDesktop!.workdisk!, {
@@ -125,6 +167,8 @@ describe('workdisk page', () => {
   it('explains content naming before import and permits keeping the original name', async () => {
     mount(); await screen.findByRole('button', { name: /预览 招生.txt/u });
     expect(screen.getByRole('checkbox', { name: '根据内容命名' })).toBeChecked();
+    expect(screen.getByText('文字与图片识别结果交给已连接的 AI 起名，原件保留。')).toBeVisible();
+    await userEvent.click(screen.getByText('命名说明', { exact: true }));
     expect(screen.getByText(/可读正文会发送给已连接的 AI/u)).toBeVisible();
     await userEvent.click(screen.getByRole('checkbox', { name: '根据内容命名' }));
     await userEvent.click(screen.getByRole('button', { name: '收文件' }));

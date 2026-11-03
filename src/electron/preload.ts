@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('xiaozhaoDesktop', Object.freeze({
     importDroppedFiles: (files, date, options) => ipcRenderer.invoke('desktop:workdisk-drop', files.map(file => webUtils.getPathForFile(file)), date, options),
     createNote: (input) => ipcRenderer.invoke('desktop:workdisk-create-note', input),
     preview: (path) => ipcRenderer.invoke('desktop:workdisk-preview', path),
+    thumbnail: (path, bindingId) => ipcRenderer.invoke('desktop:workdisk-thumbnail', path, bindingId),
     openFile: (path) => ipcRenderer.invoke('desktop:workdisk-open', path),
     autoStatus: () => ipcRenderer.invoke('desktop:workdisk-auto-status'),
     chooseAutoSource: (options) => ipcRenderer.invoke('desktop:workdisk-auto-choose', options),

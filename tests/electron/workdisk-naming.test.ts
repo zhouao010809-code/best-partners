@@ -57,6 +57,8 @@ for (const mode of ['development', 'packaged'] as const) {
       await page.getByRole('button', { name: '连接本地文件夹', exact: true }).click();
       await page.getByLabel('收纳日期', { exact: true }).fill('2026-10-29');
       await expect(page.getByRole('checkbox', { name: '根据内容命名', exact: true })).toBeChecked();
+      await expect(page.getByText('文字与图片识别结果交给已连接的 AI 起名，原件保留。', { exact: true })).toBeVisible();
+      await page.getByText('命名说明', { exact: true }).click();
       await expect(page.getByText(/可读正文会发送给已连接的 AI/u)).toBeVisible();
       await page.getByRole('button', { name: '收文件', exact: true }).click();
       await expect(page.getByRole('button', { name: `预览 ${textTitle}.txt`, exact: true })).toBeVisible({ timeout: 30_000 });
@@ -72,7 +74,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await receipt.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath('content-naming-wide.png') });
       await page.setViewportSize({ width: 720, height: 900 });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      expect(await page.locator('#workdisk-naming-detail').evaluate(element => ({
+      expect(await page.locator('.workdisk-naming-help p').evaluate(element => ({
         fits: element.scrollWidth <= element.clientWidth,
         linkFits: element.querySelector('a')!.getBoundingClientRect().right <= element.getBoundingClientRect().right,
         display: getComputedStyle(element).display,

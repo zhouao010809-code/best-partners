@@ -34,6 +34,7 @@ const DISTRIBUTION_DIRECTORIES = [
 const DISTRIBUTION_FILES = [
   ['dist/native/atomic-file-helper', 'app/dist/native/atomic-file-helper'],
   ['dist/native/image-evidence-helper', 'app/dist/native/image-evidence-helper'],
+  ['dist/native/workdisk-thumbnail-helper', 'app/dist/native/workdisk-thumbnail-helper'],
   ['dist/native/personal-archive.node', 'app/dist/native/personal-archive.node'],
   ['dist/best-partners-clipper.zip', 'best-partners-clipper.zip']
 ] as const;

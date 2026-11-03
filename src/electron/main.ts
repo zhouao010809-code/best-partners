@@ -26,6 +26,8 @@ import { clearPreviousUpdateDownloads, downloadUpdateInstaller } from './update-
 import { createUpdateDownloadFetcher } from './update-network.js';
 import { createWorkdiskService } from '../server/workdisk/service.js';
 import { createDesktopWorkdisk } from './workdisk-controller.js';
+import { createNativeThumbnailRenderer } from './workdisk-thumbnail-native.js';
+import { createWorkdiskSearchContentReader } from '../server/workdisk/content-search.js';
 import { createDesktopWorkdiskAuto } from './workdisk-auto-controller.js';
 import { createWorkdiskAutoCollector } from '../server/workdisk/auto-collector.js';
 import { createWorkdiskContentNamer } from '../server/workdisk/content-namer.js';
@@ -175,13 +177,15 @@ async function bootstrap(): Promise<void> {
   window = createMainWindow(started.origin);
   const workdiskService = createWorkdiskService({
     stateDirectory: join(appDataDir, 'workdisk'), protectedRoots: [settings.vaultRoot, userDataDir],
+    contentReader: createWorkdiskSearchContentReader({ parserWorkerPath: new URL('../server/pdf-worker.mjs', import.meta.url), imageHelperPath: new URL('../native/image-evidence-helper', import.meta.url) }),
     contentNamer: createWorkdiskContentNamer({ adapter: createDeepSeekAssistantAdapter({ credentials: modelCredentials }), parserWorkerPath: new URL('../server/pdf-worker.mjs', import.meta.url), imageHelperPath: new URL('../native/image-evidence-helper', import.meta.url) })
   });
   const autoCollector = createWorkdiskAutoCollector({
     stateDirectory: join(appDataDir, 'workdisk-auto'), protectedRoots: [settings.vaultRoot, userDataDir], service: workdiskService,
     ...(process.env.NODE_ENV === 'test' ? { pollMs: 100, settleMs: 1500 } : {})
   });
-  closeWorkdisk = async () => { try { await autoCollector.close(); } finally { await workdiskService.close(); } };
+  const closeFileServices = async () => { try { await autoCollector.close(); } finally { await workdiskService.close(); } };
+  closeWorkdisk = closeFileServices;
   await autoCollector.start();
   const workdisk = createDesktopWorkdisk({
     service: { ...workdiskService, bind: async selected => {
@@ -202,8 +206,12 @@ async function bootstrap(): Promise<void> {
       const result = await dialog.showOpenDialog(window!, { title: '收纳工作文件', properties: ['openFile', 'multiSelections'], message: '文件会复制到选定日期，原文件保留。' });
       return result.canceled ? undefined : result.filePaths;
     },
-    openPath: path => shell.openPath(path)
+    openPath: path => shell.openPath(path),
+    renderThumbnail: createNativeThumbnailRenderer(new URL('../native/workdisk-thumbnail-helper', import.meta.url))
   });
+  closeWorkdisk = async () => {
+    try { await workdisk.close(); } finally { await closeFileServices(); }
+  };
   const workdiskAuto = createDesktopWorkdiskAuto({
     service: autoCollector,
     chooseDirectory: async options => {
@@ -224,6 +232,7 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('desktop:workdisk-drop', (event, files: unknown, date: unknown, options: unknown) => { assertMainSender(event); return workdisk.importDroppedFiles(files, date, options); });
   ipcMain.handle('desktop:workdisk-create-note', (event, request: unknown) => { assertMainSender(event); return workdisk.createNote(request); });
   ipcMain.handle('desktop:workdisk-preview', (event, path: unknown) => { assertMainSender(event); return workdisk.preview(path); });
+  ipcMain.handle('desktop:workdisk-thumbnail', (event, path: unknown, bindingId: unknown) => { assertMainSender(event); return workdisk.thumbnail(path, bindingId); });
   ipcMain.handle('desktop:workdisk-open', (event, path: unknown) => { assertMainSender(event); return workdisk.openFile(path); });
   ipcMain.handle('desktop:workdisk-auto-status', event => { assertMainSender(event); return workdiskAuto.status(); });
   ipcMain.handle('desktop:workdisk-auto-choose', (event, options: unknown) => { assertMainSender(event); return workdiskAuto.chooseSource(options); });

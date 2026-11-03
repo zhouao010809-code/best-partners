@@ -29,6 +29,7 @@ export interface DesktopWorkdiskApi {
   importDroppedFiles?(files: File[], date: string, options?: WorkdiskImportOptions): Promise<WorkdiskImportResult>;
   createNote(input: { title: string; body: string; date: string }): Promise<WorkdiskFile>;
   preview(path: string): Promise<WorkdiskPreview>;
+  thumbnail?(path: string, bindingId: string): Promise<string | null>;
   openFile(path: string): Promise<void>;
   autoStatus?(): Promise<WorkdiskAutoState>;
   chooseAutoSource?(options: { nameFromContent: boolean }): Promise<WorkdiskAutoState | null>;

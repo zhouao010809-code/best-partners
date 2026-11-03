@@ -65,6 +65,7 @@ describe('desktop workdisk controller', () => {
   it('rejects unsafe renderer paths and executable opening before touching disk', async () => {
     const f = await fixture();
     for (const path of ['../secret', '/absolute', 'dir/../file', 'a\\b', 'a\u0000b']) await expect(f.controller.preview(path)).rejects.toThrow('输入');
+    for (const path of ['../secret.png', '/absolute.png', 'dir/../file.png']) await expect(f.controller.thumbnail(path, 'one')).rejects.toThrow('输入');
     await expect(f.controller.openFile('run.command')).rejects.toThrow('文档');
     expect(f.openPath).not.toHaveBeenCalled(); expect(f.service.resolveFile).not.toHaveBeenCalled();
     await f.controller.openFile('report.pdf'); expect(f.openPath).toHaveBeenCalledWith(join(f.root, 'report.pdf'));

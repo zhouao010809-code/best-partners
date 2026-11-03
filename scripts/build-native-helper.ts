@@ -16,3 +16,7 @@ const imageHelper = resolve(outputDirectory, 'image-evidence-helper');
 await promisify(execFile)('xcrun', ['swiftc', '-O', '-target', 'arm64-apple-macosx13.0',
   resolve('native/macos/image-evidence-helper.swift'), '-o', imageHelper]);
 await chmod(imageHelper, 0o755);
+const thumbnailHelper = resolve(outputDirectory, 'workdisk-thumbnail-helper');
+await promisify(execFile)('xcrun', ['swiftc', '-O', '-target', 'arm64-apple-macosx13.0',
+  resolve('native/macos/workdisk-thumbnail-helper.swift'), '-o', thumbnailHelper]);
+await chmod(thumbnailHelper, 0o755);
