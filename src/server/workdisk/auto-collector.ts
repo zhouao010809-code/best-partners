@@ -157,7 +157,14 @@ export function createWorkdiskAutoCollector(config: {
   async function verifySeparation(sourcePath: string, targetPath: string): Promise<void> {
     const state = await directoryState();
     for (const input of [...config.protectedRoots, targetPath, state.path]) {
-      const protectedPath = await realpath(input);
+      let protectedPath: string;
+      try { protectedPath = await realpath(input); }
+      catch (error) {
+        // The validated disk can disconnect before this second path lookup.
+        // Missing source, protected, or settings directories must still pause.
+        if (input === targetPath && (error as NodeJS.ErrnoException)?.code === 'ENOENT') throw new TargetUnavailable(WAITING_MESSAGE);
+        throw error;
+      }
       if (contained(protectedPath, sourcePath) || contained(sourcePath, protectedPath)) throw new Error('接收文件夹需要独立，不能与工作盘、知识库或应用设置目录重叠。');
     }
   }

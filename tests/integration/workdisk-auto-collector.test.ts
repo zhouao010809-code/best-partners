@@ -43,6 +43,49 @@ it('waits for a temporarily unavailable target then resumes its existing ledger 
   expect(f.importFiles).toHaveBeenCalledTimes(3); expect(JSON.parse(await readFile(path, 'utf8')).message).toBeUndefined();
   await f.collector.poll(); expect(f.importFiles).toHaveBeenCalledTimes(3);
 });
+it('waits when the original target disconnects after binding validation and resumes the same ledger after restart', async () => {
+  const f = await setup(); await writeFile(join(f.source, '旧文件.txt'), 'old'); await f.collector.configure(f.source, { nameFromContent: false });
+  await writeFile(join(f.source, '待收.txt'), 'pending'); await f.collector.poll();
+  const path = join(f.stateDirectory, 'workdisk-auto.json');
+  const before = JSON.parse(await readFile(path, 'utf8'));
+  const disconnected = `${f.root}-disconnected`;
+  f.validateBinding.mockImplementationOnce(async () => {
+    const binding = await f.service.validateBinding();
+    await rename(f.root, disconnected);
+    return binding;
+  });
+  await f.tick();
+  expect(await f.collector.status()).toMatchObject({ enabled: true, phase: 'waiting', pendingCount: 1, receipts: [] });
+  const waiting = JSON.parse(await readFile(path, 'utf8'));
+  expect(waiting.records).toEqual(before.records); expect(waiting.target).toEqual(before.target);
+  expect(waiting.enabled).toBe(true); expect(waiting.waitingForTarget).toBe(true);
+  expect(f.importFiles).not.toHaveBeenCalled();
+  await writeFile(join(f.source, '离线时新增.txt'), 'offline'); await f.collector.close();
+  const resumed = await f.make();
+  expect(await resumed.status()).toMatchObject({ enabled: true, phase: 'waiting', pendingCount: 1, receipts: [] });
+  await rename(disconnected, f.root); await resumed.poll(); await f.tick(resumed);
+  expect(await resumed.status()).toMatchObject({ enabled: true, phase: 'watching', pendingCount: 0 });
+  expect((await resumed.status()).receipts.map(entry => entry.sourceName).sort()).toEqual(['待收.txt', '离线时新增.txt'].sort());
+  expect((await f.service.validateBinding()).id).toBe(before.target.id);
+  await f.tick(resumed); expect(f.importFiles).toHaveBeenCalledTimes(2);
+  expect(await readFile(join(f.source, '待收.txt'), 'utf8')).toBe('pending');
+  expect(await readFile(join(f.source, '离线时新增.txt'), 'utf8')).toBe('offline');
+});
+it.each(['vault', 'stateDirectory', 'source'] as const)('still pauses when %s disappears after binding validation', async location => {
+  const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false });
+  await writeFile(join(f.source, '待收.txt'), 'pending'); await f.collector.poll();
+  const moved = `${f[location]}-disconnected`;
+  f.validateBinding.mockImplementationOnce(async () => {
+    const binding = await f.service.validateBinding();
+    await rename(f[location], moved);
+    return binding;
+  });
+  try {
+    await f.tick();
+    expect(await f.collector.status()).toMatchObject({ enabled: false, phase: 'error', pendingCount: 1, receipts: [] });
+    expect(f.importFiles).not.toHaveBeenCalled();
+  } finally { await rename(moved, f[location]); }
+});
 it('retains waiting across restart and honors a manual pause when the original target returns', async () => {
   const f = await setup(); await f.collector.configure(f.source, { nameFromContent: false });
   f.validateBinding.mockRejectedValue(targetUnavailable()); await f.collector.poll(); await f.collector.close();
