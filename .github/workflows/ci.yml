@@ -36,6 +36,8 @@ jobs:
     # The native archive/read helpers require macOS arm64 and xcrun.
     runs-on: macos-15
     timeout-minutes: 40
+    env:
+      PLAYWRIGHT_VISUAL_BASELINE: macos-15-ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,7 +47,21 @@ jobs:
       - run: npm ci
       - run: node node_modules/electron/install.js
       - run: npx playwright install chromium chrome
-      - run: npm run verify:release
+      - name: Verify source and build desktop runtime
+        id: core
+        run: npm run verify:full
+      - name: Verify browser interactions and visuals
+        run: npm run test:e2e:fixtures
+      - name: Package verified desktop runtime
+        id: package
+        if: ${{ !cancelled() && steps.core.outcome == 'success' }}
+        run: npm run package:mac:built
+      - name: Verify development and packaged desktop
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
+        run: npm run test:electron -- --output test-results/electron
+      - name: Build MCP and operations tools
+        if: ${{ !cancelled() && steps.core.outcome == 'success' }}
+        run: npm run build:mcp && npm run build:company-mcp && npm run build:company-operations
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

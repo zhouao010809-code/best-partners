@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const fixturePath = 'http://127.0.0.1:41793/tests/e2e/fixtures/material-deck.html';
+const baseline = process.env.PLAYWRIGHT_VISUAL_BASELINE;
+if (baseline !== undefined && baseline !== 'macos-15-ci') throw new Error('UNRECOGNIZED_VISUAL_BASELINE');
+// The hosted runner has different CJK font metrics. Both environments keep
+// strict, reviewed screenshots; neither changes the comparison tolerance.
+const snapshotName = (name: string) => `${name}${baseline ? `-${baseline}` : ''}.png`;
 const viewports = [
   { name: '1440x820', width: 1440, height: 820 },
   { name: '1280x800', width: 1280, height: 800 },
@@ -43,7 +48,7 @@ for (const viewport of viewports) {
     expect(visualContract.cardTransform).not.toBe('none');
 
     await expect(page.locator('[data-deck-instance]')).toHaveScreenshot(
-      `material-deck-${viewport.name}.png`,
+      snapshotName(`material-deck-${viewport.name}`),
       { animations: 'disabled' }
     );
   });
@@ -61,8 +66,18 @@ test('opens by keyboard and restores the exact trigger on Escape', async ({ page
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.locator('[data-card-index="2"]')).toHaveAttribute('data-card-mode', 'active');
   await expect(page.locator('[data-card-mode="rail"]')).toHaveCount(8);
+  await expect.poll(() => page.getByRole('dialog').evaluate(root => {
+    const rect = (selector: string) => root.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+    const boxes = ['h3', '.material-deck-detail__status', '.material-deck-detail__facts', '.material-deck-detail__path', '.material-deck-detail__primary'].map(rect);
+    const outer = root.getBoundingClientRect();
+    return {
+      ordered: boxes.slice(1).every((box, index) => boxes[index]!.bottom <= box.top + 1),
+      contained: boxes.every(box => box.left >= outer.left && box.right <= outer.right && box.top >= outer.top && box.bottom <= outer.bottom),
+      closeButtonClear: boxes[0]!.right <= rect('.material-deck-detail__close').left + 1
+    };
+  })).toEqual({ ordered: true, contained: true, closeButtonClear: true });
   await expect(page.locator('[data-deck-instance]')).toHaveScreenshot(
-    'material-deck-selected.png',
+    snapshotName('material-deck-selected'),
     { animations: 'disabled' }
   );
 

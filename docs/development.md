@@ -35,7 +35,7 @@ fixture runner 会按配置串行启动各自的 Vite 端口，避免直接运�
 npm run verify:full
 ```
 
-它先准备三个原生模块，加入组件、安全、公司 MCP 和桌面运行时构建检查，并通过配置发现整个 `tests/native`、`tests/archive`，需要 macOS arm64 与 Xcode 命令行工具。专项测试入口继续用于定位。`npm run verify:release` 还会执行全部 E2E fixture 与 API 界面、重新打包当前源码、Electron 开发版/打包版验收，以及个人 MCP、公司 MCP 和运维工具构建；macOS CI 安装 Chromium 后执行此发布门禁。真实 Obsidian 合同探针需要单独配置外部环境后运行 `npm run test:contract:all`。只读扫描正式大脑的元数据时，使用：
+它先准备三个原生模块，加入组件、安全、公司 MCP 和桌面运行时构建检查，并通过配置发现整个 `tests/native`、`tests/archive`，需要 macOS arm64 与 Xcode 命令行工具。专项测试入口继续用于定位。`npm run verify:release` 还会执行全部 E2E fixture 与 API 界面、重新打包当前源码、Electron 开发版/打包版验收，以及个人 MCP、公司 MCP 和运维工具构建；macOS CI 安装 Chromium 和 Chrome 后按相同阶段执行发布门禁，基础构建、浏览器、打包、Electron 和工具构建分别显示状态；任一步失败仍使门禁失败。真实 Obsidian 合同探针需要单独配置外部环境后运行 `npm run test:contract:all`。只读扫描正式大脑的元数据时，使用：
 
 ```sh
 VAULT_ROOT=/absolute/path/to/vault npm run vault:lint
