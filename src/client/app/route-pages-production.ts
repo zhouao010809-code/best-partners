@@ -9,6 +9,7 @@ const page = (path: string, exportName: string, loader: () => Promise<Record<str
 });
 
 export const routePages = {
+  AutoloopPage: page('/autoloop', 'AutoloopPage', () => import('../pages/AutoloopPage.js')),
   WorkdiskPage: page('/workdisk', 'WorkdiskPage', () => import('../pages/WorkdiskPage.js')),
   DashboardPage: page('../pages/DashboardPage.js', 'DashboardPage', async () => import('../pages/DashboardPage.js')),
   QueuePage: page('../pages/QueuePage.js', 'QueuePage', async () => import('../pages/QueuePage.js')),

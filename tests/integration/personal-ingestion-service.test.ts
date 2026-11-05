@@ -73,6 +73,18 @@ it('saves drafts durably but writes no vault files until confirmation', async ()
   expect([...f.files].map(([path, bytes]) => [path, bytes.toString()])).toEqual(before);
   const reopened = await f.make().review(f.runId); expect(reopened.candidates[0]!.decision).toBe('keep');
 });
+
+it('explains oversized source images for legacy candidates without writing files or recovery records', async () => {
+  const f = await fixture(1);
+  const large = Buffer.concat([original, Buffer.from('原'.repeat(550_000))]);
+  f.put(source, large);
+  f.db.prepare('UPDATE personal_extraction_runs SET source_raw_sha256=? WHERE id=?').run(sha256Bytes(large), f.runId);
+  await select(f);
+  await expect(preview(f)).rejects.toMatchObject({ code: 'SOURCE_INGESTION_TOO_LARGE', statusCode: 413 });
+  expect(f.files.get(source)?.equals(large)).toBe(true);
+  expect(f.writes()).toBe(0);
+  expect(f.recovery.size).toBe(0);
+});
 it('commits a subset, preserves original body, then resolves remaining candidates without re-extraction', async () => {
   const f = await fixture(); await select(f); const p = await preview(f); const first = await f.service.commit(p.id);
   expect(first.status).toBe('committed'); expect(first.pendingCount).toBe(1); expect(first.sourceStatus).toBe('部分入库');

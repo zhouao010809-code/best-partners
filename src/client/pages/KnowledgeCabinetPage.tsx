@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUpRight, BookOpen, ChevronRight, FolderOpen, History, LibraryBig, ListFilter, RefreshCw, Search, X } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigationType, useSearchParams } from 'react-router-dom';
 import type { KnowledgeCatalogFolder, KnowledgeCatalogQuery } from '../../shared/api/knowledge-catalog.js';
 import type { KnowledgeRecord, UsageStatus } from '../../shared/domain/records.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
@@ -51,7 +51,22 @@ export function KnowledgeCabinetPage() {
   const knowledgeType = params.get('knowledgeType')?.trim() ?? '';
   const topic = params.get('topic')?.trim() ?? '';
   const [draft, setDraft] = useState({search, status: status ?? '', knowledgeType, topic});
-  useEffect(() => setDraft({search, status: status ?? '', knowledgeType, topic}), [search, status, knowledgeType, topic]);
+  const navigationType = useNavigationType();
+  const appliedFilters = JSON.stringify({search, status: status ?? '', knowledgeType, topic});
+  const previousFilters = useRef(appliedFilters);
+  const submittedFilters = useRef<string[]>([]);
+  useEffect(() => {
+    if (previousFilters.current === appliedFilters) return;
+    previousFilters.current = appliedFilters;
+    const submitted = navigationType === 'REPLACE' ? submittedFilters.current.indexOf(appliedFilters) : -1;
+    if (submitted >= 0) {
+      // A local submission can reach the URL after the user has edited the next query.
+      submittedFilters.current.splice(0, submitted + 1);
+      return;
+    }
+    submittedFilters.current = [];
+    setDraft({search, status: status ?? '', knowledgeType, topic});
+  }, [search, status, knowledgeType, topic, appliedFilters, navigationType]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [recent, setRecent] = useState(() => readCatalogSession(sessionKey).recent);
@@ -163,12 +178,14 @@ export function KnowledgeCabinetPage() {
   const loaded = useCallback((record: KnowledgeRecord) => { const recent = { path: record.path, title: record.title, query: recentQuery.current }; setRecent(recent); updateCatalogSession(sessionKey, { recent }); }, [sessionKey]);
   const applyFilters = useCallback(() => {
     setMotion('none');
+    const submitted = JSON.stringify({search: draft.search.trim(), status: draft.status, knowledgeType: draft.knowledgeType.trim(), topic: draft.topic.trim()});
+    if (submitted !== appliedFilters) submittedFilters.current.push(submitted);
     setParams(current => { const next = new URLSearchParams(current); next.delete('path');
       for (const [key, value] of Object.entries({search: draft.search.trim(), usageStatus: draft.status, knowledgeType: draft.knowledgeType.trim(), topic: draft.topic.trim()})) {
         if (value) next.set(key, value); else next.delete(key);
       } return next;
     }, { replace: true });
-  }, [draft, setParams]);
+  }, [draft, setParams, appliedFilters]);
   const composing = useRef(false);
   const [compositionRevision, setCompositionRevision] = useState(0);
   useEffect(() => {

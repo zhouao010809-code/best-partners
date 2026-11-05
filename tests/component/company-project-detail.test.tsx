@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, Link } from 'react-router-dom';
 import { CompanyAppShell } from '../../src/client/company/CompanyAppShell.js';
 import { CompanyProjectDetailPage } from '../../src/client/pages/company/CompanyProjectDetailPage.js';
 import type { CompanyApi } from '../../src/client/components/company/company-api.js';
@@ -100,4 +100,37 @@ describe('CompanyProjectDetailPage', () => {
     expect(screen.getByText(/当前账号只能查看导入记录/u)).toBeVisible();
     expect(screen.queryByLabelText('官方导出文件')).not.toBeInTheDocument();
   });
+});
+
+
+it('isolates metrics and selected uploads when changing project routes', async () => {
+  const api = apiFixture();
+  vi.mocked(api.projects.get).mockImplementation(async (id: string) => ({ ok: true, value: { ...project, id, name: id === 'project-1' ? 'A项目' : 'B项目' } }));
+  const firstMetrics = await api.metrics!.project('project-1');
+  vi.mocked(api.metrics!.project).mockResolvedValueOnce(firstMetrics).mockResolvedValueOnce({ ok: false, state: { status: 'operation-error', message: '指标连接失败' } });
+  render(<MemoryRouter initialEntries={['/company/projects/project-1']}><Link to="/company/projects/project-2">切换到B</Link><Routes><Route element={<CompanyAppShell api={api} initialSession={session} />}><Route path="company/projects/:id" element={<CompanyProjectDetailPage />} /></Route></Routes></MemoryRouter>);
+  await screen.findByRole('heading', { name: 'A项目' });
+  expect(screen.getByText('1,200')).toBeVisible();
+  fireEvent.change(screen.getByLabelText('官方导出文件'), { target: { files: [new File(['A data'], 'A-project.csv', { type: 'text/csv' })] } });
+  fireEvent.click(screen.getByRole('link', { name: '切换到B' }));
+  await screen.findByRole('heading', { name: 'B项目' });
+  expect(screen.queryByText('1,200')).not.toBeInTheDocument();
+  expect(screen.queryByText('A-project.csv')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '校验并导入' })).toBeDisabled();
+  expect(api.metrics!.upload).not.toHaveBeenCalled();
+});
+
+it('ignores a late project response after navigating to another project', async () => {
+  const api = apiFixture();
+  let finishFirst!: (value: Awaited<ReturnType<typeof api.projects.get>>) => void;
+  vi.mocked(api.projects.get).mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }))
+    .mockResolvedValueOnce({ ok: true, value: { ...project, id: 'project-2', name: 'B项目' } });
+  render(<MemoryRouter initialEntries={['/company/projects/project-1']}><Link to="/company/projects/project-2">切换到B</Link><Routes><Route element={<CompanyAppShell api={api} initialSession={session} />}><Route path="company/projects/:id" element={<CompanyProjectDetailPage />} /></Route></Routes></MemoryRouter>);
+  await waitFor(() => expect(api.projects.get).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole('link', { name: '切换到B' }));
+  await screen.findByRole('heading', { name: 'B项目' });
+  await act(async () => { finishFirst({ ok: true, value: project }); });
+  expect(screen.getByRole('heading', { name: 'B项目' })).toBeVisible();
+  expect(screen.queryByRole('heading', { name: project.name })).not.toBeInTheDocument();
+  expect(vi.mocked(api.projects.get).mock.calls[0]?.[1]?.aborted).toBe(true);
 });

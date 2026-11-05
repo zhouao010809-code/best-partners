@@ -78,7 +78,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     catch (error) { sendResponse({ ok: false, error: error.message }); return false; }
     void deliver(payload)
       .then((response) => sendResponse({ ok: true, response }))
-      .catch((error) => sendResponse({ ok: false, queued: true, packetId: payload.packetId, error: error.message }));
+      .catch((error) => sendResponse({ ok: false, queued: error.queued !== false, packetId: payload.packetId, error: error.message }));
     return true;
   }
   if (message?.type === 'retry-pending') {
@@ -89,7 +89,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === 'test-connection') {
     void sendNative({ type: 'ping' })
-      .then((response) => sendResponse({ ok: true, response }))
+      .then((response) => {
+        if (response?.ok !== true || response?.pong !== true) throw new Error(response?.error || '本地 App 未确认连接，请重新配对');
+        sendResponse({ ok: true, response });
+      })
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }

@@ -104,6 +104,19 @@ it('prepares only an authorized UTF-16 range of a large original and persists it
   expect(f.generate).not.toHaveBeenCalled();
 });
 
+it.each([490_000, 550_000])('blocks a small selection when its %i-character original cannot fit durable ingestion images', async (length) => {
+  const f = await fixture();
+  const original = note + '原'.repeat(length);
+  f.gateway.mutateFixture(path, original);
+  f.repository.replaceFile({ kind: 'material', record: parseLibraryNoteForRead(Buffer.from(original), path).record! });
+  await expect(f.service.prepareAssistant!({ materialPath: path, readingState: '未看', model: 'test',
+    sourceRange: { offset: original.indexOf('原始正文'), length: 5, label: '一小段' } }, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'SOURCE_INGESTION_TOO_LARGE', statusCode: 413 });
+  expect(f.generate).not.toHaveBeenCalled();
+  expect(f.db.prepare('SELECT COUNT(*) AS count FROM personal_extraction_runs').get()).toEqual({ count: 0 });
+  expect(Buffer.from((await f.gateway.readRaw(path)).bytes).equals(Buffer.from(original))).toBe(true);
+});
+
 it('validates quotes against the selected range and rejects changes anywhere in its full original', async () => {
   const f = await fixture(); const selected = '仅供本次提炼的第二页正文。';
   const original = `${note}\n${selected}`;

@@ -7,6 +7,7 @@ import { AppShell } from './AppShell.js';
 import { routePages } from '#client-route-pages';
 
 const {
+  AutoloopPage: AutoloopRoutePage,
   DashboardPage: DashboardRoutePage,
   WorkdiskPage: WorkdiskRoutePage,
   QueuePage: QueueRoutePage,
@@ -95,6 +96,7 @@ export function AppRouter({ api, runtimeMode = 'personal' }: AppRouterProps = {}
         <Route path="projects/:id" element={<RouteElement component={ProjectWorkspaceRoutePage} />} />
         <Route path="skills" element={<RouteElement component={SkillsRoutePage} />} />
         <Route path="operations" element={<RouteElement component={OperationsRoutePage} />} />
+        <Route path="autoloop" element={<RouteElement component={AutoloopRoutePage} />} />
         <Route path="settings" element={<RouteElement component={SettingsRoutePage} />} />
         <Route path="connections" element={<Navigate to="/settings" replace />} />
         <Route path="extractions/:id" element={<RouteElement component={ExtractionRoutePage} />} />

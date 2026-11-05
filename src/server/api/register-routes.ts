@@ -1,3 +1,6 @@
+import { registerAutoloopManagementRoutes } from './routes/autoloop-management.js';
+import { registerAutoloopConnectionsRoutes } from './routes/autoloop-connections.js';
+import { registerAutoloopRoutes } from './routes/autoloop.js';
 import { createLearningNotesService } from '../learning/notes-service.js';
 import { registerWorkdiskSearchRoutes } from './routes/workdisk-search.js';
 import { registerLearningNotesRoutes } from './routes/learning-notes.js';
@@ -94,6 +97,9 @@ export function registerApplicationRoutes(input: ApplicationRouteRegistryInput):
     } : undefined });
   registerIndexJobRoutes(app, indexJobs);
   if (runtimeMode === 'personal') {
+    registerAutoloopRoutes(app, options.autoloopService);
+    registerAutoloopManagementRoutes(app, options.autoloopManagementService);
+    registerAutoloopConnectionsRoutes(app, options.autoloopConnectionsService);
     registerWorkdiskSearchRoutes(app, options.assistantAdapters?.find(value => value.id === 'deepseek'));
     registerProjectRoutes(app, options.projectService, options.projectWritePlans);
     const adapter = options.assistantAdapters?.find(value => value.id === 'deepseek');

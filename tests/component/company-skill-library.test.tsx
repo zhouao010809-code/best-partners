@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -46,6 +46,24 @@ describe('CompanySkillLibraryPage', () => {
     expect(screen.getByText('这是方法正文。')).toBeVisible();
     expect(screen.getByText('REFERENCE.md')).toBeVisible();
     expect(screen.queryByRole('button', { name: /新建|移动|执行/u })).not.toBeInTheDocument();
-    expect(api.skills.get).toHaveBeenCalledWith(revision);
+    expect(api.skills.get).toHaveBeenCalledWith(revision, expect.any(AbortSignal));
   });
+});
+
+
+it('ignores an abandoned detail response after opening another Skill', async () => {
+  const api = apiFixture();
+  const second = { ...summary, id: 'b'.repeat(64), name: '第二个方法' };
+  vi.mocked(api.skills.list).mockResolvedValue({ ok: true, value: { folders: [], items: [summary, second] } });
+  let finishFirst!: (value: Awaited<ReturnType<typeof api.skills.get>>) => void;
+  vi.mocked(api.skills.get).mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }))
+    .mockResolvedValueOnce({ ok: true, value: { ...detail, ...second, markdown: '第二个方法正文' } });
+  renderPage(api);
+  fireEvent.click((await screen.findAllByRole('button', { name: '查看方法' }))[0]!);
+  fireEvent.click(screen.getByRole('button', { name: '返回 Skill 库' }));
+  fireEvent.click(screen.getAllByRole('button', { name: '查看方法' })[1]!);
+  await screen.findByText('第二个方法正文');
+  await act(async () => { finishFirst({ ok: true, value: detail }); });
+  expect(screen.getByText('第二个方法正文')).toBeVisible();
+  expect(screen.queryByText('这是方法正文。')).not.toBeInTheDocument();
 });

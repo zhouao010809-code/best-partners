@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -209,4 +209,62 @@ it('clears a recommendation when an explicitly queued assistant intent is loaded
   expect(screen.queryByLabelText('Skill 推荐')).not.toBeInTheDocument();
   expect(screen.queryByLabelText('Skill 推荐已失效')).not.toBeInTheDocument();
   expect(service.send).not.toHaveBeenCalled();
+});
+
+
+it('invalidates a recommendation when its readable scope changes before confirmation', async () => {
+  render(<MemoryRouter initialEntries={['/library?path=library/source.md']}><AssistantPanel api={{ assistant: service, skills } as unknown as ReadConsoleApi} open onClose={() => {}} width={430} onWidthChange={() => {}} onRunningChange={() => {}} /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  fireEvent.change(screen.getByLabelText('发送给问问的消息'), { target: { value: '整理当前资料' } });
+  fireEvent.keyDown(screen.getByLabelText('发送给问问的消息'), { key: 'Enter' });
+  await screen.findByRole('button', { name: '使用此 Skill' });
+  fireEvent.change(screen.getByLabelText('资料范围'), { target: { value: 'current' } });
+  expect(screen.queryByRole('button', { name: '使用此 Skill' })).not.toBeInTheDocument();
+  expect(screen.getByText('推荐已失效，请重新发送问题。')).toBeVisible();
+  expect(service.send).not.toHaveBeenCalled();
+});
+
+
+it.each(['remove', 'pages'])('invalidates a recommendation when attachment %s changes', async change => {
+  let attachment: Record<string, unknown>;
+  const attachments = {
+    upload: vi.fn(async (file: File, id: string, groupId: string) => {
+      attachment = { id, groupId, name: file.name, mediaType: 'application/pdf', size: file.size, status: 'ready', pageCount: 8 };
+      return ok({ attachment });
+    }),
+    get: vi.fn(async () => ok({ attachment }))
+  };
+  render(<MemoryRouter><AssistantPanel api={{ assistant: service, skills, attachments } as unknown as ReadConsoleApi} open onClose={() => {}} width={430} onWidthChange={() => {}} onRunningChange={() => {}} /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  fireEvent.change(screen.getByLabelText('添加 PDF、MD 或 TXT 文件'), { target: { files: [new File(['fixture'], '附件.pdf', { type: 'application/pdf' })] } });
+  await screen.findByLabelText('附件.pdf 结束页');
+  fireEvent.change(screen.getByLabelText('发送给问问的消息'), { target: { value: '总结这些材料' } });
+  fireEvent.keyDown(screen.getByLabelText('发送给问问的消息'), { key: 'Enter' });
+  await screen.findByRole('button', { name: '使用此 Skill' });
+  if (change === 'remove') fireEvent.click(screen.getByRole('button', { name: '移除附件 附件.pdf' }));
+  else fireEvent.change(screen.getByLabelText('附件.pdf 结束页'), { target: { value: '3' } });
+  expect(screen.queryByRole('button', { name: '使用此 Skill' })).not.toBeInTheDocument();
+  expect(screen.getByText('推荐已失效，请重新发送问题。')).toBeVisible();
+  expect(service.send).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByLabelText('发送给问问的消息'), { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('button', { name: '不用' }));
+  await waitFor(() => expect(service.send).toHaveBeenCalledTimes(1));
+  const payload = service.send.mock.calls[0]![0];
+  if (change === 'remove') expect(payload.attachments).toBeUndefined();
+  else expect(payload.attachments).toEqual([expect.objectContaining({ endPage: 3 })]);
+});
+
+it('discards a pending match when the selected model changes', async () => {
+  const pending = deferred<ReturnType<typeof ok<{ candidates: SkillMatchCandidate[] }>>>();
+  skills.match.mockImplementationOnce(() => pending.promise);
+  service.providers.mockResolvedValue(ok({ providers: [{ ...provider, models: [...provider.models, { id: 'another-model', name: '另一个模型', reasoningEfforts: [] }] }] }));
+  render(<Harness />);
+  await waitFor(() => expect(screen.getByLabelText('模型')).toHaveValue('deepseek-v4-pro'));
+  fireEvent.change(screen.getByLabelText('发送给问问的消息'), { target: { value: '总结这些材料' } });
+  fireEvent.keyDown(screen.getByLabelText('发送给问问的消息'), { key: 'Enter' });
+  await screen.findByText('正在匹配适合的 Skill…');
+  fireEvent.change(screen.getByLabelText('模型'), { target: { value: 'another-model' } });
+  await act(async () => { pending.resolve(ok({ candidates: [] })); });
+  expect(service.send).not.toHaveBeenCalled();
+  expect(screen.getByText('推荐已失效，请重新发送问题。')).toBeVisible();
 });

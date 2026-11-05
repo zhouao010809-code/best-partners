@@ -11,20 +11,20 @@ function createPendingQueue({ store, send }) {
   async function deliverUnlocked(payload) {
     const validation = validateClipperPayload(payload);
     if (!validation.ok) throw new TypeError(validation.error);
+    // The service worker may stop while the native host is still responding.
+    // Commit the outbox first; the same packetId makes a replay idempotent.
     try {
-      const response = await send(payload);
-      if (response?.ok === false) throw new Error(response.error || 'Native host rejected the payload');
-      await store.remove(payload.packetId);
-      return response || { ok: true, packetId: payload.packetId };
-    } catch (error) {
-      try {
-        await store.save(payload);
-      } catch (persistError) {
-        await store.recordError(persistError).catch(() => undefined);
-        throw new Error(`发送失败，且无法保存待发送收藏：${persistError.message || persistError}`);
-      }
+      await store.save(payload);
+    } catch (persistError) {
+      await store.recordError(persistError).catch(() => undefined);
+      const error = new Error(`无法保存待发送收藏，尚未发送：${persistError.message || persistError}`);
+      error.queued = false;
       throw error;
     }
+    const response = await send(payload);
+    if (response?.ok === false) throw new Error(response.error || 'Native host rejected the payload');
+    await store.remove(payload.packetId);
+    return response || { ok: true, packetId: payload.packetId };
   }
 
   return {

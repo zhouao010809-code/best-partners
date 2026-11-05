@@ -1,5 +1,9 @@
+import { autoloopConnectionsResponseSchema, autoloopConnectionSaveResponseSchema, autoloopConnectionProbeResponseSchema, autoloopLifecycleResponseSchema, type AutoloopConnectionId, type AutoloopConnections, type AutoloopConnectionSaveInput, type AutoloopConnectionProbe } from '../../shared/api/autoloop-connections.js';
+import { autoloopConfigurationSchema, autoloopGlobalStateSchema, autoloopTraceSchema, autoloopTemplateSchema, autoloopTemplatesSchema, autoloopSavedSchema, autoloopEventResultSchema, autoloopManagementResponse, type AutoloopConfiguration, type AutoloopConfigurationInput, type AutoloopGlobalState, type AutoloopTrace, type AutoloopTemplate, type AutoloopEventInput, type AutoloopSaved } from '../../shared/api/autoloop-management.js';
 import { learningNoteListResponseSchema, learningNoteResponseSchema, type LearningNote, type LearningNoteList, type LearningNoteQuery, type LearningNoteSave } from '../../shared/api/learning-notes.js';
 import { z } from 'zod';
+import { autoloopChoicesResponseSchema, type AutoloopChoices, autoloopTaskListResponseSchema, autoloopTaskDetailResponseSchema, autoloopCreateResponseSchema, autoloopActionResponseSchema,
+  type AutoloopTaskList, type AutoloopTaskDetail, type AutoloopTask, type AutoloopCreateInput, type AutoloopAnswerInput } from '../../shared/api/autoloop.js';
 import { workdiskSearchResponseSchema, type WorkdiskSearchResponse } from '../../shared/api/workdisk-search.js';
 import { creativeProfileResponseSchema, type ProjectCreativeProfile, type CreativeProfileSave } from '../../shared/api/creative-profile.js';
 import { creationListResponseSchema, creationDetailResponseSchema, creationSuggestionResponseSchema, creationExportResponseSchema,
@@ -147,6 +151,34 @@ export interface KnowledgeQuery {
 }
 
 export interface ReadConsoleApi {
+  readonly autoloopConnections?: {
+    list(signal?: AbortSignal): Promise<ApiClientResult<AutoloopConnections>>;
+    save(id: AutoloopConnectionId, input: AutoloopConnectionSaveInput): Promise<ApiClientResult<{ ok: true; restartRequired: boolean }>>;
+    probe(id: AutoloopConnectionId): Promise<ApiClientResult<AutoloopConnectionProbe>>;
+    lifecycle(action: 'start' | 'restart' | 'stop'): Promise<ApiClientResult<{ ok: true; message: string }>>;
+  };
+  readonly autoloopManagement?: {
+    configuration(signal?: AbortSignal): Promise<ApiClientResult<AutoloopConfiguration>>;
+    saveConfiguration(input: AutoloopConfigurationInput): Promise<ApiClientResult<AutoloopSaved>>;
+    state(before?: number, signal?: AbortSignal): Promise<ApiClientResult<AutoloopGlobalState>>;
+    trace(id: number, signal?: AbortSignal): Promise<ApiClientResult<AutoloopTrace>>;
+    answer(id: number, input: { choice?: number; text?: string }): Promise<ApiClientResult<{ ok: true }>>;
+    resolve(id: number, reason: string): Promise<ApiClientResult<{ ok: true }>>;
+    cancel(id: number): Promise<ApiClientResult<{ ok: true }>>;
+    emit(input: AutoloopEventInput): Promise<ApiClientResult<z.infer<typeof autoloopEventResultSchema>>>;
+    trigger(name: string, id: string): Promise<ApiClientResult<z.infer<typeof autoloopEventResultSchema>>>;
+    templates(signal?: AbortSignal): Promise<ApiClientResult<z.infer<typeof autoloopTemplatesSchema>>>;
+    template(id: string, signal?: AbortSignal): Promise<ApiClientResult<AutoloopTemplate>>;
+    prepareTemplate(id: string): Promise<ApiClientResult<AutoloopTemplate>>;
+  };
+  readonly autoloop?: {
+    choices?(signal?: AbortSignal): Promise<ApiClientResult<AutoloopChoices>>;
+    list(signal?: AbortSignal): Promise<ApiClientResult<AutoloopTaskList>>;
+    get(id: string, signal?: AbortSignal): Promise<ApiClientResult<AutoloopTaskDetail>>;
+    create(input: AutoloopCreateInput): Promise<ApiClientResult<{ task: AutoloopTask }>>;
+    answer(id: string, input: AutoloopAnswerInput): Promise<ApiClientResult<{ ok: true }>>;
+    cancel(id: string): Promise<ApiClientResult<{ ok: true }>>;
+  };
   readonly creations?: {
     getProfile?(projectId: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectCreativeProfile>>;
     saveProfile?(projectId: string, input: CreativeProfileSave): Promise<ApiClientResult<ProjectCreativeProfile>>;
@@ -493,7 +525,36 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
   }
 
   const creationsPath = (projectId: string, id?: string) => `/api/v1/projects/${encodeURIComponent(projectId)}/creations${id ? `/${encodeURIComponent(id)}` : ''}`;
+  const autoloopPath = (id?: string) => `/api/v1/autoloop/tasks${id ? `/${encodeURIComponent(id)}` : ''}`;
   return {
+    autoloopConnections: {
+      list: signal => requestData(fetcher, '/api/v1/autoloop/connections', autoloopConnectionsResponseSchema, getInit(signal)),
+      save: (id, input) => postWithCsrf(`/api/v1/autoloop/connections/${encodeURIComponent(id)}/save`, autoloopConnectionSaveResponseSchema, input),
+      probe: id => postWithCsrf(`/api/v1/autoloop/connections/${encodeURIComponent(id)}/probe`, autoloopConnectionProbeResponseSchema, {}),
+      lifecycle: action => postWithCsrf('/api/v1/autoloop/lifecycle', autoloopLifecycleResponseSchema, { action })
+    },
+    autoloopManagement: {
+      configuration: signal => requestData(fetcher, '/api/v1/autoloop/manage/configuration', autoloopManagementResponse(autoloopConfigurationSchema), getInit(signal)),
+      saveConfiguration: input => postWithCsrf('/api/v1/autoloop/manage/configuration', autoloopManagementResponse(autoloopSavedSchema), input),
+      state: (before, signal) => requestData(fetcher, `/api/v1/autoloop/manage/state${before ? `?before=${before}` : ''}`, autoloopManagementResponse(autoloopGlobalStateSchema), getInit(signal)),
+      trace: (id, signal) => requestData(fetcher, `/api/v1/autoloop/manage/runs/${id}/trace`, autoloopManagementResponse(autoloopTraceSchema), getInit(signal)),
+      answer: (id, input) => postWithCsrf(`/api/v1/autoloop/manage/cards/${id}/answer`, autoloopActionResponseSchema, input),
+      resolve: (id, reason) => postWithCsrf(`/api/v1/autoloop/manage/cards/${id}/resolve`, autoloopActionResponseSchema, { reason }),
+      cancel: id => postWithCsrf(`/api/v1/autoloop/manage/runs/${id}/cancel`, autoloopActionResponseSchema, {}),
+      emit: input => postWithCsrf('/api/v1/autoloop/manage/events', autoloopManagementResponse(autoloopEventResultSchema), input),
+      trigger: (name, id) => postWithCsrf(`/api/v1/autoloop/manage/rules/${encodeURIComponent(name)}/trigger`, autoloopManagementResponse(autoloopEventResultSchema), { id }),
+      templates: signal => requestData(fetcher, '/api/v1/autoloop/manage/templates', autoloopManagementResponse(autoloopTemplatesSchema), getInit(signal)),
+      prepareTemplate: id => postWithCsrf(`/api/v1/autoloop/manage/templates/${encodeURIComponent(id)}/prepare`, autoloopManagementResponse(autoloopTemplateSchema), {}),
+      template: (id, signal) => requestData(fetcher, `/api/v1/autoloop/manage/templates/${encodeURIComponent(id)}`, autoloopManagementResponse(autoloopTemplateSchema), getInit(signal))
+    },
+    autoloop: {
+      choices: signal => requestData(fetcher, '/api/v1/autoloop/choices', autoloopChoicesResponseSchema, getInit(signal)),
+      list: signal => requestData(fetcher, autoloopPath(), autoloopTaskListResponseSchema, getInit(signal)),
+      get: (id, signal) => requestData(fetcher, autoloopPath(id), autoloopTaskDetailResponseSchema, getInit(signal)),
+      create: input => postWithCsrf(autoloopPath(), autoloopCreateResponseSchema, input),
+      answer: (id, input) => postWithCsrf(`${autoloopPath(id)}/answer`, autoloopActionResponseSchema, input),
+      cancel: id => postWithCsrf(`${autoloopPath(id)}/cancel`, autoloopActionResponseSchema, {})
+    },
     creations: {
       getProfile: (p, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(p)}/creative-profile`, creativeProfileResponseSchema, getInit(signal)),
       saveProfile: (p, input) => writeWithCsrf(`/api/v1/projects/${encodeURIComponent(p)}/creative-profile`, creativeProfileResponseSchema, 'PUT', JSON.stringify(input)),

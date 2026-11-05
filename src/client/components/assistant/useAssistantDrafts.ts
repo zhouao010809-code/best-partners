@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReadConsoleApi } from '../../api/client.js';
 import type { AssistantDraft, AssistantDraftFields } from '../../../shared/api/assistant-drafts.js';
 import type { AssistantConversation } from '../../../shared/api/assistant.js';
@@ -11,131 +11,172 @@ const fields = ({ id: _id, revision: _revision, ...value }: LocalDraft): Assista
 };
 const fingerprint = (draft: LocalDraft) => JSON.stringify({ id: draft.id, ...fields(draft) });
 
+type DraftContext = {
+  service: ReadConsoleApi['assistantDrafts'];
+  projectId: string | undefined;
+  current: LocalDraft;
+  drafts: AssistantDraft[];
+  acknowledged: string;
+  loaded: boolean;
+  loading: boolean;
+  saving: boolean;
+  error: string;
+  conflict: boolean;
+  notice: string;
+  sequence: number;
+  inFlight?: Promise<boolean> | undefined;
+};
+
 export function useAssistantDrafts(service: ReadConsoleApi['assistantDrafts'], projectId?: string) {
-  const [current, setCurrent] = useState<LocalDraft>(fresh);
-  const currentRef = useRef(current); currentRef.current = current;
-  const [drafts, setDrafts] = useState<AssistantDraft[]>([]);
-  const draftsRef = useRef(drafts); draftsRef.current = drafts;
-  const [loadedContext, setLoadedContext] = useState<{ service: ReadConsoleApi['assistantDrafts']; projectId: string | undefined }>();
-  // A bootstrap client or project switch must not expose the previous
-  // context's ready flag while its replacement request is still pending.
-  const ready = !service || Boolean(loadedContext?.service === service && loadedContext.projectId === projectId);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [conflict, setConflict] = useState(false);
-  const [notice, setNotice] = useState('');
-  const acknowledged = useRef(fingerprint(current));
-  const inFlight = useRef<Promise<boolean> | undefined>(undefined);
-  const mounted = useRef(true);
-  const loadSequence = useRef(0);
+  // A save owns its original context for its entire lifetime. Navigating away
+  // must not redirect its loop, acknowledgement, or failure into another draft.
+  const contexts = useRef(new Map<ReadConsoleApi['assistantDrafts'], Map<string | undefined, DraftContext>>());
+  const context = useMemo(() => {
+    let projects = contexts.current.get(service);
+    if (!projects) { projects = new Map(); contexts.current.set(service, projects); }
+    let entry = projects.get(projectId);
+    if (!entry) {
+      const blank = fresh();
+      const current = projectId === undefined ? blank : { ...blank, scope: 'project' as const, projectId };
+      entry = { service, projectId, current, drafts: [], acknowledged: fingerprint(current), loaded: !service, loading: false, saving: false, error: '', conflict: false, notice: '', sequence: 0 };
+      projects.set(projectId, entry);
+    }
+    return entry;
+  }, [service, projectId]);
+  const [, redraw] = useState(0);
+  const active = useRef(context); active.current = context;
+  const mounted = useRef(false);
+  const currentRef = useRef(context.current); currentRef.current = context.current;
+  const publish = useCallback((entry: DraftContext) => {
+    if (active.current === entry) {
+      currentRef.current = entry.current;
+      if (mounted.current) redraw(value => value + 1);
+    }
+  }, []);
+  const replace = useCallback((draft: LocalDraft) => { context.current = draft; publish(context); }, [context, publish]);
+  const update = useCallback((patch: Partial<AssistantDraftFields>) => { replace({ ...context.current, ...patch }); }, [context, replace]);
 
-  const replace = useCallback((draft: LocalDraft) => { currentRef.current = draft; setCurrent(draft); }, []);
-  const update = useCallback((patch: Partial<AssistantDraftFields>) => { replace({ ...currentRef.current, ...patch }); }, [replace]);
-  const load = useCallback(async (requestedProjectId = projectId) => {
-    setLoadedContext(undefined);
-    if (!service) return;
-    const sequence = ++loadSequence.current; setError('');
-    try {
-      const result = await service.list(undefined, requestedProjectId === undefined ? undefined : { projectId: requestedProjectId }); if (!mounted.current || sequence !== loadSequence.current) return;
-      if (!result.ok) { setError('state' in result ? result.state.message ?? '未能恢复本机草稿。' : '未能恢复本机草稿。'); return; }
-      setDrafts(result.value.drafts); draftsRef.current = result.value.drafts;
-      const active = result.value.drafts.find(item => item.id === result.value.activeId);
-      if (active) { replace(active); acknowledged.current = fingerprint(active); }
-      else {
-        const blank = fresh();
-        replace(requestedProjectId === undefined ? blank : { ...blank, scope: 'project', projectId: requestedProjectId });
-        acknowledged.current = fingerprint(currentRef.current);
-      }
-      setLoadedContext({ service, projectId: requestedProjectId });
-    } catch { if (mounted.current && sequence === loadSequence.current) setError('未能恢复本机草稿，请重新连接后重试。'); }
-  }, [projectId, service, replace]);
-  useEffect(() => { mounted.current = true; void load(); return () => { mounted.current = false; loadSequence.current += 1; }; }, [load]);
-
-  const flush = useCallback((): Promise<boolean> => {
-    if (!service) return Promise.resolve(true);
-    if (inFlight.current) return inFlight.current;
+  const flushContext = useCallback((entry: DraftContext): Promise<boolean> => {
+    if (!entry.service) return Promise.resolve(true);
+    if (entry.inFlight) return entry.inFlight;
     const request = (async () => {
-      setSaving(true);
+      entry.saving = true; publish(entry);
       try {
-        while (acknowledged.current !== fingerprint(currentRef.current)) {
-          const snapshot = currentRef.current;
-          const result = await service.save(snapshot.id, { ...fields(snapshot), expectedRevision: snapshot.revision, active: true });
+        while (entry.acknowledged !== fingerprint(entry.current)) {
+          const snapshot = entry.current;
+          const result = await entry.service!.save(snapshot.id, { ...fields(snapshot), expectedRevision: snapshot.revision, active: true });
           if (!result.ok) {
-            setConflict('code' in result && result.code === 'ASSISTANT_DRAFT_CONFLICT');
-            setError('state' in result ? result.state.message ?? '草稿尚未保存，请重试。' : '草稿尚未保存，请重试。'); return false;
+            entry.conflict = 'code' in result && result.code === 'ASSISTANT_DRAFT_CONFLICT';
+            entry.error = 'state' in result ? result.state.message ?? '草稿尚未保存，请重试。' : '草稿尚未保存，请重试。';
+            return false;
           }
           const saved = result.value.draft;
-          draftsRef.current = [saved, ...draftsRef.current.filter(item => item.id !== saved.id)]; setDrafts(draftsRef.current);
-          acknowledged.current = fingerprint(snapshot);
-          if (currentRef.current.id === snapshot.id) replace({ ...currentRef.current, revision: saved.revision });
+          entry.drafts = [saved, ...entry.drafts.filter(item => item.id !== saved.id)];
+          entry.acknowledged = fingerprint(snapshot);
+          if (entry.current.id === snapshot.id) entry.current = { ...entry.current, revision: saved.revision };
         }
-        setError(''); setConflict(false); return true;
-      } catch { setError('草稿尚未保存到本机，文字仍在此处。请重试后再切换对话。'); return false; }
-      finally { setSaving(false); }
+        entry.error = ''; entry.conflict = false; return true;
+      } catch { entry.error = '草稿尚未保存到本机，文字仍在此处。请重试后再切换对话。'; return false; }
+      finally { entry.saving = false; publish(entry); }
     })();
-    inFlight.current = request;
-    void request.finally(() => { if (inFlight.current === request) inFlight.current = undefined; });
+    entry.inFlight = request;
+    void request.finally(() => { if (entry.inFlight === request) entry.inFlight = undefined; });
     return request;
-  }, [service, replace]);
+  }, [publish]);
+  const flush = useCallback(() => flushContext(context), [context, flushContext]);
 
+  const load = useCallback(async (requestedProjectId = projectId) => {
+    if (!service || requestedProjectId !== context.projectId) return;
+    const sequence = ++context.sequence;
+    context.loading = true; publish(context);
+    try {
+      // Wait for this project's outgoing save, including one started when the
+      // user navigated away. Failed local edits remain recoverable in memory.
+      if (context.inFlight) await context.inFlight;
+      const result = await service.list(undefined, requestedProjectId === undefined ? undefined : { projectId: requestedProjectId });
+      if (sequence !== context.sequence) return;
+      if (!result.ok) {
+        context.error = 'state' in result ? result.state.message ?? '未能恢复本机草稿。' : '未能恢复本机草稿。';
+        return;
+      }
+      context.drafts = result.value.drafts;
+      if (context.acknowledged === fingerprint(context.current)) {
+        const selected = result.value.drafts.find(item => item.id === result.value.activeId);
+        const blank = fresh();
+        context.current = selected ?? (requestedProjectId === undefined ? blank : { ...blank, scope: 'project', projectId: requestedProjectId });
+        context.acknowledged = fingerprint(context.current);
+        context.error = ''; context.conflict = false;
+      }
+      context.loaded = true;
+    } catch { if (sequence === context.sequence) context.error = '未能恢复本机草稿，请重新连接后重试。'; }
+    finally { if (sequence === context.sequence) { context.loading = false; publish(context); } }
+  }, [context, projectId, service, publish]);
+
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    if (!ready || !service || acknowledged.current === fingerprint(current)) return;
+    void load();
+    return () => { context.sequence++; context.loading = false; void flushContext(context); };
+  }, [context, load, flushContext]);
+  const ready = !service || (context.loaded && !context.loading);
+  const current = context.current;
+  useEffect(() => {
+    if (!ready || !service || context.acknowledged === fingerprint(current)) return;
     const timer = setTimeout(() => void flush(), 300); return () => clearTimeout(timer);
-  }, [current, ready, service, flush]);
+  }, [context, current, ready, service, flush]);
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!service || acknowledged.current === fingerprint(currentRef.current)) return;
-      void flush(); event.preventDefault(); event.returnValue = '';
+      const unsaved = [...contexts.current.values()].flatMap(projects => [...projects.values()])
+        .filter(entry => entry.service && entry.acknowledged !== fingerprint(entry.current));
+      if (!unsaved.length) return;
+      for (const entry of unsaved) void flushContext(entry);
+      event.preventDefault(); event.returnValue = '';
     };
     window.addEventListener('beforeunload', beforeUnload); return () => window.removeEventListener('beforeunload', beforeUnload);
-  }, [service, flush]);
+  }, [flushContext]);
 
   const select = useCallback(async (next: LocalDraft): Promise<boolean> => {
-    if (!await flush()) return false;
-    if (next.id === currentRef.current.id) next = currentRef.current;
-    replace(next); acknowledged.current = ''; setNotice('');
-    // Flush also records which draft should be restored after a full app restart.
-    await flush(); return true;
-  }, [flush, replace]);
+    if (!await flush() || active.current !== context) return false;
+    if (next.id === context.current.id) next = context.current;
+    replace(next); context.acknowledged = ''; context.notice = '';
+    // Also records which draft should be restored after a full app restart.
+    const saved = await flush();
+    return saved && active.current === context;
+  }, [context, flush, replace]);
   async function newDraft(text = '', attachments: AssistantDraftFields['attachments'] = [], learning?: Pick<AssistantDraftFields, 'purpose' | 'selection' | 'scope' | 'contextPath' | 'conversationId'>): Promise<boolean> {
-    const current = currentRef.current;
     return select({
       ...fresh(), text, attachments,
       ...(projectId ? {
         scope: 'project', projectId,
-        ...(current.projectId === projectId && current.projectRevision !== undefined ? { projectRevision: current.projectRevision } : {})
+        ...(context.current.projectId === projectId && context.current.projectRevision !== undefined ? { projectRevision: context.current.projectRevision } : {})
       } : learning ?? {})
     });
   }
   const enterProject = useCallback(async (id: string, sourceRevision: number): Promise<boolean> => {
-    // A reconnect or confirmed output can arrive while the user is typing.
-    // Persist the current local draft before loading the server's project
-    // snapshot, otherwise the snapshot could replace text not yet covered by
-    // the debounce autosave.
-    if (!await flush()) return false;
+    if (id !== context.projectId || !await flush() || active.current !== context) return false;
     if (service) await load(id);
-    const existing = draftsRef.current.find(item => item.projectId === id);
+    if (active.current !== context) return false;
+    const existing = context.current.projectId === id ? context.current : context.drafts.find(item => item.projectId === id);
     const next: LocalDraft = existing
       ? { ...existing, scope: 'project', projectId: id, projectRevision: sourceRevision, contextPath: undefined }
       : { ...fresh(), scope: 'project', projectId: id, projectRevision: sourceRevision };
-    if (next.id === currentRef.current.id) {
-      if (!await flush()) return false;
-      replace(next); acknowledged.current = ''; setNotice('');
+    if (next.id === context.current.id) {
+      replace(next); context.acknowledged = ''; context.notice = '';
       return flush();
     }
     return select(next);
-  }, [flush, load, select, service]);
+  }, [context, flush, load, replace, select, service]);
   async function forConversation(value: AssistantConversation): Promise<boolean> {
-    const existing = draftsRef.current.find(item => item.conversationId === value.id);
-    // An existing empty selection represents an explicit removal. Only recover
-    // the last sent snapshot when no draft exists for this conversation.
+    const existing = context.drafts.find(item => item.conversationId === value.id);
     const attachments = (value.messages.filter(item => item.role === 'user').at(-1)?.attachments ?? []).map(item => ({ id: item.id, ...(item.startPage ? { startPage: item.startPage } : {}), ...(item.endPage ? { endPage: item.endPage } : {}) }));
     return select(existing ?? { ...fresh(), conversationId: value.id, scope: value.scope, attachments, ...(value.contextPath ? { contextPath: value.contextPath } : {}), ...(value.projectId ? { projectId: value.projectId } : {}), ...(value.projectRevision !== undefined ? { projectRevision: value.projectRevision } : {}), ...(value.purpose ? { purpose: value.purpose } : {}), ...(value.selection ? { selection: value.selection } : {}) });
   }
   async function saveAsCopy(): Promise<boolean> {
-    if (inFlight.current) await inFlight.current;
-    replace({ ...currentRef.current, id: crypto.randomUUID(), revision: 0 }); acknowledged.current = '';
-    const saved = await flush(); if (saved) setNotice('已另存当前草稿；其他窗口的版本也保留在草稿列表中。'); return saved;
+    if (context.inFlight) await context.inFlight;
+    if (active.current !== context) return false;
+    replace({ ...context.current, id: crypto.randomUUID(), revision: 0 }); context.acknowledged = '';
+    const saved = await flush();
+    if (saved) { context.notice = '已另存当前草稿；其他窗口的版本也保留在草稿列表中。'; publish(context); }
+    return saved;
   }
-  return { current, currentRef, drafts, ready, saving, dirty: acknowledged.current !== fingerprint(current), error, conflict, notice, update, flush, load, select, newDraft, enterProject, forConversation, saveAsCopy };
+  return { current, currentRef, drafts: context.drafts, ready, saving: context.saving, dirty: context.acknowledged !== fingerprint(current), error: context.error, conflict: context.conflict, notice: context.notice, update, flush, load, select, newDraft, enterProject, forConversation, saveAsCopy };
 }

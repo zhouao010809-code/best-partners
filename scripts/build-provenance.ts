@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import type { BigIntStats } from 'node:fs';
-import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -208,12 +208,29 @@ async function verifyPackagedIdentity(appRoot: string, repository: string, manif
     if (iconRecord.size === 0) throw Error('PACKAGED_IDENTITY_CHANGED');
   } catch { throw Error('PACKAGED_IDENTITY_CHANGED'); }
 }
-export async function verifyPackagedDesktop(appRoot: string, repository = rootDirectory) {
+// Signing changes Mach-O bytes after packaging. Update assets still need the
+// exact recorded build identity; the release command separately verifies the
+// staged bundle's Developer ID signature and notarization.
+async function verifyPackagedBuildManifest(appRoot: string, repository = rootDirectory) {
   const result = await verifyBuildManifest(repository);
   const manifest = await loadManifest(repository);
   const resources = join(appRoot, 'Contents', 'Resources');
   const embedded = manifestSchema.parse(JSON.parse(await readFile(join(resources, 'build-manifest.json'), 'utf8')));
   if (JSON.stringify(embedded) !== JSON.stringify(manifest)) throw Error('PACKAGED_MANIFEST_CHANGED');
+  return result;
+}
+async function isArm64MachO(path: string): Promise<boolean> {
+  const file = await open(path, 'r');
+  try {
+    const header = Buffer.alloc(8);
+    const { bytesRead } = await file.read(header, 0, header.length, 0);
+    return bytesRead === 8 && header.readUInt32LE(0) === 0xfeedfacf && header.readUInt32LE(4) === 0x0100000c;
+  } finally { await file.close(); }
+}
+export async function verifyPackagedDesktop(appRoot: string, repository = rootDirectory, options: { allowNativeSignatures?: boolean } = {}) {
+  const result = await verifyPackagedBuildManifest(appRoot, repository);
+  const manifest = await loadManifest(repository);
+  const resources = join(appRoot, 'Contents', 'Resources');
   const actualPaths: string[] = [];
   for (const [, packaged] of DISTRIBUTION_DIRECTORIES) actualPaths.push(...await filesUnder(resources, packaged));
   for (const [, packaged] of DISTRIBUTION_FILES) {
@@ -222,7 +239,14 @@ export async function verifyPackagedDesktop(appRoot: string, repository = rootDi
   if (JSON.stringify(actualPaths.sort()) !== JSON.stringify(manifest.artifacts.map((item) => item.packagedPath).sort())) throw Error('PACKAGED_ARTIFACT_CHANGED');
   for (const item of manifest.artifacts) {
     const actual = await fileRecord(resources, item.packagedPath);
-    if (actual.size !== item.size || actual.sha256 !== item.sha256) throw Error('PACKAGED_ARTIFACT_CHANGED');
+    if (actual.size === item.size && actual.sha256 === item.sha256) continue;
+    // codesign mutates native Mach-O files, never JS, HTML, migrations, or other
+    // data. Only these recorded native binaries may differ, and they must still
+    // be arm64 Mach-O files. Formal update publication additionally requires a
+    // valid Developer ID signature covering the complete staged bundle.
+    if (options.allowNativeSignatures && item.path.startsWith('dist/native/')
+      && await isArm64MachO(join(repository, item.path)) && await isArm64MachO(join(resources, item.packagedPath))) continue;
+    throw Error('PACKAGED_ARTIFACT_CHANGED');
   }
   await verifyPackagedIdentity(appRoot, repository, manifest);
   return { ...result, artifactScope: manifest.coverage.artifacts, dependencyScope: manifest.coverage.dependencies,

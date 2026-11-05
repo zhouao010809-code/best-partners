@@ -93,7 +93,7 @@ describe('company project ingestion', () => {
     const before = await readFile(join(source, '说明.md'));
 
     const staged = await stageProjectSource({ sourceRoot: source, incomingRoot: incoming, runId: 'run-1' });
-    expect(await readFile(join(staged.stagingRoot, '说明.md'), 'utf8')).toBe('原始内容');
+    expect(await readFile(join(staged.stagingRoot, 'raw', '说明.md'), 'utf8')).toBe('原始内容');
     expect(await readFile(join(source, '说明.md'))).toEqual(before);
     expect(JSON.parse(await readFile(staged.manifestPath, 'utf8'))).toMatchObject({
       sourceRoot: await realpath(source),
@@ -110,8 +110,25 @@ describe('company project ingestion', () => {
     await writeFile(join(source, '说明.md'), '内容');
 
     const staged = await stageProjectSource({ sourceRoot: source, incomingRoot: incoming, runId: 'run-1' });
-    expect(await readFile(join(staged.stagingRoot, '说明.md'), 'utf8')).toBe('内容');
+    expect(await readFile(join(staged.stagingRoot, 'raw', '说明.md'), 'utf8')).toBe('内容');
     await expect(stageProjectSource({ sourceRoot: incoming, incomingRoot: incoming, runId: 'run-2' })).rejects.toThrow(/contain incoming|overlap/i);
+  });
+
+  it('keeps user manifest and raw-directory names separate from staging metadata', async () => {
+    const base = await fixture();
+    const source = join(base, 'source');
+    const incoming = join(base, 'incoming');
+    await mkdir(join(source, 'raw'), { recursive: true });
+    await mkdir(incoming);
+    const original = '{"userData":true}';
+    await writeFile(join(source, 'source-manifest.json'), original);
+    await writeFile(join(source, 'raw', 'source-manifest.json'), 'nested original');
+
+    const staged = await stageProjectSource({ sourceRoot: source, incomingRoot: incoming, runId: 'manifest-run' });
+    expect(await readFile(join(staged.stagingRoot, 'raw', 'source-manifest.json'), 'utf8')).toBe(original);
+    expect(await readFile(join(staged.stagingRoot, 'raw', 'raw', 'source-manifest.json'), 'utf8')).toBe('nested original');
+    expect(JSON.parse(await readFile(staged.manifestPath, 'utf8'))).toMatchObject({ version: 2, sourceSha256: staged.proposal.sourceSha256 });
+    expect(await readFile(join(source, 'source-manifest.json'), 'utf8')).toBe(original);
   });
 
   it('cleans only the run staging directory when a copy fails', async () => {
@@ -148,6 +165,6 @@ describe('company project ingestion', () => {
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
     expect(await readdir(incoming)).toEqual(['same-run']);
-    expect(await readFile(join(incoming, 'same-run', 'source-manifest.json'), 'utf8')).toContain('"version": 1');
+    expect(await readFile(join(incoming, 'same-run', 'source-manifest.json'), 'utf8')).toContain('"version": 2');
   });
 });

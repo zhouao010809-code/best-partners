@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -250,4 +250,74 @@ it.each(['completed', 'failed', 'stale', 'cancelled', 'running'] as const)('noti
       expect((updates.mock.calls[0]![0] as CustomEvent).detail).toEqual({ projectId: project.id, savedFile: { operationId: action.id, relativePath: 'AI工作区/实际结果.md', problem: next.problem } });
     } else expect(updates).not.toHaveBeenCalled();
   } finally { window.removeEventListener(PROJECT_WORKSPACE_UPDATED_EVENT, updates); }
+});
+
+
+it('ignores an old project send response after the current project changes', async () => {
+  const secondId = '33c7a1d4-7cbf-4e92-9c64-ad175aa17d18';
+  projects.get.mockImplementation(async (id: string) => ok({ ...project, id, displayName: id === project.id ? '项目A' : '项目B' }));
+  let finishFirst!: (value: unknown) => void;
+  assistant.send.mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }));
+  const panel = (id: string) => <MemoryRouter><AssistantPanel api={api} projectId={id} open onClose={() => {}} width={430} onWidthChange={() => {}} onRunningChange={onRunningChange} /></MemoryRouter>;
+  const view = render(panel(project.id));
+  await screen.findByText('项目A', { exact: true });
+  await waitFor(() => expect(screen.getByLabelText('发送给问问的消息')).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('发送给问问的消息'), { target: { value: 'A的问题' } });
+  fireEvent.keyDown(screen.getByLabelText('发送给问问的消息'), { key: 'Enter' });
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledTimes(1));
+  view.rerender(panel(secondId));
+  await screen.findByText('项目B', { exact: true });
+  await act(async () => { finishFirst(ok({ id: '11c7a1d4-7cbf-4e92-9c64-ad175aa17d18', title: 'A回复', createdAt: '2026-09-09T06:00:00Z', updatedAt: '2026-09-09T06:00:01Z', status: 'idle', providerId: 'deepseek', model: 'deepseek-v4-pro', scope: 'project', projectId: project.id, projectRevision: 7, messages: [{ id: 'old-reply', role: 'assistant', text: '只有项目A的回答', sources: [], actions: [] }] })); });
+  expect(screen.queryByText('只有项目A的回答')).not.toBeInTheDocument();
+});
+
+
+it.each(['new', 'open'] as const)('keeps project B locked when an old project %s-draft save finishes', async operation => {
+  const secondId = '33c7a1d4-7cbf-4e92-9c64-ad175aa17d18';
+  const makeDraft = (projectId: string, text: string): AssistantDraft => ({ id: crypto.randomUUID(), revision: 1, text, groupId: crypto.randomUUID(), attachments: [], scope: 'project', projectId, projectRevision: 7, updatedAt: '2026-11-05', lastActive: '2026-11-05' });
+  const first = makeDraft(project.id, 'A原草稿'), alternate = makeDraft(project.id, 'A备用草稿'), second = makeDraft(secondId, '');
+  const records = new Map([first, alternate, second].map(item => [item.id, item]));
+  const activeIds = new Map([[project.id, first.id], [secondId, second.id]]);
+  let holdA = false;
+  let releaseSave!: () => void;
+  const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+  const assistantDrafts = {
+    list: vi.fn(async (_signal?: AbortSignal, query?: { projectId?: string | undefined }) => ok({ drafts: [...records.values()].filter(item => item.projectId === query?.projectId), activeId: activeIds.get(query?.projectId ?? '') })),
+    save: vi.fn(async (id: string, input: AssistantDraftSave) => {
+      if (holdA && input.projectId === project.id) await saveGate;
+      const { expectedRevision, active: _active, ...fields } = input;
+      const draft: AssistantDraft = { ...fields, id, revision: expectedRevision + 1, updatedAt: '2026-11-05', lastActive: '2026-11-05' };
+      records.set(id, draft); activeIds.set(input.projectId!, id); return ok({ draft });
+    }), delete: vi.fn()
+  };
+  const client = { ...api, assistantDrafts } as ReadConsoleApi;
+  projects.get.mockImplementation(async (id: string) => ok({ ...project, id, displayName: id === project.id ? '项目A' : '项目B' }));
+  let finishSend!: (value: unknown) => void;
+  assistant.send.mockImplementationOnce(() => new Promise(resolve => { finishSend = resolve; }));
+  const panel = (id: string) => <MemoryRouter><AssistantPanel api={client} projectId={id} open onClose={() => {}} width={430} onWidthChange={() => {}} onRunningChange={onRunningChange} /></MemoryRouter>;
+  const view = render(panel(project.id));
+  await screen.findByText('项目A', { exact: true });
+  await screen.findByText('草稿已保留在本机 · 新对话会保留旧记录');
+  holdA = true;
+  assistantDrafts.save.mockClear();
+  if (operation === 'new') fireEvent.click(screen.getByRole('button', { name: '新对话' }));
+  else {
+    fireEvent.click(screen.getByRole('button', { name: '历史对话' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'A备用草稿' }));
+  }
+  await waitFor(() => expect(assistantDrafts.save).toHaveBeenCalledTimes(1));
+  view.rerender(panel(secondId));
+  await screen.findByText('项目B', { exact: true });
+  const returnToConversation = screen.queryByRole('button', { name: '返回对话' });
+  if (returnToConversation) fireEvent.click(returnToConversation);
+  await waitFor(() => expect(screen.getByLabelText('发送给问问的消息')).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('发送给问问的消息'), { target: { value: 'B的问题' } });
+  fireEvent.keyDown(screen.getByLabelText('发送给问问的消息'), { key: 'Enter' });
+  await waitFor(() => expect(assistant.send).toHaveBeenCalledTimes(1));
+  expect(screen.getByLabelText('发送给问问的消息')).toBeDisabled();
+  await act(async () => { releaseSave(); });
+  expect(screen.getByLabelText('发送给问问的消息')).toBeDisabled();
+  expect(screen.getByRole('button', { name: '正在发送' })).toBeDisabled();
+  await act(async () => { finishSend(ok({ id: crypto.randomUUID(), title: 'B回答', createdAt: '2026-11-05', updatedAt: '2026-11-05', status: 'idle', providerId: 'deepseek', model: 'deepseek-v4-pro', scope: 'project', projectId: secondId, projectRevision: 7, messages: [] })); });
+  expect(screen.getByLabelText('发送给问问的消息')).toBeEnabled();
 });

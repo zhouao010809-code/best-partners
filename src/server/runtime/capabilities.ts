@@ -1,3 +1,6 @@
+import type { AutoloopManagementService } from '../../shared/api/autoloop-management.js';
+import type { AutoloopConnectionsService } from '../../shared/api/autoloop-connections.js';
+import type { AutoloopService } from '../../shared/api/autoloop.js';
 import type { ProjectCreationService } from '../../shared/api/project-creations.js';
 import type Database from 'better-sqlite3';
 import type { AssistantAdapter } from '../assistant/types.js';
@@ -28,6 +31,9 @@ export interface RuntimeReadCapabilities {
 }
 
 export interface RuntimePersonalCapabilities {
+  readonly autoloopService?: AutoloopService;
+  readonly autoloopManagementService?: AutoloopManagementService;
+  readonly autoloopConnectionsService?: AutoloopConnectionsService;
   readonly attachmentService?: AttachmentService;
   readonly extractionService?: ExtractionService;
   readonly ingestionService?: IngestionService;
@@ -58,6 +64,9 @@ export interface RuntimeCapabilities {
 }
 
 export interface RuntimeCapabilityHost {
+  readonly autoloopService?: AutoloopService;
+  readonly autoloopManagementService?: AutoloopManagementService;
+  readonly autoloopConnectionsService?: AutoloopConnectionsService;
   readonly capabilities?: RuntimeCapabilities;
   readonly runtimeMode?: 'personal' | 'company';
   readonly companyRuntime?: CompanyRuntime;
@@ -96,6 +105,9 @@ export function applyRuntimeCapabilities<T extends RuntimeCapabilityHost>(option
     healthService: capabilities.health,
     readApi: capabilities.read,
     assistantAdapters: capabilities.assistant?.adapters,
+    autoloopService: personal?.autoloopService,
+    autoloopManagementService: personal?.autoloopManagementService,
+    autoloopConnectionsService: personal?.autoloopConnectionsService,
     attachmentService: personal?.attachmentService,
     extractionService: personal?.extractionService,
     ingestionService: personal?.ingestionService,

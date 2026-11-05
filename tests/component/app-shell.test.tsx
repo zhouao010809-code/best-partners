@@ -30,6 +30,7 @@ const MAIN_NAVIGATION_NAMES = [
   '知识库',
   '我的项目',
   'Skill 库',
+  '自动任务',
   '操作与恢复',
   '设置'
 ] as const;
@@ -235,7 +236,7 @@ describe('black-glass application shell', () => {
 
     const navigation = screen.getByRole('navigation', { name: '主导航' });
     const links = within(navigation).getAllByRole('link');
-    expect(links).toHaveLength(10);
+    expect(links).toHaveLength(11);
     expect(links.map((link) => link.textContent?.trim())).toEqual(MAIN_NAVIGATION_NAMES);
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
       '/',
@@ -246,6 +247,7 @@ describe('black-glass application shell', () => {
       '/knowledge',
       '/projects',
       '/skills',
+      '/autoloop',
       '/operations',
       '/settings'
     ]);
@@ -255,6 +257,14 @@ describe('black-glass application shell', () => {
     setPath('/workdisk'); render(<App />);
     expect(screen.getByLabelText('当前模式：文件保存在本地')).toHaveTextContent('本地保存');
     expect(screen.getByText('本地文件工作台')).toBeVisible();
+  });
+
+  it.each(['/autoloop', '/autoloop/'])('opens %s as a writable task workspace with its own navigation', (path) => {
+    setPath(path); render(<App />);
+    expect(screen.getByRole('heading', { level: 1, name: '自动任务' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '自动任务' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByText('本地自动任务')).toBeVisible();
+    expect(screen.queryByLabelText('当前模式：只读')).not.toBeInTheDocument();
   });
 
   it('keeps the icon-only recycle link discoverable outside the main navigation', async () => {
@@ -291,6 +301,7 @@ describe('black-glass application shell', () => {
     ['/knowledge/', '知识库'],
     ['/skills/', 'Skill 库'],
     ['/operations/', '操作与恢复'],
+    ['/autoloop/', '自动任务'],
     ['/settings/', '设置'],
     ['/connections/', '设置']
   ])('normalizes the canonical page identity for %s', (path, heading) => {
@@ -309,7 +320,7 @@ describe('black-glass application shell', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
     const navigation = screen.getByRole('navigation', { name: '主导航' });
-    expect(within(navigation).getAllByRole('link')).toHaveLength(10);
+    expect(within(navigation).getAllByRole('link')).toHaveLength(11);
     expect(within(navigation).queryByText(heading)).not.toBeInTheDocument();
   });
 

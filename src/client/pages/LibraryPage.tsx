@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ArrowLeft, ArrowRight, ChevronRight, FileText, Folders, History, Inbox, LibraryBig, ListFilter, RefreshCw, Search, X } from 'lucide-react';
-import { Link, Navigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import type { KnowledgeStatus } from '../../shared/domain/records.js';
 import type { TrashEntry } from '../../shared/api/trash.js';
 import type { LiveDocumentDetail, MaterialPage } from '../api/client.js';
@@ -120,13 +120,28 @@ function LibraryMaterials({ revision, sessionKey }: { revision: number; sessionK
   const searchScope = params.get('scope') === 'all' || !folder ? 'all' : 'current';
   const status = STATUSES.find((value) => value === params.get('status'));
   const [title, setTitle] = useState(urlTitle);
+  const navigationType = useNavigationType();
+  const previousTitle = useRef(urlTitle);
+  const submittedTitles = useRef<string[]>([]);
   const applied = useMemo<LibraryQuery>(() => ({ mode, path: searchScope === 'all' ? '' : folder, limit: 200,
     ...(status ? { status } : {}), ...(urlTitle.trim() ? { title: urlTitle.trim() } : {})
   }), [mode, folder, status, urlTitle, searchScope]);
-  useEffect(() => setTitle(urlTitle), [urlTitle]);
+  useEffect(() => {
+    if (previousTitle.current === urlTitle) return;
+    previousTitle.current = urlTitle;
+    const submitted = navigationType === 'REPLACE' ? submittedTitles.current.indexOf(urlTitle) : -1;
+    if (submitted >= 0) {
+      // Keep input entered after this local submission while its URL update commits.
+      submittedTitles.current.splice(0, submitted + 1);
+      return;
+    }
+    submittedTitles.current = [];
+    setTitle(urlTitle);
+  }, [urlTitle, navigationType]);
   const applyTitle = useCallback(() => {
     if (title.trim() === urlTitle.trim()) { if (title.trim()) vault.open(); return; }
     vault.open();
+    submittedTitles.current.push(title.trim());
     setParams(current => { const next = new URLSearchParams(current);
       if (title.trim()) next.set('title', title.trim()); else next.delete('title');
       next.delete('path'); return next;

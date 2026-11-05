@@ -9,7 +9,7 @@ import { createNativeReadVaultPortFactory } from '../server/vault/NativeReadVaul
 import { FileSystemVaultGateway } from '../server/vault/FileSystemVaultGateway.js';
 import type { StartedServer } from '../server/start-server.js';
 import { createModelKeyStore } from './model-key-store.js';
-import { changeDesktopVault } from './vault-selection.js';
+import { changeDesktopVault, createDesktopVaultSwitch } from './vault-selection.js';
 import { chooseProjectDirectory, validateProjectSelection } from './project-selection.js';
 import { createDesktopVaultNavigation } from './vault-navigation.js';
 import { validateAssistantLoginUrl } from './assistant-login.js';
@@ -44,6 +44,8 @@ let projectChoosing = false;
 let updateController: ReturnType<typeof createUpdateController> | undefined;
 let installRequested = false;
 let closeWorkdisk: (() => Promise<void>) | undefined;
+let vaultSwitch: ReturnType<typeof createDesktopVaultSwitch> | undefined;
+let relaunchRequested = false;
 
 function createMainWindow(origin: string): BrowserWindow {
   const policy = createDesktopWindowPolicy(origin);
@@ -66,6 +68,7 @@ function createMainWindow(origin: string): BrowserWindow {
     // Respect an editor's veto. Do not leave the update button stuck in restart.
     installRequested = false;
     updateController?.installCancelled();
+    vaultSwitch?.cancel();
   });
   return created;
 }
@@ -154,6 +157,10 @@ async function bootstrap(): Promise<void> {
     return;
   }
   await saveDesktopSettings({ userDataDir, config: settings });
+  vaultSwitch = createDesktopVaultSwitch({
+    save: config => saveDesktopSettings({ userDataDir, config }),
+    requestQuit: () => { setTimeout(() => app.quit(), 250); }
+  });
   const skillCatalog = createSkillCatalogService({ skillsRoot: join(settings.vaultRoot, '.claude', 'skills') });
   const gateway = await FileSystemVaultGateway.create({
     vaultRoot: settings.vaultRoot, nativeReader,
@@ -279,12 +286,14 @@ async function bootstrap(): Promise<void> {
   const clipperConfigPath = join(userDataDir, 'clipper-bridge.json');
   ipcMain.handle('desktop:open-clipper-install', async (event) => {
     assertMainSender(event);
-    const readme = join(process.resourcesPath, 'clipper-extension', 'README.md');
-    await shell.openPath(readme);
+    const readme = app.isPackaged ? join(process.resourcesPath, 'clipper-extension', 'README.md')
+      : join(import.meta.dirname, '../../browser-extension/README.md');
+    if (await shell.openPath(readme)) throw new Error('无法打开浏览器插件安装说明，请检查应用文件是否完整。');
   });
   ipcMain.handle('desktop:install-clipper-host', async (event) => {
     assertMainSender(event);
-    await installClipperHost({ executablePath: process.execPath, configPath: clipperConfigPath, vaultRoot: settings.vaultRoot });
+    await installClipperHost({ executablePath: process.execPath, configPath: clipperConfigPath, vaultRoot: settings.vaultRoot,
+      ...(process.defaultApp ? { appEntry: join(import.meta.dirname, 'main.js') } : {}) });
   });
   ipcMain.handle('desktop:clipper-status', async (event) => {
     assertMainSender(event);
@@ -311,8 +320,7 @@ async function bootstrap(): Promise<void> {
           });
           return result.response === 0;
         },
-        save: (config) => saveDesktopSettings({ userDataDir, config }),
-        restart: () => { setTimeout(() => { app.relaunch(); app.quit(); }, 250); }
+        switchVault: config => vaultSwitch!.request(config)
       });
     } catch { throw new Error('大脑文件夹设置未能保存，请重试。'); }
     finally { choosing = false; }
@@ -352,9 +360,14 @@ app.on('will-quit', (event) => {
   quitState = 'closing';
   const finishQuit = () => {
     quitState = 'ready';
-    setImmediate(() => { if (installRequested) autoUpdater.quitAndInstall(); else app.quit(); });
+    setImmediate(() => {
+      if (installRequested) autoUpdater.quitAndInstall();
+      else { if (relaunchRequested) app.relaunch(); app.quit(); }
+    });
   };
   void (async () => {
+    try { relaunchRequested = await vaultSwitch?.commit() ?? false; }
+    catch { dialog.showErrorBox('大脑设置未能保存', '应用将关闭，本次切换未完成。请重新打开后再试。'); }
     try { await closeWorkdisk?.(); } finally { await started?.close(); }
   })().then(finishQuit, finishQuit);
 });
@@ -366,7 +379,12 @@ autoUpdater.on('error', () => {
   dialog.showErrorBox('更新未能安装', '应用已保存并关闭。请重新打开最佳拍档，再检查更新或下载安装包。');
   app.quit();
 });
-app.on('second-instance', () => { if (window?.isMinimized()) window.restore(); window?.focus(); });
+app.on('second-instance', () => {
+  // Service shutdown can outlive the window while the instance lock is still held.
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  window.focus();
+});
 
 const isClipperHost = process.argv.includes('--clipper-host');
 if (!isClipperHost) void bootstrap().catch(async () => {

@@ -16,6 +16,7 @@ import { buildExtractionSystemPrompt, extractionValidationProblem, normalizeExtr
 import { createExtractionQueueService, type ExtractionQueueService } from './extraction-queue-service.js';
 import { assertMaterialAvailableForExtraction } from './material-visibility.js';
 import { canContinuePartialExtraction } from './extraction-coverage.js';
+import { assertSourcePreparationCapacity } from '../ingestion/source-capacity.js';
 
 const PREVIEW_LIFETIME_MS = 10 * 60 * 1000;
 const SOURCE_LIMIT_BYTES = 100_000;
@@ -145,6 +146,7 @@ export function createExtractionService(input: {
     const record = parseLibraryNoteForRead(raw.bytes, materialPath).record;
     if (!record || record.processingStatus !== '已归档' || !(record.knowledgeStatus === '未提炼'
       || record.knowledgeStatus === '部分入库' && canContinuePartialExtraction(db, materialPath))) throw new PublicApiError('SOURCE_NOT_ELIGIBLE', '请选择已归档的未提炼资料，或选区候选已处理完、仍需继续提炼的资料。', 400);
+    assertSourcePreparationCapacity(Buffer.from(raw.bytes));
     const manifest = input.repository.getManifestEntry(materialPath);
     if (!manifest || manifest.kind !== 'material' || manifest.rawSha256 !== sha256Bytes(raw.bytes)) throw new PublicApiError('PREVIEW_STALE', '资料索引尚未跟上原文，请刷新后重新预览。', 409);
     // Keep the BOM for absolute UTF-16 ranges; whole-source prompts retain their previous BOM-free content.

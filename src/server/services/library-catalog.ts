@@ -2,7 +2,7 @@ import type { LibraryPage, LibraryQuery } from '../../shared/api/library.js';
 import type { KnowledgeRecord, MaterialRecord } from '../../shared/domain/records.js';
 import { PublicApiError } from '../../shared/api/errors.js';
 import { normalizeVaultPath } from '../security/vault-path.js';
-import { normalizeWikiLinkList } from '../rules/wikilinks.js';
+import { normalizeWikiLinkTargets } from '../rules/wikilinks.js';
 
 type Identity = { kind: 'material' | 'knowledge'; path: string; title: string };
 type Candidates<T> = Map<string, Map<string, T>>;
@@ -59,10 +59,7 @@ function unique<T>(candidates: Candidates<T>, key: string): T | undefined {
 }
 
 function references(values: readonly string[]): string[] {
-  return normalizeWikiLinkList(values).flatMap((value) => {
-    const target = value.split(/[#^]/u, 1)[0]!.trim().normalize('NFC');
-    return !target || target.length > 1024 || unsafeText(target) ? [] : [target];
-  });
+  return normalizeWikiLinkTargets(values).filter(target => target.length <= 1024 && !unsafeText(target));
 }
 
 function knowledgeDirectory(path: string): string {

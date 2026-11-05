@@ -289,6 +289,20 @@ it('drills through real topic folders and returns without summing overlapping co
   expect(await screen.findByRole('button', { name: '打开 AI' })).toBeVisible();
 });
 
+it('preserves a newer archive search when the previous submission reaches the URL', async () => {
+  render(<MemoryRouter initialEntries={['/library?title=已有查询']}><LibraryPage /><NavigationProbe /></MemoryRouter>);
+  await openVault();
+  const input = screen.getByRole('searchbox', {name: '资料标题'});
+  fireEvent.change(input, {target: {value: '旧查询'}});
+  act(() => {
+    fireEvent.submit(screen.getByRole('search'));
+    fireEvent.change(input, {target: {value: '刚输入的新查询'}});
+  });
+  expect(input).toHaveValue('刚输入的新查询');
+  await waitFor(() => expect(runtime.api.listLibrary).toHaveBeenLastCalledWith(expect.objectContaining({title: '刚输入的新查询'}), expect.any(AbortSignal)));
+  expect(new URLSearchParams(screen.getByLabelText('地址').textContent ?? '').get('title')).toBe('刚输入的新查询');
+});
+
 it('restores URL filters including empty title through history and resets folder on view switch', async () => {
   const user = userEvent.setup();
   runtime.api.listLibrary = vi.fn(async (query) => ok(page([], { mode: query.mode ?? 'topic', path: query.path ?? '', breadcrumbs: query.path ? [{ path: '', label: '全部资料' }, { path: query.path, label: 'AI' }] : [{ path: '', label: '全部资料' }] })));
@@ -307,6 +321,38 @@ it('restores URL filters including empty title through history and resets folder
   expect(search.has('folder')).toBe(false); expect(search.has('path')).toBe(false);
   await user.clear(screen.getByLabelText('资料标题'));
   await waitFor(() => expect(runtime.api.listLibrary).toHaveBeenLastCalledWith({ mode: 'source', path: '', status: '部分入库', limit: 200 }, expect.any(AbortSignal)));
+});
+
+it('restores archive searches from browser history after a local submission', async () => {
+  render(<MemoryRouter initialEntries={['/library?title=历史查询', '/library?title=当前查询']}><LibraryPage /><NavigationProbe /></MemoryRouter>);
+  await openVault();
+  const input = screen.getByRole('searchbox', {name: '资料标题'});
+  fireEvent.change(input, {target: {value: '本次提交'}});
+  fireEvent.submit(screen.getByRole('search'));
+  await waitFor(() => expect(new URLSearchParams(screen.getByLabelText('地址').textContent ?? '').get('title')).toBe('本次提交'));
+  fireEvent.change(input, {target: {value: '未提交草稿'}});
+  fireEvent.click(screen.getByRole('button', {name: '浏览器返回'}));
+  await waitFor(() => expect(input).toHaveValue('历史查询'));
+  fireEvent.click(screen.getByRole('button', {name: '浏览器前进'}));
+  await waitFor(() => expect(input).toHaveValue('本次提交'));
+});
+
+it('preserves new archive input across a REPLACE to PUSH navigation with an unchanged title query', async () => {
+  function RootProbe() {
+    const navigate = useNavigate();
+    return <><button onClick={() => navigate('/library?mode=source&folder=来自个人&scope=all', {replace: true})}>准备返回导航</button><button onClick={() => navigate('/library')}>回到档案根目录</button></>;
+  }
+  runtime.api.listLibrary = vi.fn(async query => ok(page([], {mode: query.mode ?? 'topic', path: query.path ?? '', breadcrumbs: query.path ? [{path: '', label: '全部资料'}, {path: query.path, label: '个人'}] : [{path: '', label: '全部资料'}]})));
+  render(<MemoryRouter initialEntries={['/library?mode=source&folder=来自个人']}><LibraryPage /><RootProbe /></MemoryRouter>);
+  await openVault();
+  fireEvent.click(screen.getByRole('button', {name: '准备返回导航'}));
+  const input = screen.getByRole('searchbox', {name: '资料标题'});
+  act(() => {
+    fireEvent.click(screen.getByRole('button', {name: '回到档案根目录'}));
+    fireEvent.change(input, {target: {value: '还没有主题'}});
+  });
+  expect(input).toHaveValue('还没有主题');
+  await waitFor(() => expect(runtime.api.listLibrary).toHaveBeenLastCalledWith(expect.objectContaining({path: '', title: '还没有主题'}), expect.any(AbortSignal)));
 });
 
 it('refreshes on health index changes and offers a way out of disappeared folders', async () => {

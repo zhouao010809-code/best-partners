@@ -62,6 +62,25 @@ function fixture(now:()=>Date=()=>new Date()) {
     counts:()=>({moves,restores}),purges:()=>purges,setFailPurge:(v:boolean)=>{failPurge=v;},setFailAfterPurge:()=>{failAfterPurge=true;},setFailAfterMove:()=>{failAfterMove=true;},setFailSourceStat:(v:boolean)=>{failSourceStat=v;},setRefresh:(v:boolean)=>{refreshOk=v;},setRules:(v:string)=>{rules=v;},pauseRules:()=>{let release!:()=>void;ruleWait=new Promise<void>((resolve)=>{release=resolve;});return release;}};
 }
 
+it.each(['来自个人/2026-09/原文', '来自个人/2026-09/原文.md', '[[来自个人/2026-09/原文#章节|出处]]', '[[原文^段落]]'])('keeps relative source references visible during recycle and deletion: %s', async (reference) => {
+  const f = fixture();
+  f.repository.replaceFile({ kind: 'knowledge', record: { ...f.repository.getKnowledge(f.knowledgePath)!, sourceMaterials: [reference] } });
+  const preview = await f.service.preview(source);
+  expect(preview.referencedKnowledge).toEqual([{ path: f.knowledgePath, title: '知识' }]);
+  await f.service.commit(preview.id);
+  expect((await f.service.previewDelete(preview.id)).referencedKnowledge).toEqual(preview.referencedKnowledge);
+});
+
+it('conservatively reports ambiguous bare titles but excludes an explicit different relative path', async () => {
+  const f = fixture();
+  f.repository.replaceFile({ kind: 'knowledge', record: { ...f.repository.getKnowledge(f.knowledgePath)!, sourceMaterials: ['[[原文]]'] } });
+  const other = '01图书馆/来自个人/别处/原文.md';
+  f.repository.replaceFile({ kind: 'material', record: { path: other, title: '原文', rawSha256: hash(original), processingStatus: '已归档', knowledgeStatus: '未提炼', generatedKnowledge: [], sourcePlatform: '个人' } });
+  expect((await f.service.preview(source)).referencedKnowledge).toHaveLength(1);
+  f.repository.replaceFile({ kind: 'knowledge', record: { ...f.repository.getKnowledge(f.knowledgePath)!, sourceMaterials: ['来自个人/别处/原文'] } });
+  expect((await f.service.preview(source)).referencedKnowledge).toEqual([]);
+});
+
 it('persists queue origin through preview, immutable intent, restart, deletion preview and restore',async()=>{
   const f=fixture();const preview=await f.service.preview(source,'queue');
   expect(preview).toMatchObject({origin:'queue'});

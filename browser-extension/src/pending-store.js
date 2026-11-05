@@ -62,8 +62,10 @@ function createPendingStore({ storage = globalThis.chrome?.storage?.local, datab
   }
   return {
     async list() { return database.list(); },
-    async save(payload) { await database.put(payload); await syncState(); },
-    async remove(packetId) { await database.remove(packetId); await syncState(); },
+    // IndexedDB is the outbox. A derived badge/counter failure must not turn a
+    // committed insert into "not queued", or a committed delete into a retry.
+    async save(payload) { await database.put(payload); await syncState().catch(() => undefined); },
+    async remove(packetId) { await database.remove(packetId); await syncState().catch(() => undefined); },
     async recordError(error) { await syncState(error); }
   };
 }

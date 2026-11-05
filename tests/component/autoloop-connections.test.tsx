@@ -1,0 +1,44 @@
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { AutoloopConnections } from '../../src/client/components/autoloop/AutoloopConnections.js';
+const { client } = vi.hoisted(() => ({ client: { list: vi.fn(), save: vi.fn(), probe: vi.fn(), lifecycle: vi.fn() } }));
+vi.mock('../../src/client/app/ConsoleRuntime.js', () => ({ useConsoleRuntime: () => ({ api: { autoloopConnections: client } }) }));
+const ok = <T,>(value: T) => ({ ok: true as const, value });
+const item = { id: 'slack', name: 'Slack', kind: 'channel', enabled: true, configured: true, status: 'configured', secretConfigured: true, settings: {}, message: '配置已保存，可进行只读检查。' };
+beforeEach(() => { vi.resetAllMocks(); client.list.mockResolvedValue(ok({ connections: [item], restartRequired: false })); client.save.mockResolvedValue(ok({ ok: true, restartRequired: true })); });
+afterEach(cleanup);
+it('shows configuration separately from verified connection and does not probe or send automatically', async () => {
+  render(<AutoloopConnections />);
+  expect(await screen.findByText('配置已保存')).toBeInTheDocument();
+  expect(screen.queryByText('检查通过')).not.toBeInTheDocument();
+  expect(client.probe).not.toHaveBeenCalled(); expect(client.save).not.toHaveBeenCalled(); expect(client.lifecycle).not.toHaveBeenCalled();
+  client.probe.mockResolvedValue(ok({ id: 'slack', ok: false, message: '尚未验证送达', checks: [{ name: 'delivery', ok: false, message: '此检查不会发送消息。' }] }));
+  fireEvent.click(screen.getByRole('button', { name: '检查 Slack' }));
+  expect(await screen.findByText('尚未验证送达')).toBeInTheDocument();
+  expect(screen.queryByText('检查通过')).not.toBeInTheDocument();
+});
+it('omits empty secrets, preserves a failed credential draft and clears it after success', async () => {
+  client.save.mockResolvedValueOnce({ ok: false, state: { status: 'operation-error', message: '暂时无法保存' } }).mockResolvedValue(ok({ ok: true, restartRequired: true }));
+  render(<AutoloopConnections />);
+  fireEvent.click(await screen.findByRole('button', { name: '配置 Slack' }));
+  expect(screen.getByLabelText('机器人 Webhook 地址')).toHaveAttribute('type', 'password');
+  expect(screen.getByLabelText('机器人 Webhook 地址')).toHaveValue('');
+  fireEvent.click(screen.getByRole('button', { name: '保存连接' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('暂时无法保存');
+  expect(client.save).toHaveBeenNthCalledWith(1, 'slack', { enabled: true });
+  fireEvent.change(screen.getByLabelText('机器人 Webhook 地址'), { target: { value: 'https://hooks.slack.com/services/new-token' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存连接' }));
+  await waitFor(() => expect(client.save).toHaveBeenNthCalledWith(2, 'slack', { enabled: true, url: 'https://hooks.slack.com/services/new-token' }));
+  await waitFor(() => expect(screen.queryByLabelText('机器人 Webhook 地址')).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole('button', { name: '配置 Slack' }));
+  expect(screen.getByLabelText('机器人 Webhook 地址')).toHaveValue('');
+});
+it('stops service only after an explicit confirmation', async () => {
+  client.lifecycle.mockResolvedValue(ok({ ok: true, message: '已停止' }));
+  render(<AutoloopConnections />);
+  await screen.findByText('Slack');
+  fireEvent.click(screen.getByRole('button', { name: '停止服务' }));
+  expect(client.lifecycle).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '确认停止服务' }));
+  await waitFor(() => expect(client.lifecycle).toHaveBeenCalledExactlyOnceWith('stop'));
+});

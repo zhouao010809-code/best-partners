@@ -2,13 +2,12 @@ import { createHash } from 'node:crypto';
 import {
   lstat,
   mkdir,
-  readFile,
+  open,
   readdir,
   rm,
-  stat,
   writeFile
 } from 'node:fs/promises';
-import { lstatSync, realpathSync } from 'node:fs';
+import { constants, lstatSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import type Database from 'better-sqlite3';
 import { ulid } from 'ulid';
@@ -302,25 +301,30 @@ function latestSnapshots(rows: readonly SnapshotRow[]): SnapshotRow[] {
 function aggregate(rows: readonly SnapshotRow[]): { totals: CompanyMetricValues; contentCount: number } {
   const totals: Record<string, number> = {};
   const contentIds = new Set<string>();
-  const followerByAccount = new Map<string, number>();
+  const followerByAccount = new Map<string, { row: SnapshotRow; value: number }>();
+  // Followers describe an account observation, not a content lifetime total.
+  // Keep the latest business date, even if an older export was imported later.
+  for (const row of rows) {
+    const value = parseSnapshotMetrics(row).followers;
+    if (value === undefined || !row.account_ref) continue;
+    const key = `${row.platform}\0${row.account_ref}`;
+    const existing = followerByAccount.get(key)?.row;
+    if (!existing || existing.metric_date < row.metric_date
+      || (existing.metric_date === row.metric_date && (existing.observed_at < row.observed_at
+        || (existing.observed_at === row.observed_at && existing.id < row.id)))) followerByAccount.set(key, { row, value });
+  }
   for (const row of latestSnapshots(rows)) {
     contentIds.add(`${row.platform}\0${row.content_id}`);
     const metrics = parseSnapshotMetrics(row);
     for (const [key, rawValue] of Object.entries(metrics)) {
       if (typeof rawValue !== 'number') continue;
-      if (key === 'followers') {
-        // The same account label can legitimately exist on multiple
-        // platforms.  Keep those populations independent when producing the
-        // workspace-wide projection.
-        const account = `${row.platform}\0${row.account_ref ?? `content:${row.content_id}`}`;
-        followerByAccount.set(account, Math.max(followerByAccount.get(account) ?? 0, rawValue));
-      } else {
+      if (key !== 'followers') {
         addMetric(totals, key, rawValue);
       }
     }
   }
   if (followerByAccount.size > 0) {
-    totals.followers = [...followerByAccount.values()].reduce((sum, value) => sum + value, 0);
+    for (const { value } of followerByAccount.values()) addMetric(totals, 'followers', value);
   }
   return { totals: (Object.keys(totals).length === 0 ? {} : normalizeMetrics(totals)) as CompanyMetricValues, contentCount: contentIds.size };
 }
@@ -430,18 +434,41 @@ export function createCompanyMetricsService(options: CompanyMetricsServiceOption
 
   async function stableBytes(path: string): Promise<Uint8Array> {
     await assertSecureSource(path);
-    const before = await stat(path);
+    const before = await lstat(path);
     if (!before.isFile()) throw new PublicApiError('COMPANY_METRICS_FILE_INVALID', 'Metrics source is not a file', 400);
-    const bytes = await readFile(path);
-    if (stabilityDelayMs > 0) await new Promise<void>(resolvePromise => setTimeout(resolvePromise, stabilityDelayMs));
-    // Re-check the path components after the stability window as well.  A
-    // file can be replaced by a symlink while an operator is copying it.
-    await assertSecureSource(path);
-    const after = await stat(path);
-    if (!after.isFile() || before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
-      throw new MetricsImportError('COMPANY_METRICS_FILE_CHANGED', '导出文件仍在写入，请稍后重试。');
+    const checkSize = (size: number) => {
+      if (size > COMPANY_METRICS_MAX_BYTES) throw new MetricsImportError('COMPANY_METRICS_TOO_LARGE', '导入文件不能超过 20 MiB。');
+    };
+    checkSize(before.size);
+    const changed = () => new MetricsImportError('COMPANY_METRICS_FILE_CHANGED', '导出文件仍在写入，请稍后重试。');
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw changed();
+      checkSize(opened.size);
+      if (opened.size !== before.size || opened.mtimeMs !== before.mtimeMs || opened.ctimeMs !== before.ctimeMs) throw changed();
+      // One extra byte detects growth without ever allocating or reading an
+      // unbounded export, including a file being appended during this read.
+      const bytes = Buffer.alloc(opened.size + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length);
+        if (!bytesRead) break;
+        length += bytesRead;
+      }
+      checkSize(length);
+      if (stabilityDelayMs > 0) await new Promise<void>(resolvePromise => setTimeout(resolvePromise, stabilityDelayMs));
+      await assertSecureSource(path);
+      const after = await handle.stat();
+      const current = await lstat(path);
+      checkSize(after.size); checkSize(current.size);
+      if (length !== opened.size || !current.isFile() || current.dev !== opened.dev || current.ino !== opened.ino
+        || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs
+        || current.size !== opened.size || current.mtimeMs !== opened.mtimeMs || current.ctimeMs !== opened.ctimeMs) throw changed();
+      return bytes.subarray(0, length);
+    } finally {
+      await handle.close();
     }
-    return bytes;
   }
 
   async function copyRaw(bytes: Uint8Array, platform: CompanyPlatform, projectId: string, sourceHash: string, originalName: string): Promise<string> {
@@ -484,7 +511,10 @@ export function createCompanyMetricsService(options: CompanyMetricsServiceOption
       SELECT * FROM company_platform_metric_imports
       WHERE workspace_id = ? AND project_id = ? AND source_sha256 = ?
     `).get(options.workspace.id, input.projectId, input.sourceHash) as ImportRow | undefined;
-    if (existing !== undefined) return rowToImport(existing);
+    if (existing !== undefined) {
+      if (existing.platform !== input.platform) throw new PublicApiError('COMPANY_METRICS_SOURCE_CONFLICT', '相同文件已绑定到另一个平台，请核对文件来源后重试。', 409);
+      return rowToImport(existing);
+    }
     const id = makeId();
     options.database.prepare(`
       INSERT INTO company_platform_metric_imports (
@@ -529,6 +559,7 @@ export function createCompanyMetricsService(options: CompanyMetricsServiceOption
       ORDER BY created_at DESC LIMIT 1
     `).get(options.workspace.id, source.projectId, sourceHash) as ImportRow | undefined;
     if (sameProject !== undefined) {
+      if (sameProject.platform !== source.platform) throw new PublicApiError('COMPANY_METRICS_SOURCE_CONFLICT', '相同文件已绑定到另一个平台，请核对文件来源后重试。', 409);
       return sameProject.state === 'failed' || sameProject.state === 'conflict'
         ? rowToImport(sameProject)
         : rowToImport(sameProject, 'duplicate');
@@ -638,6 +669,7 @@ export function createCompanyMetricsService(options: CompanyMetricsServiceOption
           ORDER BY created_at DESC LIMIT 1
         `).get(options.workspace.id, source.projectId, sourceHash) as ImportRow | undefined;
         if (duplicate !== undefined) {
+          if (duplicate.platform !== source.platform) throw new PublicApiError('COMPANY_METRICS_SOURCE_CONFLICT', '相同文件已绑定到另一个平台，请核对文件来源后重试。', 409);
           return duplicate.state === 'failed' || duplicate.state === 'conflict'
             ? rowToImport(duplicate)
             : rowToImport(duplicate, 'duplicate');

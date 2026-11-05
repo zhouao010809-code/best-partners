@@ -4,6 +4,7 @@ import { knowledgeContentDraftSchema } from './knowledge-content.js';
 
 const path = z.string().min(1).max(1024);
 const sha = z.string().regex(/^[a-f0-9]{64}$/u);
+export const INGESTION_IMAGE_MAX_CHARACTERS = 500_000;
 export const candidateDraftSchema = z.strictObject({
   title: z.string().max(300), knowledgeType: z.enum(['概念', '原理', '模型', '方法', 'SOP', '标准', '案例', '数据', '观点', '素材']),
   suggestedPath: z.string().max(1024), topics: z.array(z.string().max(512)).max(20),
@@ -16,7 +17,7 @@ export const reviewCandidateSchema = z.strictObject({
   committedPath: path.optional(), batchId: z.uuid().optional()
 });
 export const ingestionFileSchema = z.strictObject({
-  path, kind: z.enum(['new', 'update', 'source']), before: z.string().max(500_000).nullable(), after: z.string().max(500_000), preserved: z.string().max(500_000).optional()
+  path, kind: z.enum(['new', 'update', 'source']), before: z.string().max(INGESTION_IMAGE_MAX_CHARACTERS).nullable(), after: z.string().max(INGESTION_IMAGE_MAX_CHARACTERS), preserved: z.string().max(INGESTION_IMAGE_MAX_CHARACTERS).optional()
 });
 export const ingestionBatchSchema = z.strictObject({
   id: z.uuid(), runId: z.uuid(), status: z.enum(['writing', 'committed', 'needs-review']), indexed: z.boolean(),

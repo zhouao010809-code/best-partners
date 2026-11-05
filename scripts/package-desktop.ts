@@ -1,6 +1,6 @@
 import { packager } from '@electron/packager';
 import { rebuild } from '@electron/rebuild';
-import { cp, mkdir } from 'node:fs/promises';
+import { cp, mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { verifyBuildManifest, verifyPackagedDesktop } from './build-provenance.js';
 
@@ -9,12 +9,15 @@ if (process.platform !== 'darwin' || process.arch !== 'arm64') {
 }
 
 await verifyBuildManifest();
+const { devDependencies: { electron: electronVersion } } = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as {
+  devDependencies: { electron: string };
+};
 
 const paths = await packager({
   ...(process.env.XIAOZHAO_ELECTRON_ZIP_DIR ? { electronZipDir: resolve(process.env.XIAOZHAO_ELECTRON_ZIP_DIR) } : {}),
   dir: resolve('.'), out: resolve('dist/desktop'), name: '最佳拍档',
   appBundleId: 'local.xiaozhao.brain', platform: 'darwin', arch: 'arm64',
-  electronVersion: '44.1.0', overwrite: true, asar: false,
+  electronVersion, overwrite: true, asar: false,
   icon: resolve('assets/best-partners-icon.icns'),
   ignore: (path) => {
     if (path === '') return false;

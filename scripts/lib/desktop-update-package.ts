@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { verifyPackagedDesktop } from '../build-provenance.js';
 
 export type UpdatePackageMode = 'preview' | 'release';
 export type UpdatePackageCommand = (command: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>;
@@ -87,6 +88,7 @@ export async function packageDesktopUpdate(input: {
     await run('/usr/bin/ditto', [app, stagedApp]);
     await assertBundleVersion(stagedApp, version, run);
     if (input.mode === 'release') await assertReleaseIdentity(stagedApp, run);
+    await verifyPackagedDesktop(stagedApp, root, { allowNativeSignatures: input.mode === 'release' });
     await symlink('/Applications', join(diskContents, 'Applications'));
     const dmg = `best-partners-${version}-arm64.dmg`;
     await run('/usr/bin/hdiutil', ['create', '-volname', '最佳拍档', '-srcfolder', diskContents, '-format', 'UDZO', '-fs', 'HFS+', join(assetsRoot, dmg)]);

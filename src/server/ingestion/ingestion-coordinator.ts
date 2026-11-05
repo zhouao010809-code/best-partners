@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { PersonalIngestionPort } from './ingestion-native.js';
-import { ingestionFileSchema, ingestionPreviewSchema } from '../../shared/api/ingestion.js';
+import { INGESTION_IMAGE_MAX_CHARACTERS, ingestionFileSchema, ingestionPreviewSchema } from '../../shared/api/ingestion.js';
 import { sha256Bytes } from '../vault/raw-bytes.js';
 import { parseFrontmatter } from '../rules/frontmatter.js';
 import { parseKnowledgeNote } from '../rules/knowledge-schema.js';
@@ -13,8 +13,8 @@ const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 export const ingestionPlanSchema = z.strictObject({
   version: z.literal(1), id: z.uuid(), journalId: z.uuid(), runId: z.uuid(), materialPath: z.string().max(1024),
   root: z.strictObject({ dev: z.string(), ino: z.string() }), ruleFingerprint: z.string(), reviewStamp: z.string(),
-  sourceBefore: z.string().max(500_000), sourceAfter: z.string().max(500_000),
-  sourceEvidenceBefore: z.string().max(500_000).optional(),
+  sourceBefore: z.string().max(INGESTION_IMAGE_MAX_CHARACTERS), sourceAfter: z.string().max(INGESTION_IMAGE_MAX_CHARACTERS),
+  sourceEvidenceBefore: z.string().max(INGESTION_IMAGE_MAX_CHARACTERS).optional(),
   recoveryReadSet: z.array(z.strictObject({
     path: z.string().max(1024), stageId: z.uuid(), expectedSha256: sha256Schema.nullable(),
     beforeSha256: sha256Schema.nullable(), afterSha256: sha256Schema

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { ArrowLeft, CalendarClock, CheckCircle2, Database, FileText, RefreshCw, ShieldQuestion, Upload } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
@@ -33,6 +33,10 @@ function metricValue(value: number | undefined): string {
 
 export function CompanyProjectDetailPage(): ReactElement {
   const { id } = useParams();
+  return <CompanyProjectDetail key={id} id={id} />;
+}
+
+function CompanyProjectDetail({ id }: { id: string | undefined }): ReactElement {
   const { api, session } = useCompanyRuntime();
   const [project, setProject] = useState<CompanyProject>();
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading');
@@ -42,21 +46,27 @@ export function CompanyProjectDetailPage(): ReactElement {
   const [selectedFile, setSelectedFile] = useState<File>();
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'success' | 'failed'>('idle');
   const [uploadMessage, setUploadMessage] = useState<string>();
+  const request = useRef<AbortController | undefined>(undefined);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; request.current?.abort(); }; }, []);
   const canImportMetrics = session?.user.role === 'owner' || session?.user.role === 'operator';
 
   const load = useCallback(async (): Promise<void> => {
     if (!id) { setState('failed'); setMessage('项目编号缺失。'); return; }
+    request.current?.abort();
+    const controller = new AbortController(); request.current = controller;
     setState('loading');
     const [result, metricsResult] = await Promise.all([
-      api.projects.get(id),
-      api.metrics === undefined ? Promise.resolve(undefined) : api.metrics.project(id)
+      api.projects.get(id, controller.signal),
+      api.metrics === undefined ? Promise.resolve(undefined) : api.metrics.project(id, controller.signal)
     ]);
+    if (controller.signal.aborted || !alive.current) return;
     if (!result.ok) {
       if (isCancelled(result)) return;
       setState('failed'); setMessage(result.state.message); return;
     }
     setProject(result.value);
-    if (metricsResult?.ok) setMetrics(metricsResult.value);
+    setMetrics(metricsResult?.ok ? metricsResult.value : undefined);
     setState('ready');
   }, [api, id]);
   useEffect(() => { void load(); }, [load]);
@@ -70,6 +80,7 @@ export function CompanyProjectDetailPage(): ReactElement {
     setUploadState('uploading');
     setUploadMessage(undefined);
     const result = await api.metrics.upload(id, selectedPlatform, selectedFile);
+    if (!alive.current) return;
     if (!result.ok) {
       if (isCancelled(result)) {
         setUploadState('idle');

@@ -1,0 +1,47 @@
+import { z } from 'zod';
+import { API_VERSION } from './schemas.js';
+import { autoloopConnectionSchema } from './autoloop.js';
+
+const words = z.array(z.string().min(1));
+const filter = z.strictObject({ source: z.string().min(1), types: words.min(1) });
+export const autoloopRuleSchema = z.strictObject({ name: z.string().min(1), when: z.union([filter, z.strictObject({ cron: z.string().min(1) })]), to: z.string().min(1), cwd: z.string().min(1), skill: z.string().optional(), prompt: z.string().optional(), group: z.string().optional(), parallel: z.number().int().positive().optional(), tell: z.enum(['always', 'needed', 'never']).optional(), emits: filter.optional() });
+export const autoloopAgentSchema = z.strictObject({ name: z.string().min(1), worker: z.string().min(1), use: z.string().min(1), model: z.string().optional(), effort: z.string().optional(), command: words.optional(), timeout: z.number().int().positive().optional(), access: z.enum(['read', 'edit', 'full']).optional() });
+export const autoloopDocumentSchema = z.strictObject({ timezone: z.string().optional(), askFirst: words.optional(), sources: z.record(z.string(), z.strictObject({ name: z.string().min(1), adapter: z.string().optional() })), agents: z.record(z.string(), autoloopAgentSchema), channels: z.record(z.string(), z.strictObject({ name: z.string().min(1), answerers: words.optional(), links: z.boolean().optional() })).optional(), rules: z.array(autoloopRuleSchema), elsewhere: z.array(z.strictObject({ name: z.string().min(1), source: z.string().min(1), to: z.string().min(1), cron: z.string().min(1), where: z.string().min(1) })).optional() });
+export const autoloopConfigurationSchema = z.strictObject({ revision: z.string(), document: autoloopDocumentSchema, disabledRules: z.array(autoloopRuleSchema), localWorker: z.string().nullable() });
+export const autoloopConfigurationInputSchema = z.strictObject({ revision: z.string().min(1), document: autoloopDocumentSchema, disabledRules: z.array(autoloopRuleSchema).default([]) });
+export const autoloopSavedSchema = z.strictObject({ revision: z.string(), loaded: z.boolean(), message: z.string() });
+const row = z.record(z.string(), z.unknown());
+export const autoloopGlobalStateSchema = z.strictObject({ connection: autoloopConnectionSchema, now: z.string(), timezone: z.string(), totals: row, spending: row, cards: z.array(row), recentCards: z.array(row), agents: z.array(row), channels: z.array(row), sources: z.array(row), lines: z.array(row), elsewhere: z.array(row), runs: z.array(row), nextBefore: z.number().int().positive().nullable(), unrouted: z.array(row) });
+export const autoloopTraceSchema = z.strictObject({ runId: z.number().int().positive(), timeline: z.array(z.strictObject({ seq: z.number(), at: z.string(), type: z.string(), text: z.string() })) });
+export const autoloopEventInputSchema = z.strictObject({ id: z.string().min(1).max(200), type: z.string().regex(/^[a-z][a-z0-9_.-]{0,63}$/u), subject: z.string().regex(/^[a-zA-Z0-9#._:/@-]*$/u).max(500).optional(), summary: z.string().max(2000).optional(), detail: z.string().max(100000).optional() });
+export const autoloopEventResultSchema = z.strictObject({ event: z.number().int(), duplicate: z.boolean(), routed: words });
+export const autoloopTemplateSummarySchema = z.strictObject({ id: z.string(), name: z.string(), description: z.string() });
+export const autoloopTemplateSchema = autoloopTemplateSummarySchema.extend({ readme: z.string(), rules: z.unknown().nullable() });
+export const autoloopTemplatesSchema = z.strictObject({ templates: z.array(autoloopTemplateSummarySchema) });
+export const autoloopManageAnswerSchema = z.strictObject({ choice: z.number().int().nonnegative().optional(), text: z.string().trim().min(1).max(4000).optional() }).refine(value => value.choice !== undefined || value.text !== undefined);
+export const autoloopResolveSchema = z.strictObject({ reason: z.string().trim().min(1).max(4000) });
+export const autoloopManagementResponse = <T extends z.ZodType>(data: T) => z.strictObject({ version: z.literal(API_VERSION), data });
+export type AutoloopRule = z.infer<typeof autoloopRuleSchema>;
+export type AutoloopAgent = z.infer<typeof autoloopAgentSchema>;
+export type AutoloopDocument = z.infer<typeof autoloopDocumentSchema>;
+export type AutoloopConfiguration = z.infer<typeof autoloopConfigurationSchema>;
+export type AutoloopConfigurationInput = z.infer<typeof autoloopConfigurationInputSchema>;
+export type AutoloopGlobalState = z.infer<typeof autoloopGlobalStateSchema>;
+export type AutoloopTrace = z.infer<typeof autoloopTraceSchema>;
+export type AutoloopTemplate = z.infer<typeof autoloopTemplateSchema>;
+export type AutoloopEventInput = z.infer<typeof autoloopEventInputSchema>;
+export type AutoloopSaved = z.infer<typeof autoloopSavedSchema>;
+export interface AutoloopManagementService {
+  state(before?: number): Promise<AutoloopGlobalState>;
+  configuration(): Promise<AutoloopConfiguration>;
+  save(input: AutoloopConfigurationInput): Promise<AutoloopSaved>;
+  trace(runId: number): Promise<AutoloopTrace>;
+  answer(cardId: number, input: z.infer<typeof autoloopManageAnswerSchema>): Promise<{ ok: true }>;
+  resolve(cardId: number, reason: string): Promise<{ ok: true }>;
+  cancel(runId: number): Promise<{ ok: true }>;
+  event(input: AutoloopEventInput): Promise<z.infer<typeof autoloopEventResultSchema>>;
+  trigger(name: string, id: string): Promise<z.infer<typeof autoloopEventResultSchema>>;
+  templates(): Promise<z.infer<typeof autoloopTemplatesSchema>>;
+  template(id: string): Promise<AutoloopTemplate>;
+  prepareTemplate(id: string): Promise<AutoloopTemplate>;
+}

@@ -1,6 +1,10 @@
+import { createAutoloopService } from '../autoloop/service.js';
 import { createProjectCreationService } from '../projects/project-creations.js';
 import type { ProjectCreationService } from '../../shared/api/project-creations.js';
 import { basename, join } from 'node:path';
+import { homedir } from 'node:os';
+import { createAutoloopManagementService } from '../autoloop/management-service.js';
+import { createAutoloopConnectionsService } from '../autoloop/connections-service.js';
 import { openStateKernel } from '../db/database.js';
 import { type IndexRefreshAttempt } from '../index/index-scheduler.js';
 import type { ModelCredentialsPort } from '../ai/model-credentials.js';
@@ -174,6 +178,28 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
     const assistantAdapters = config.adapter === 'filesystem' && kernel.mode === 'normal'
       ? (config.modelCredentials ? [createDeepSeekAssistantAdapter({ credentials: config.modelCredentials })] : [])
       : undefined;
+    const taskSkillCatalogs = [
+      ...(skillCatalog ? [{ prefix: 'vault', catalog: skillCatalog }] : []),
+      ...(process.env.NODE_ENV === 'test' ? [] : [
+        { prefix: 'codex', catalog: createSkillCatalogService({ skillsRoot: join(homedir(), '.codex', 'skills'), allowNonCanonicalRoot: true }) },
+        { prefix: 'agents', catalog: createSkillCatalogService({ skillsRoot: join(homedir(), '.agents', 'skills'), allowNonCanonicalRoot: true }) }
+      ])
+    ];
+    const taskSkills = {
+      async list() {
+        const pages = await Promise.all(taskSkillCatalogs.map(async ({ prefix, catalog }) => {
+          const page = await catalog.list().catch(() => ({ items: [] }));
+          return page.items.map(item => ({ ...item, id: `${prefix}:${item.id}` }));
+        }));
+        return { items: pages.flat() };
+      },
+      async resolveSource(id: string) {
+        const index = id.indexOf(':');
+        const selected = taskSkillCatalogs.find(entry => entry.prefix === id.slice(0, index));
+        if (!selected) throw new PublicApiError('AUTOLOOP_SKILL_REQUIRED', '所选 Skill 不可用。', 409);
+        return selected.catalog.resolveSource(id.slice(index + 1));
+      }
+    };
     const capabilities: RuntimeCapabilities = {
       health: healthService,
       ...(kernel.mode !== 'normal' || repository === undefined || scheduler === undefined || indexer === undefined
@@ -182,6 +208,15 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
           indexScheduler: scheduler, currentIndexVersion: () => indexer.version
         } }),
       personal: {
+        ...(kernel.mode !== 'normal' ? {} : { autoloopManagementService: createAutoloopManagementService(), autoloopConnectionsService: createAutoloopConnectionsService(), autoloopService: createAutoloopService({
+          stateRoot: config.appDataDir,
+          vaultIdentity: 'cacheKey' in config.gateway && typeof config.gateway.cacheKey === 'string' ? config.gateway.cacheKey : config.vaultRealRoot,
+          skills: taskSkills,
+          getWorkspaces: async () => [
+            { id: 'vault', name: '我的大脑', kind: 'vault' as const, path: config.vaultRealRoot },
+            ...(kernel.db.prepare('SELECT id, root_path, display_name, availability FROM personal_projects').all() as Array<{ id: string; root_path: string; display_name: string; availability: string }>).map(project => ({ id: `project:${project.id}`, name: project.display_name, kind: 'project' as const, path: project.root_path, available: project.availability !== 'unavailable' && project.availability !== 'reconnect-required' }))
+          ]
+        }) }),
         ...(attachmentService ? { attachmentService } : {}),
         ...(extractionService ? { extractionService } : {}),
         ...(ingestionService ? { ingestionService } : {}),

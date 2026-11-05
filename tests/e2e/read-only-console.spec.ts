@@ -153,9 +153,9 @@ test('keeps every secondary read page within the 390px viewport', async ({ page 
   await page.setViewportSize({ width: 390, height: 844 });
   const routes = [
     { path: '/queue', readyText: '已加载 3 条' },
-    { path: '/knowledge', readyText: '已加载 3 条' },
-    { path: '/operations', readyText: '当前尚无提炼/写入工作流操作' },
-    { path: '/settings', readyText: '3 个结构问题' }
+    { path: '/knowledge', readyText: '共 3 篇知识' },
+    { path: '/operations', readyText: '还没有操作记录' },
+    { path: '/settings', readyText: '3 项资料待确认' }
   ] as const;
 
   for (const route of routes) {
@@ -229,18 +229,28 @@ test('filters the queue to the real partially ingested material', async ({ page 
 
 test('searches only the title and YAML recall fields, never the Markdown body', async ({ page }) => {
   await openPage(page, '/knowledge');
-  const search = page.getByLabel('标题与 YAML 召回字段');
+  const search = page.getByRole('searchbox', { name: '搜索知识' });
+  const applySearch = async (term: string, expectedCount: number): Promise<void> => {
+    const result = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/api/v1/knowledge/catalog' && url.searchParams.get('search') === term;
+    });
+    await search.fill(term);
+    await page.getByRole('button', { name: '搜索', exact: true }).click();
+    expect((await result).ok()).toBe(true);
+    await expect(page).toHaveURL(url => url.searchParams.get('search') === term);
+    await expect(search).toHaveValue(term);
+    await expect(page.getByText(new RegExp(`^共 ${expectedCount} 篇知识`, 'u'))).toBeVisible();
+  };
 
-  await search.fill('星火结论唯一词');
-  await page.getByRole('button', { name: '应用筛选' }).click();
+  await applySearch('星火结论唯一词', 1);
   await expect(page.getByRole('button', { name: /AI总结-核心结论/u })).toBeVisible();
 
-  await search.fill('正文幽灵唯一词');
-  await page.getByRole('button', { name: '应用筛选' }).click();
+  await applySearch('正文幽灵唯一词', 0);
   await expect(page.getByRole('button', { name: /AI总结-核心结论/u })).toHaveCount(0);
 });
 
-test('loads one live detail, caches its version, and renders malicious Markdown inertly', async ({ page }) => {
+test('loads one live detail per opening, verifies its version, and renders malicious Markdown inertly', async ({ page }) => {
   let detailRequests = 0;
   const remoteRequests: string[] = [];
   page.on('request', (request) => {
@@ -250,13 +260,17 @@ test('loads one live detail, caches its version, and renders malicious Markdown 
   });
 
   await openPage(page, '/knowledge');
-  const trigger = page.getByRole('button', { name: /AI总结-核心结论/u });
+  const trigger = page.getByRole('button', { name: '展开 AI总结-核心结论 知识纸页', exact: true });
   await expect(trigger).toBeVisible();
   expect(detailRequests).toBe(0);
 
+  const firstRead = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/knowledge/file');
   await trigger.click();
-  const dialog = page.getByRole('dialog', { name: 'AI总结-核心结论 详情' });
+  const firstDetail = await (await firstRead).json() as { data: { versionMarker: unknown } };
+  expect(firstDetail.data.versionMarker).toEqual(expect.objectContaining({ rawSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) }));
+  const dialog = page.getByRole('region', { name: 'AI总结-核心结论 阅读' });
   await expect(dialog).toBeVisible();
+  await dialog.getByText('来源与关联知识', { exact: true }).click();
   await expect(dialog.locator('section[aria-labelledby="source-materials-title"]')
     .getByText('01图书馆/B站/待提炼-深度访谈', { exact: true })).toBeVisible();
   await expect(dialog.locator('section[aria-labelledby="internal-links-title"]')
@@ -289,10 +303,13 @@ test('loads one live detail, caches its version, and renders malicious Markdown 
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(trigger).toBeFocused();
+  const reopenedRead = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/knowledge/file');
   await trigger.click();
-  await expect(page.getByRole('dialog', { name: 'AI总结-核心结论 详情' })).toBeVisible();
-  await page.waitForTimeout(100);
-  expect(detailRequests).toBe(1);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: '核心结论详情' })).toBeVisible();
+  const reopenedDetail = await (await reopenedRead).json() as { data: { versionMarker: unknown } };
+  expect(reopenedDetail.data.versionMarker).toEqual(firstDetail.data.versionMarker);
+  expect(detailRequests).toBe(2);
 });
 
 test('keeps the deck usable under reduced motion', async ({ page }) => {
@@ -371,5 +388,5 @@ test('serves production CSP, applies the nonce deck stylesheet, and blocks an un
 
 test('shows the honest empty operation ledger from the live API', async ({ page }) => {
   await openPage(page, '/operations');
-  await expect(page.getByText('当前尚无提炼/写入工作流操作')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '还没有操作记录', exact: true })).toBeVisible();
 });

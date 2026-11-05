@@ -106,6 +106,19 @@ describe('build provenance', () => {
     await writeFile(join(app, 'Contents/Resources/clipper-extension/retired.js'), 'retired');
     await expect(verifyPackagedDesktop(app, root)).rejects.toThrow('PACKAGED_ARTIFACT_CHANGED');
   });
+  it('allows signing to alter only existing arm64 Mach-O artifacts while preserving resource checks', async () => {
+    const root = await fixture();
+    const nativePath = 'dist/native/atomic-file-helper';
+    const header = Buffer.from('cffaedfe0c000001', 'hex');
+    await writeFile(join(root, nativePath), Buffer.concat([header, Buffer.from('original native bytes')]));
+    const app = await packageFixture(root, await recordBuild(root));
+    const packagedNative = join(app, 'Contents/Resources/app', nativePath);
+    await writeFile(packagedNative, Buffer.concat([header, Buffer.from('native bytes plus signature')]));
+    await expect(verifyPackagedDesktop(app, root)).rejects.toThrow('PACKAGED_ARTIFACT_CHANGED');
+    await expect(verifyPackagedDesktop(app, root, { allowNativeSignatures: true })).resolves.toMatchObject({ status: 'passed' });
+    await writeFile(packagedNative, 'a substituted non-native file');
+    await expect(verifyPackagedDesktop(app, root, { allowNativeSignatures: true })).rejects.toThrow('PACKAGED_ARTIFACT_CHANGED');
+  });
   it.each([['name', 'other-app'], ['version', '2.0.0'], ['main', 'dist/server/index.js']])('rejects altered packaged package.json %s', async (field, value) => {
     const root = await fixture(); const app = await packageFixture(root, await recordBuild(root));
     const path = join(app, 'Contents/Resources/app/package.json'); const metadata = JSON.parse(await readFile(path, 'utf8')); metadata[field!] = value;

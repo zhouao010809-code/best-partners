@@ -1,3 +1,6 @@
+import type { AutoloopManagementService } from '../shared/api/autoloop-management.js';
+import type { AutoloopConnectionsService } from '../shared/api/autoloop-connections.js';
+import type { AutoloopService } from '../shared/api/autoloop.js';
 import type { ProjectCreationService } from '../shared/api/project-creations.js';
 import Fastify from 'fastify';
 import type Database from 'better-sqlite3';
@@ -132,6 +135,9 @@ export interface ReadApiDependencies {
 }
 
 export interface BuildServerOptions {
+  readonly autoloopService?: AutoloopService;
+  readonly autoloopManagementService?: AutoloopManagementService;
+  readonly autoloopConnectionsService?: AutoloopConnectionsService;
   readonly capabilities?: RuntimeCapabilities;
   readonly runtimeMode?: CompanyRuntimeMode;
   readonly companyRuntime?: CompanyRuntime;

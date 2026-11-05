@@ -1,4 +1,5 @@
 import { DashboardPage } from '../pages/DashboardPage.js';
+import { AutoloopPage } from '../pages/AutoloopPage.js';
 import { WorkdiskPage } from '../pages/WorkdiskPage.js';
 import { ExtractionPage } from '../pages/ExtractionPage.js';
 import { IntakePage } from '../pages/IntakePage.js';
@@ -14,6 +15,7 @@ import { TrashPage } from '../pages/TrashPage.js';
 import { CompanyRouter } from '../company/company-router.js';
 
 export const routePages = {
+  AutoloopPage,
   DashboardPage,
   WorkdiskPage,
   QueuePage,

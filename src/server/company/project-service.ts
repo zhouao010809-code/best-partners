@@ -267,10 +267,21 @@ async function writeAtomic(path: string, bytes: string | Uint8Array): Promise<vo
 
 async function copyStagedTree(stagingRoot: string, targetRoot: string, proposal: ProjectScanProposal): Promise<void> {
   await assertDirectory(stagingRoot, 'Staging root');
+  const manifestSource = join(stagingRoot, 'source-manifest.json');
+  const manifestInfo = await lstat(manifestSource);
+  if (manifestInfo.isSymbolicLink() || !manifestInfo.isFile()) throw new Error('Missing source manifest');
+  const manifestBytes = await readFile(manifestSource);
+  const manifest = JSON.parse(manifestBytes.toString('utf8')) as { version?: unknown; sourceSha256?: unknown };
+  if ((manifest.version !== 1 && manifest.version !== 2) || manifest.sourceSha256 !== proposal.sourceSha256) {
+    throw new Error('Staged source manifest changed');
+  }
+  // Pending runs written before version 2 still have their source files at the root.
+  const sourceRoot = manifest.version === 2 ? join(stagingRoot, 'raw') : stagingRoot;
+  await assertDirectory(sourceRoot, 'Staged source root');
   const rawRoot = join(targetRoot, 'raw');
   await mkdir(rawRoot, { recursive: false, mode: 0o700 });
   for (const entry of proposal.entries) {
-    const source = join(stagingRoot, ...entry.relativePath.split('/'));
+    const source = join(sourceRoot, ...entry.relativePath.split('/'));
     const target = join(rawRoot, ...entry.relativePath.split('/'));
     const sourceInfo = await lstat(source);
     if (sourceInfo.isSymbolicLink()) throw new Error(`Staged source contains a symlink: ${entry.relativePath}`);
@@ -293,10 +304,7 @@ async function copyStagedTree(stagingRoot: string, targetRoot: string, proposal:
       await rm(temporary, { force: true }).catch(() => undefined);
     }
   }
-  const manifestSource = join(stagingRoot, 'source-manifest.json');
-  const manifestInfo = await lstat(manifestSource);
-  if (manifestInfo.isSymbolicLink() || !manifestInfo.isFile()) throw new Error('Missing source manifest');
-  await writeAtomic(join(targetRoot, 'source-manifest.json'), await readFile(manifestSource));
+  await writeAtomic(join(targetRoot, 'source-manifest.json'), manifestBytes);
 }
 
 /** A prior publish may have committed files before the SQLite transaction. */

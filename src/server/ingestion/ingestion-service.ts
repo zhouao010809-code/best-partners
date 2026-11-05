@@ -19,6 +19,7 @@ import { loadRuleBundle } from '../rules/rule-bundle.js';
 import { validateFilesystemPath } from '../vault/filesystem-path.js';
 import { readMaterialVisibility } from '../services/material-visibility.js';
 import { isPartialExtraction } from '../services/extraction-coverage.js';
+import { assertSourceImageCapacity } from './source-capacity.js';
 
 type BatchRow = { id: string; run_id: string; created_at: string; status: IngestionBatch['status']; indexed: number; plan_json: string; problem: string | null };
 function fail(code: string, message: string, status = 409): never { throw new PublicApiError(code, message, status); }
@@ -149,6 +150,7 @@ export function createIngestionService(input: {
       const choices = local.filter((c) => c.state === 'pending' && c.decision !== 'later');
       if (!choices.length && local.length) fail('NOTHING_SELECTED', '请选择本次入库或明确放弃的候选。');
       const before = readSource(run.materialPath); const currentSha = sha256Bytes(before);
+      assertSourceImageCapacity(before.toString('utf8'));
       if (sourceChanged(run.id, before) && request.acknowledgedSourceSha !== currentSha) fail('SOURCE_CHANGED', '资料已变化，请查看当前原文，核对后再继续。');
       const dirs = await directories(); const rule = await loadRuleBundle(input.gateway);
       const groups = new Map<string, ReviewCandidate[]>();
@@ -186,6 +188,7 @@ export function createIngestionService(input: {
       const anyIngested = sourceRecord.generatedKnowledge.length > 0 || decisions.some((d) => d.state === 'committed') || all.some((c) => c.state === 'committed');
       const status = anyIngested ? pendingCount || isPartialExtraction(run.sourceRange) ? '部分入库' : '已入库' : '未提炼';
       const afterSource = anyIngested ? patchSource(before, decisions.flatMap((d) => d.path ? [d.path] : []), status) : before;
+      assertSourceImageCapacity(afterSource.toString('utf8'));
       if (!before.equals(afterSource)) files.push({ path: run.materialPath, kind: 'source', before: before.toString('utf8'), after: afterSource.toString('utf8'), stageId: randomUUID() });
       const id = randomUUID(); const expiresAt = new Date(now().getTime() + 600_000).toISOString();
       const publicPreview = ingestionPreviewSchema.parse({ id, runId: run.id, expiresAt, files: files.map(({ stageId: _stage, ...file }) => file),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import { ArrowLeft, FileText, RefreshCw, Search, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -20,6 +20,8 @@ export function CompanySkillLibraryPage(): ReactElement {
   const [selectedId, setSelectedId] = useState<string>();
   const [detail, setDetail] = useState<Resource<SkillDetail>>({ status: 'loading' });
   const [query, setQuery] = useState('');
+  const detailRequest = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => detailRequest.current?.abort(), [api]);
 
   const load = useCallback(async (refresh = false): Promise<void> => {
     setResource(current => ({ status: refresh ? 'refreshing' : 'loading', ...(current.data === undefined ? {} : { data: current.data }) }));
@@ -35,9 +37,12 @@ export function CompanySkillLibraryPage(): ReactElement {
   useEffect(() => { void load(); }, [load]);
 
   const openDetail = useCallback(async (id: string): Promise<void> => {
+    detailRequest.current?.abort();
+    const controller = new AbortController(); detailRequest.current = controller;
     setSelectedId(id);
     setDetail({ status: 'loading' });
-    const result = await api.skills.get(id);
+    const result = await api.skills.get(id, controller.signal);
+    if (controller.signal.aborted) return;
     if (!result.ok) {
       if (isCancelled(result)) return;
       setDetail({ status: 'failed', message: resultError(result, 'Skill 内容暂时无法读取。') });
@@ -55,7 +60,7 @@ export function CompanySkillLibraryPage(): ReactElement {
 
   if (selectedId !== undefined) {
     return <section className="company-page company-skill-detail" aria-labelledby="company-skill-detail-title">
-      <button type="button" className="company-back-link company-skill-back" onClick={() => { setSelectedId(undefined); setDetail({ status: 'loading' }); }}><ArrowLeft size={15} />返回 Skill 库</button>
+      <button type="button" className="company-back-link company-skill-back" onClick={() => { detailRequest.current?.abort(); setSelectedId(undefined); setDetail({ status: 'loading' }); }}><ArrowLeft size={15} />返回 Skill 库</button>
       {detail.status === 'loading' && <div className="company-empty-state" aria-live="polite"><RefreshCw className="company-spin" size={18} />正在读取 Skill…</div>}
       {detail.status === 'failed' && <div className="company-empty-state"><p role="alert">{detail.message}</p><button type="button" className="company-secondary-button" onClick={() => void openDetail(selectedId)}>重新读取</button></div>}
       {detail.status === 'ready' && selected !== undefined && <>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ensureCompanyWorkspace } from '../../src/server/company/company-paths.js';
@@ -52,6 +52,41 @@ async function setup(): Promise<{ source: string; workspace: Awaited<ReturnType<
 }
 
 describe('company project confirmation recovery', () => {
+  it('confirms a legacy version 1 staging layout after restarting the service', async () => {
+    const { source, workspace, service, reopen } = await setup();
+    const draft = await service.scan({ sourceRoot: source });
+    const staging = join(workspace.incomingPath, draft.run.id);
+    for (const name of await readdir(join(staging, 'raw'))) {
+      await rename(join(staging, 'raw', name), join(staging, name));
+    }
+    await rmdir(join(staging, 'raw'));
+    const manifestPath = join(staging, 'source-manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, version: 1 }));
+
+    const result = await reopen().confirm(draft.run.id, {
+      sourceSha256: draft.proposal.sourceSha256, name: '旧版待确认项目', status: 'active'
+    });
+    expect(result.run.state).toBe('confirmed');
+    expect(await readFile(join(workspace.projectsPath, result.project.id, 'raw', '项目说明.md'), 'utf8')).toBe('客户名称：好味餐饮');
+  });
+
+  it('preserves a source file named source-manifest.json through publication and restart recovery', async () => {
+    const { source, workspace, service, reopen, failAfterPublish } = await setup();
+    const original = '{"userData":"keep exactly"}';
+    await writeFile(join(source, 'source-manifest.json'), original);
+    const draft = await service.scan({ sourceRoot: source });
+    const confirmation = { sourceSha256: draft.proposal.sourceSha256, name: '带同名清单的项目', status: 'active' as const };
+    await expect(failAfterPublish().confirm(draft.run.id, confirmation)).rejects.toThrow('simulated post-publish interruption');
+
+    const result = await reopen().confirm(draft.run.id, confirmation);
+    const projectRoot = join(workspace.projectsPath, result.project.id);
+    expect(result.run.state).toBe('confirmed');
+    expect(await readFile(join(projectRoot, 'raw', 'source-manifest.json'), 'utf8')).toBe(original);
+    expect(JSON.parse(await readFile(join(projectRoot, 'source-manifest.json'), 'utf8'))).toMatchObject({ version: 2, sourceSha256: draft.proposal.sourceSha256 });
+    expect(await readFile(join(source, 'source-manifest.json'), 'utf8')).toBe(original);
+  });
+
   it('resumes a proposed confirmation after a service restart without duplicating the project', async () => {
     const { source, workspace, service, reopen, failOnce } = await setup();
     const draft = await service.scan({ sourceRoot: source });

@@ -6,7 +6,8 @@ export const fixtureSuites = [
   'tests/e2e/queue-drawer.config.ts',
   'tests/e2e/unified-trash.config.ts',
   'tests/e2e/archive-motion.config.ts',
-  'tests/e2e/operations.config.ts'
+  'tests/e2e/operations.config.ts',
+  'tests/e2e/api-console.config.ts'
 ] as const;
 
 function runSuite(config: string, extraArgs: readonly string[]): Promise<number> {

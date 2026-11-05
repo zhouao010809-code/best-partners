@@ -22,6 +22,23 @@ describe('default vault template distribution', () => {
       .toBe('/opt/best-partners/resources/templates/default-vault');
   });
 
+  it('finds the packaged template when Electron leaves defaultApp and NODE_ENV undefined', () => {
+    vi.stubGlobal('process', { ...process, env: { ...process.env, NODE_ENV: undefined },
+      versions: { ...process.versions, electron: '44.1.0' }, defaultApp: undefined,
+      resourcesPath: '/opt/best-partners/resources' });
+    try {
+      expect(resolveDefaultVaultTemplateRoot()).toBe('/opt/best-partners/resources/templates/default-vault');
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('keeps electron-dot development on the repository template', () => {
+    vi.stubGlobal('process', { ...process, env: { ...process.env, NODE_ENV: undefined },
+      versions: { ...process.versions, electron: '44.1.0' }, defaultApp: true,
+      resourcesPath: '/opt/electron/resources' });
+    try { expect(resolveDefaultVaultTemplateRoot()).toBe(resolve('templates/default-vault')); }
+    finally { vi.unstubAllGlobals(); }
+  });
+
   it('copies the manifest-verified template into an atomic private vault', async () => {
     const parentRoot = await realpath(await root());
     const userDataDir = await root();

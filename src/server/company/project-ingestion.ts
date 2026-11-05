@@ -300,13 +300,14 @@ async function publishStagedTree(
   await mkdir(finalRoot, { recursive: false, mode: 0o700 });
   const reservation = await lstat(finalRoot);
   try {
+    await mkdir(join(finalRoot, 'raw'), { recursive: false, mode: 0o700 });
     for (const entry of entries) {
-      const target = join(finalRoot, ...entry.relativePath.split('/'));
+      const target = join(finalRoot, 'raw', ...entry.relativePath.split('/'));
       if (entry.kind === 'directory') {
         await mkdir(target, { recursive: false, mode: 0o700 });
         continue;
       }
-      const source = join(temporaryRoot, ...entry.relativePath.split('/'));
+      const source = join(temporaryRoot, 'raw', ...entry.relativePath.split('/'));
       await link(source, target);
     }
     await link(join(temporaryRoot, 'source-manifest.json'), join(finalRoot, 'source-manifest.json'));
@@ -342,11 +343,15 @@ export async function stageProjectSource(options: StageProjectSourceOptions): Pr
   let published = false;
   try {
     await mkdir(temporaryRoot, { recursive: false, mode: 0o700 });
-    await copyTree(sourceRoot, temporaryRoot, proposal, copyFile);
+    // User filenames must never share a namespace with our completion marker.
+    // Version 1 staged user files at the root; version 2 reserves raw/ for them.
+    const rawRoot = join(temporaryRoot, 'raw');
+    await mkdir(rawRoot, { recursive: false, mode: 0o700 });
+    await copyTree(sourceRoot, rawRoot, proposal, copyFile);
     const afterCopy = await scanProjectFolder(sourceRoot, options);
     if (afterCopy.sourceSha256 !== proposal.sourceSha256) throw new Error('Source changed during staging');
     const manifestPath = join(temporaryRoot, 'source-manifest.json');
-    const manifest = JSON.stringify({ version: 1, sourceRoot, sourceSha256: proposal.sourceSha256, entries: proposal.entries }, null, 2);
+    const manifest = JSON.stringify({ version: 2, sourceRoot, sourceSha256: proposal.sourceSha256, entries: proposal.entries }, null, 2);
     const temporaryManifest = `${manifestPath}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporaryManifest, manifest, { encoding: 'utf8', mode: 0o600 });

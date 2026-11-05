@@ -1,15 +1,18 @@
 import { expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 
 it('packages the read helper but excludes unapproved sandbox writers and test hooks', async () => {
   let ignore: ((path: string) => boolean) | undefined;
   let zipDirectory: string | undefined;
+  let electronVersion: string | undefined;
   const calls: string[] = [];
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
   const arch = Object.getOwnPropertyDescriptor(process, 'arch')!;
   vi.stubEnv('XIAOZHAO_ELECTRON_ZIP_DIR', '/private/tmp/verified-electron-cache');
-  vi.doMock('@electron/packager', () => ({ packager: async (options: { ignore(path: string): boolean; electronZipDir?: string }) => {
+  vi.doMock('@electron/packager', () => ({ packager: async (options: { ignore(path: string): boolean; electronZipDir?: string; electronVersion?: string }) => {
     calls.push('package');
     zipDirectory = options.electronZipDir;
+    electronVersion = options.electronVersion;
     ignore = options.ignore; return [];
   } }));
   vi.doMock('@electron/rebuild', () => ({ rebuild: async () => {} }));
@@ -25,6 +28,7 @@ it('packages the read helper but excludes unapproved sandbox writers and test ho
     await import('../../scripts/package-desktop.js');
     expect(calls).toEqual(['verify', 'package']);
     expect(zipDirectory).toBe('/private/tmp/verified-electron-cache');
+    expect(electronVersion).toBe(JSON.parse(await readFile('package.json', 'utf8')).devDependencies.electron);
     expect(ignore?.('/dist/native/atomic-file-helper')).toBe(false);
     expect(ignore?.('/dist/native/personal-archive.node')).toBe(false);
     expect(ignore?.('/dist/native/sandbox-archive.node')).toBe(true);

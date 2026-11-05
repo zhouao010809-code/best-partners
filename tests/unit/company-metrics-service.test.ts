@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, statSync, truncateSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applyMigrations } from '../../src/server/db/migrate.js';
@@ -8,11 +8,13 @@ import {
   createCompanyMetricsService,
   resolveCompanyMetricsPollInterval
 } from '../../src/server/company/company-metrics-service.js';
+import { COMPANY_METRICS_MAX_BYTES } from '../../src/server/company/metrics-importer.js';
 
 const roots: string[] = [];
 const databases: Database.Database[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const database of databases.splice(0)) database.close();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -43,6 +45,34 @@ function writeExport(root: string, name = 'data.csv', content = '作品ID,作品
 }
 
 describe('company metrics service', () => {
+  it('rejects an oversized incoming export before copying raw evidence and preserves the source', async () => {
+    const { root, database } = fixture();
+    const relativePath = writeExport(root, 'large.csv');
+    const path = join(root, relativePath);
+    truncateSync(path, COMPANY_METRICS_MAX_BYTES + 1);
+    const service = createCompanyMetricsService({ database, workspace: { id: 'company', rootPath: root }, stabilityDelayMs: 0 });
+    const result = await service.importFile({ relativePath });
+    expect(result).toMatchObject({ state: 'failed', errorCode: 'COMPANY_METRICS_TOO_LARGE', rawRelativePath: null });
+    expect(statSync(path).size).toBe(COMPANY_METRICS_MAX_BYTES + 1);
+    expect(database.prepare('SELECT COUNT(*) AS count FROM company_platform_metric_snapshots').get()).toEqual({ count: 0 });
+  });
+
+  it('rejects an export growing beyond the limit during its stability window without publishing raw evidence', async () => {
+    const { root, database } = fixture();
+    const relativePath = writeExport(root, 'growing.csv');
+    const path = join(root, relativePath);
+    const originalTimer = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+      originalTimer(() => {
+        if (delay === 5) truncateSync(path, COMPANY_METRICS_MAX_BYTES + 1);
+        callback(...args);
+      }, delay)) as typeof setTimeout);
+    const service = createCompanyMetricsService({ database, workspace: { id: 'company', rootPath: root }, stabilityDelayMs: 5 });
+    const result = await service.importFile({ relativePath });
+    expect(result).toMatchObject({ state: 'failed', errorCode: 'COMPANY_METRICS_TOO_LARGE', rawRelativePath: null });
+    expect(statSync(path).size).toBe(COMPANY_METRICS_MAX_BYTES + 1);
+  });
+
   it('imports a project-scoped export and keeps immutable raw evidence', async () => {
     const { root, database } = fixture();
     const sourcePath = writeExport(root);
@@ -89,6 +119,37 @@ describe('company metrics service', () => {
     expect(first.state).toBe('imported');
     expect(second.state).toBe('duplicate');
     expect(database.prepare('SELECT COUNT(*) AS count FROM company_platform_metric_snapshots').get()).toEqual({ count: 1 });
+  });
+
+  it('rejects identical bytes assigned to another platform in the same project', async () => {
+    const { root, database } = fixture();
+    const service = createCompanyMetricsService({ database, workspace: { id: 'company', rootPath: root }, stabilityDelayMs: 0 });
+    const bytes = Buffer.from('作品ID,数据日期,播放量\nitem-1,2026-09-19,1200\n');
+    const upload = { projectId: 'project-1', fileName: 'export.csv', bytes };
+    expect((await service.uploadFile({ ...upload, platform: 'douyin' })).state).toBe('imported');
+    await expect(service.uploadFile({ ...upload, platform: 'wechat-channels' })).rejects.toMatchObject({ code: 'COMPANY_METRICS_SOURCE_CONFLICT' });
+    const metrics = await service.listProjectMetrics('project-1');
+    expect(metrics.platforms.find(value => value.platform === 'wechat-channels')?.snapshotCount).toBe(0);
+    expect((await service.uploadFile({ ...upload, platform: 'douyin' })).state).toBe('duplicate');
+  });
+
+  it('uses the latest dated follower observation per account and excludes unknown accounts', async () => {
+    const { root, database } = fixture();
+    const service = createCompanyMetricsService({ database, workspace: { id: 'company', rootPath: root }, stabilityDelayMs: 0 });
+    const newer = writeExport(root, 'newer-followers.csv', '作品ID,账号ID,数据日期,粉丝数\nnew-post,account-1,2026-09-20,900\nother-post,account-2,2026-09-20,50\nunknown-post,,2026-09-20,5000\n');
+    const older = writeExport(root, 'older-followers.csv', '作品ID,账号ID,数据日期,粉丝数\nold-post,account-1,2026-09-19,1000\n');
+    await service.importFile({ relativePath: newer });
+    await service.importFile({ relativePath: older });
+    expect((await service.listProjectMetrics('project-1')).totals.followers).toBe(950);
+    expect((await service.getStatus()).platforms.find(value => value.platform === 'douyin')?.totals.followers).toBe(950);
+  });
+
+  it('leaves total followers absent when no export identifies an account', async () => {
+    const { root, database } = fixture();
+    const relativePath = writeExport(root, 'unknown-followers.csv', '作品ID,数据日期,粉丝数\nitem-1,2026-09-19,1000\nitem-2,2026-09-20,900\n');
+    const service = createCompanyMetricsService({ database, workspace: { id: 'company', rootPath: root }, stabilityDelayMs: 0 });
+    await service.importFile({ relativePath });
+    expect((await service.listProjectMetrics('project-1')).totals.followers).toBeUndefined();
   });
 
   it('records parser failures and rejects paths outside the platform drop root', async () => {

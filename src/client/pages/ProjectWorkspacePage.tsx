@@ -26,6 +26,10 @@ function reconnectFailureCode(result: ApiClientResult<unknown>): boolean {
 
 export function ProjectWorkspacePage() {
   const { id } = useParams<{ id: string }>();
+  return <ProjectWorkspace key={id} id={id} />;
+}
+
+function ProjectWorkspace({ id }: { id: string | undefined }) {
   const { api } = useConsoleRuntime();
   const projectsApi = api.projects;
   const [project, setProject] = useState<ProjectSummary>();
@@ -42,6 +46,8 @@ export function ProjectWorkspacePage() {
   const [editing, setEditing] = useState(false);
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const loadedProjectIdRef = useRef<string | undefined>(undefined);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const load = useCallback(async (background = false): Promise<void> => {
     controllerRef.current?.abort();
@@ -101,6 +107,7 @@ export function ProjectWorkspacePage() {
     setMessage(undefined);
     try {
       const result = await projectsApi.refresh(id);
+      if (!alive.current) return;
       if (!result.ok) {
         if (isCancelled(result)) return;
         if (reconnectFailureCode(result)) {
@@ -120,9 +127,9 @@ export function ProjectWorkspacePage() {
         setMessage(result.value.availability === 'scanning' ? '项目资料仍在更新，请稍后重试。' : '项目资料更新未完成，请刷新或重新连接。');
       }
     } catch {
-      setMessage('项目资料更新未完成，请重试。');
+      if (alive.current) setMessage('项目资料更新未完成，请重试。');
     } finally {
-      setRefreshing(false);
+      if (alive.current) setRefreshing(false);
     }
   }
 
@@ -137,6 +144,7 @@ export function ProjectWorkspacePage() {
     setMessage(undefined);
     try {
       const selected = await picker();
+      if (!alive.current) return;
       if (!selected.selected) {
         if (selected.reason === 'busy') setMessage('已有文件夹选择正在进行，请稍候。');
         else if (selected.reason === 'unavailable') setMessage('所选文件夹暂时不可用，请重新选择。');
@@ -148,6 +156,7 @@ export function ProjectWorkspacePage() {
         return;
       }
       const scan = await projectsApi.scan(selected.path);
+      if (!alive.current) return;
       if (!scan.ok) {
         if (!isCancelled(scan)) setMessage(resultMessage(scan, '项目扫描未完成，请重新选择。'));
         return;
@@ -155,9 +164,9 @@ export function ProjectWorkspacePage() {
       setReconnectPreview(scan.value);
       setReconnectName(scan.value.displayName || selected.displayName || project?.displayName || '');
     } catch {
-      setMessage('项目扫描未完成，请重新选择。');
+      if (alive.current) setMessage('项目扫描未完成，请重新选择。');
     } finally {
-      setReconnecting(false);
+      if (alive.current) setReconnecting(false);
     }
   }
 
@@ -172,6 +181,7 @@ export function ProjectWorkspacePage() {
         sourceSha256: reconnectPreview.sourceSha256,
         ...(name ? { displayName: name } : {})
       });
+      if (!alive.current) return;
       if (!result.ok) {
         if (!isCancelled(result)) setMessage(resultMessage(result, '项目重新连接未完成，请重试。'));
         return;
@@ -186,9 +196,9 @@ export function ProjectWorkspacePage() {
       window.dispatchEvent(new CustomEvent(PROJECT_WORKSPACE_UPDATED_EVENT, { detail: { projectId: id } }));
       setMessage('项目已重新连接；旧的项目写入计划已标记为过期，需要重新确认。');
     } catch {
-      setMessage('项目重新连接未完成，请重试。');
+      if (alive.current) setMessage('项目重新连接未完成，请重试。');
     } finally {
-      setReconnecting(false);
+      if (alive.current) setReconnecting(false);
     }
   }
 

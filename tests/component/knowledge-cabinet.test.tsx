@@ -97,6 +97,50 @@ describe('knowledge cabinet', () => {
     await user.click(screen.getByRole('button', {name: '应用筛选'}));
     await waitFor(() => expect(list).toHaveBeenLastCalledWith({path: '01AI', limit: 200, search: 'Agent', usageStatus: '过时', includeObsolete: true, topic: '系统'}, expect.any(AbortSignal)));
   });
+  it('preserves a newer search draft when the previous submission reaches the URL', async () => {
+    runtime.api.listKnowledgeCatalog = vi.fn(async query => ok(catalog(query.path, {folders: [], items: [], total: 0, directTotal: 0})));
+    mount();
+    const input = screen.getByRole('searchbox', {name: '搜索知识'});
+    fireEvent.change(input, {target: {value: '旧查询'}});
+    act(() => {
+      fireEvent.submit(screen.getByRole('search'));
+      fireEvent.change(input, {target: {value: '刚输入的新查询'}});
+    });
+    expect(input).toHaveValue('刚输入的新查询');
+    await waitFor(() => expect(runtime.api.listKnowledgeCatalog).toHaveBeenLastCalledWith(expect.objectContaining({search: '刚输入的新查询'}), expect.any(AbortSignal)));
+    expect(address().get('search')).toBe('刚输入的新查询');
+  });
+  it('restores search drafts from browser history after a local submission', async () => {
+    runtime.api.listKnowledgeCatalog = vi.fn(async query => ok(catalog(query.path, {folders: [], items: [], total: 0, directTotal: 0})));
+    render(<MemoryRouter initialEntries={['/knowledge?search=历史查询', '/knowledge?search=当前查询']}><KnowledgePage /><Probe /></MemoryRouter>);
+    const input = screen.getByRole('searchbox', {name: '搜索知识'});
+    fireEvent.change(input, {target: {value: '本次提交'}});
+    fireEvent.submit(screen.getByRole('search'));
+    await waitFor(() => expect(address().get('search')).toBe('本次提交'));
+    fireEvent.change(input, {target: {value: '未提交草稿'}});
+    fireEvent.click(screen.getByRole('button', {name: '浏览器返回'}));
+    await waitFor(() => expect(input).toHaveValue('历史查询'));
+    fireEvent.click(screen.getByRole('button', {name: '浏览器前进'}));
+    await waitFor(() => expect(input).toHaveValue('本次提交'));
+    expect(address().get('search')).toBe('本次提交');
+  });
+  it('preserves new input across a REPLACE to PUSH navigation with unchanged search filters', async () => {
+    function RootProbe() {
+      const navigate = useNavigate();
+      return <><button onClick={() => navigate('/knowledge?folder=01AI&scope=all', {replace: true})}>准备返回导航</button><button onClick={() => navigate('/knowledge')}>回到知识根目录</button></>;
+    }
+    runtime.api.listKnowledgeCatalog = vi.fn(async query => ok(catalog(query.path, {folders: [], items: [], total: 0, directTotal: 0})));
+    render(<MemoryRouter initialEntries={['/knowledge?folder=01AI']}><KnowledgePage /><RootProbe /></MemoryRouter>);
+    await screen.findByText('这个目录暂时没有知识');
+    fireEvent.click(screen.getByRole('button', {name: '准备返回导航'}));
+    const input = screen.getByRole('searchbox', {name: '搜索知识'});
+    act(() => {
+      fireEvent.click(screen.getByRole('button', {name: '回到知识根目录'}));
+      fireEvent.change(input, {target: {value: '新输入的知识'}});
+    });
+    expect(input).toHaveValue('新输入的知识');
+    await waitFor(() => expect(runtime.api.listKnowledgeCatalog).toHaveBeenLastCalledWith(expect.objectContaining({path: '', search: '新输入的知识'}), expect.any(AbortSignal)));
+  });
   it('rejects a wrong-folder reply instead of showing stale knowledge', async () => {
     runtime.api.listKnowledgeCatalog = vi.fn(async () => ok(catalog('01AI/AI基础'))); mount('/knowledge?folder=07管理');
     expect(await screen.findByText('知识目录响应不符合当前路径或分页规则，请刷新重试。')).toBeVisible();

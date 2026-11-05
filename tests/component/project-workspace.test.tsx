@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, Link, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReadConsoleApi } from '../../src/client/api/client.js';
 import type { ProjectFilePage, ProjectScanPreview, ProjectSummary } from '../../src/shared/api/projects.js';
@@ -218,4 +218,34 @@ describe('ProjectWorkspacePage', () => {
     expect(await screen.findByRole('heading', { name: 'A项目', level: 1 })).toBeVisible();
     expect(screen.getByRole('region', { name: '最近保存的项目文件' })).toHaveTextContent('AI工作区/输出.md');
   });
+});
+
+
+it('discards reconnect previews when navigating between project routes', async () => {
+  const secondId = '9'.repeat(36);
+  get.mockImplementation(async (requested: string) => ok({ ...project, id: requested, displayName: requested === id ? 'A项目' : 'B项目' }));
+  render(<MemoryRouter initialEntries={[`/projects/${id}`]}><Link to={`/projects/${secondId}`}>切换到B</Link><Routes><Route path="/projects/:id" element={<ProjectWorkspacePage />} /></Routes></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '重新连接' }));
+  await screen.findByRole('heading', { name: '确认项目文件夹' });
+  fireEvent.click(screen.getByRole('link', { name: '切换到B' }));
+  await screen.findByRole('heading', { name: 'B项目' });
+  expect(screen.queryByRole('heading', { name: '确认项目文件夹' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '重新连接项目' })).not.toBeInTheDocument();
+  expect(reconnect).not.toHaveBeenCalled();
+});
+
+it('ignores a previous project scan after navigation to another project', async () => {
+  const secondId = '9'.repeat(36);
+  let finishScan!: (value: unknown) => void;
+  scanApi.mockImplementationOnce(() => new Promise(resolve => { finishScan = resolve; }));
+  get.mockImplementation(async (requested: string) => ok({ ...project, id: requested, displayName: requested === id ? 'A项目' : 'B项目' }));
+  render(<MemoryRouter initialEntries={[`/projects/${id}`]}><Link to={`/projects/${secondId}`}>切换到B</Link><Routes><Route path="/projects/:id" element={<ProjectWorkspacePage />} /></Routes></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '重新连接' }));
+  await waitFor(() => expect(scanApi).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole('link', { name: '切换到B' }));
+  await screen.findByRole('heading', { name: 'B项目' });
+  await act(async () => { finishScan(ok(scan)); });
+  expect(screen.getByRole('heading', { name: 'B项目' })).toBeVisible();
+  expect(screen.queryByRole('heading', { name: '确认项目文件夹' })).not.toBeInTheDocument();
+  expect(reconnect).not.toHaveBeenCalled();
 });

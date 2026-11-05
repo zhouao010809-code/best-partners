@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { RULE_BUNDLE_SOURCE_PATHS } from '../../src/server/rules/rule-bundle.js';
+import type { XiaozhaoDesktopApi } from '../../src/shared/desktop/bridge.js';
 
 for (const mode of ['development', 'packaged'] as const) {
 const launchOptions = mode === 'packaged'
@@ -49,11 +50,25 @@ test(`${mode}: independent read-only desktop, isolated renderer and automatic re
     await expect(window).toHaveTitle('最佳拍档');
     const origin = await window.evaluate(() => location.origin);
     expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u);
-    expect(await window.evaluate(() => ({
-      process: typeof (globalThis as unknown as { process?: unknown }).process,
-      require: typeof (globalThis as unknown as { require?: unknown }).require,
-      bridge: Object.keys((window as unknown as { xiaozhaoDesktop: object }).xiaozhaoDesktop).sort()
-    }))).toEqual({ process: 'undefined', require: 'undefined', bridge: ['cancelUpdate', 'checkForUpdates', 'chooseProjectDirectory', 'chooseVaultDirectory', 'downloadUpdate', 'getAppVersion', 'getClipperStatus', 'getUpdateState', 'getVaultInfo', 'installClipperHost', 'installUpdate', 'onUpdateState', 'openAssistantLogin', 'openClipperInstall', 'openUpdateDownload', 'openVaultDirectory', 'revealDocument', 'revealSkill'] });
+    expect(await window.evaluate(() => {
+      const bridge = (window as unknown as { xiaozhaoDesktop: XiaozhaoDesktopApi }).xiaozhaoDesktop;
+      const workdisk = bridge.workdisk ?? {};
+      return {
+        process: typeof (globalThis as unknown as { process?: unknown }).process,
+        require: typeof (globalThis as unknown as { require?: unknown }).require,
+        bridge: Object.keys(bridge).sort(),
+        bridgeFrozen: Object.isFrozen(bridge),
+        workdisk: Object.keys(workdisk).sort(),
+        workdiskFrozen: Object.isFrozen(workdisk),
+        workdiskOnlyFunctions: Object.values(workdisk).every(value => typeof value === 'function')
+      };
+    })).toEqual({
+      process: 'undefined', require: 'undefined',
+      bridge: ['cancelUpdate', 'checkForUpdates', 'chooseProjectDirectory', 'chooseVaultDirectory', 'downloadUpdate', 'getAppVersion', 'getClipperStatus', 'getUpdateState', 'getVaultInfo', 'installClipperHost', 'installUpdate', 'onUpdateState', 'openAssistantLogin', 'openClipperInstall', 'openUpdateDownload', 'openVaultDirectory', 'revealDocument', 'revealSkill', 'workdisk'],
+      bridgeFrozen: true,
+      workdisk: ['autoStatus', 'chooseAutoSource', 'connect', 'createNote', 'importDroppedFiles', 'importFiles', 'list', 'openAutoSource', 'openFile', 'preview', 'renameAutoReceipt', 'setAutoEnabled', 'setAutoNaming', 'status', 'thumbnail'],
+      workdiskFrozen: true, workdiskOnlyFunctions: true
+    });
     await expect(window.getByTestId('metric-materials')).toContainText('1');
     const health = await fetch(`${origin}/api/v1/health`).then((r) => r.json());
     expect(health.data.vaultSource.adapter).toBe('filesystem');

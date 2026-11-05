@@ -7,6 +7,7 @@ import { canonicalJson, type IndexRepository } from '../index/index-repository.j
 import { parseKnowledgeNoteForRead, parseLibraryNoteForRead } from '../rules/read-compatible-notes.js';
 import { validateFilesystemPath } from '../vault/filesystem-path.js';
 import { sha256Bytes } from '../vault/raw-bytes.js';
+import { normalizeWikiLinkTargets } from '../rules/wikilinks.js';
 import type { ArchiveStat } from '../archive/sandbox-native.js';
 import type { PersonalTrashPort } from './trash-native.js';
 
@@ -29,7 +30,7 @@ function allowedPath(path:string,origin?:TrashOrigin):TrashOrigin {
   if(origin!==undefined&&(!trashOriginSchema.safeParse(origin).success||(knowledge?origin!=='knowledge':origin==='knowledge')))fail('TRASH_ORIGIN_MISMATCH','所选来源与文件位置不一致，请从对应页面重新预览。',400);
   return origin??(knowledge?'knowledge':'library');
 }
-function target(link:string) {return link.replace(/^\[\[/u,'').replace(/\]\]$/u,'').split('|')[0]!.split('#')[0]!.replace(/\.md$/u,'');}
+function target(link:string) {return (normalizeWikiLinkTargets([link])[0]??'').replace(/\.md$/u,'');}
 
 export function createTrashService(input:{database:Database.Database;repository:IndexRepository;port:PersonalTrashPort;getRuleFingerprint():Promise<string>;refreshIndex():Promise<boolean>;now?:()=>Date}) {
   const db=input.database,port=input.port,now=input.now??(()=>new Date());
@@ -73,11 +74,13 @@ export function createTrashService(input:{database:Database.Database;repository:
     const batches=db.prepare("SELECT b.plan_json,r.material_path FROM personal_ingestion_batches b LEFT JOIN personal_extraction_runs r ON r.id=b.run_id WHERE b.status!='committed'").all() as {plan_json:string;material_path:string|null}[];
     if(batches.some((batch)=>{if(batch.material_path===path)return true;const plan=JSON.parse(batch.plan_json) as {materialPath?:string;files?:{path:string}[]};return plan.materialPath===path||plan.files?.some((file)=>file.path===path);}))fail('RECOVERY_REQUIRED','这份资料仍有未完成入库，请先在 App 完成该批恢复。');
   }
-  function references(path:string) {
-    const exact=target(path),base=exact.split('/').at(-1);const result:{path:string;title:string}[]=[];
+  function references(path:string,title?:string) {
+    const exact=target(path),relative=exact.slice(exact.indexOf('/')+1),base=exact.split('/').at(-1);const result:{path:string;title:string}[]=[];
     for(let page=1;;page++){
       const part=input.repository.listKnowledge({includeObsolete:true,page,pageSize:200});
-      for(const item of part.items)if(item.sourceMaterials.some((link)=>{const candidate=target(link);return candidate===exact||candidate===base;}))result.push({path:item.path,title:item.title});
+      // A bare filename/title can be ambiguous. Still report every possible
+      // dependency when asking permission to remove its evidence.
+      for(const item of part.items)if(normalizeWikiLinkTargets(item.sourceMaterials).some((link)=>{const candidate=target(link);return candidate===exact||candidate===relative||candidate===base||(!link.includes('/')&&!link.endsWith('.md')&&link===title?.trim().normalize('NFC'));}))result.push({path:item.path,title:item.title});
       if(page*part.pageSize>=part.total||!part.items.length)break;
     }
     return result.sort((a,b)=>a.path.localeCompare(b.path));
@@ -95,7 +98,7 @@ export function createTrashService(input:{database:Database.Database;repository:
       const file=current(path);const note=origin==='knowledge'?parseKnowledgeNoteForRead(file.bytes,path).record:parseLibraryNoteForRead(file.bytes,path).record;
       if(!note||('processingStatus' in note&&note.processingStatus!=='已归档'))fail('TRASH_SOURCE_UNAVAILABLE',origin==='knowledge'?'请先确认这是一份有效的知识笔记。':'请先确认这是一份已归档原始资料。');
       const id=randomUUID(),createdAt=now().toISOString(),expiresAt=new Date(now().getTime()+600_000).toISOString();
-      const data=manifestSchema.parse({version:1,id,materialPath:path,origin,title:note.title,createdAt,root:port.rootIdentity,identity:{dev:file.stat.dev,ino:file.stat.ino},sha256:sha256Bytes(file.bytes),bytes:file.bytes.length,ruleFingerprint,referencedKnowledge:references(path)});
+      const data=manifestSchema.parse({version:1,id,materialPath:path,origin,title:note.title,createdAt,root:port.rootIdentity,identity:{dev:file.stat.dev,ino:file.stat.ino},sha256:sha256Bytes(file.bytes),bytes:file.bytes.length,ruleFingerprint,referencedKnowledge:references(path,note.title)});
       for(const [key,value] of previews)if(Date.parse(value.expiresAt)<=now().getTime())previews.delete(key);
       if(previews.size>=100)previews.delete(previews.keys().next().value!);
       previews.set(id,{manifest:data,expiresAt});
@@ -153,7 +156,7 @@ export function createTrashService(input:{database:Database.Database;repository:
       if(await input.getRuleFingerprint()!==data.ruleFingerprint)fail('TRASH_PREVIEW_STALE','规则已变化，请重新核对回收预览。');
       assertIdle(data.materialPath);
       const file=current(data.materialPath);
-      if(!sameIdentity(file.stat,data.identity)||sha256Bytes(file.bytes)!==data.sha256||canonicalJson(references(data.materialPath))!==canonicalJson(data.referencedKnowledge))fail('TRASH_PREVIEW_STALE','原文或已有知识引用已变化，请重新预览。');
+      if(!sameIdentity(file.stat,data.identity)||sha256Bytes(file.bytes)!==data.sha256||canonicalJson(references(data.materialPath,data.title))!==canonicalJson(data.referencedKnowledge))fail('TRASH_PREVIEW_STALE','原文或已有知识引用已变化，请重新预览。');
       if(db.prepare("SELECT id FROM personal_trash_entries WHERE material_path=? AND status NOT IN ('restored','deleted')").get(data.materialPath))fail('TRASH_ALREADY_PENDING','这份资料已有回收记录，请前往回收站。');
       const persisted=port.readRecovery(`${id}.intent.json`);
       // Queue history ends at confirmation, including runs finished since preview.
@@ -254,7 +257,7 @@ export function createTrashService(input:{database:Database.Database;repository:
       const data=manifest(value);assertIdle(data.materialPath);
       const ruleFingerprint=await input.getRuleFingerprint();assertIdle(data.materialPath);recycledBytes(data);
       deletion(value);const token=randomUUID();
-      const preview=trashDeletePreviewSchema.parse({id,token,materialPath:data.materialPath,origin:data.origin??'library',title:data.title,bytes:data.bytes,referencedKnowledge:references(data.materialPath),expiresAt:new Date(now().getTime()+600_000).toISOString()});
+      const preview=trashDeletePreviewSchema.parse({id,token,materialPath:data.materialPath,origin:data.origin??'library',title:data.title,bytes:data.bytes,referencedKnowledge:references(data.materialPath,data.title),expiresAt:new Date(now().getTime()+600_000).toISOString()});
       for(const [key,item] of deletePreviews)if(Date.parse(item.preview.expiresAt)<=now().getTime())deletePreviews.delete(key);
       if(deletePreviews.size>=100)deletePreviews.delete(deletePreviews.keys().next().value!);
       deletePreviews.set(token,{preview,ruleFingerprint});return preview;
@@ -274,7 +277,7 @@ export function createTrashService(input:{database:Database.Database;repository:
         const currentRules=await input.getRuleFingerprint();assertIdle(data.materialPath);
         const approvedRules=confirmed?.ruleFingerprint??pending?.ruleFingerprint;
         const approvedReferences=confirmed?.referencedKnowledge??pending?.preview.referencedKnowledge;
-        if(currentRules!==approvedRules||canonicalJson(references(data.materialPath))!==canonicalJson(approvedReferences))fail('TRASH_DELETE_PREVIEW_STALE','规则或已有知识引用发生变化，请重新核对删除预览。');
+        if(currentRules!==approvedRules||canonicalJson(references(data.materialPath,data.title))!==canonicalJson(approvedReferences))fail('TRASH_DELETE_PREVIEW_STALE','规则或已有知识引用发生变化，请重新核对删除预览。');
         if(confirmed&&!port.statItem(id)){finishDeletion(id);return refresh(id);}
         const bytes=recycledBytes(data);
         if(!confirmed){

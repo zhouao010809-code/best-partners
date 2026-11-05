@@ -123,8 +123,10 @@ export function resolveDefaultVaultTemplateRoot(input: {
   readonly resourcesPath?: string;
 } = {}): string {
   const packaged = input.packaged ?? (
-    process.env.NODE_ENV === 'production'
-    || (process as NodeJS.Process & { defaultApp?: boolean }).defaultApp === false
+    // Packaged Electron leaves defaultApp undefined; only `electron .` sets it
+    // to true. Finder does not supply NODE_ENV, and plain Node is not Electron.
+    Boolean(process.versions.electron)
+    && (process as NodeJS.Process & { defaultApp?: boolean }).defaultApp !== true
   );
   if (packaged) {
     const resourcesPath = input.resourcesPath ?? (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;

@@ -121,7 +121,11 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const [skillRecommendation, setSkillRecommendationState] = useState<SkillRecommendation>();
   const skillRecommendationRef = useRef<SkillRecommendation | undefined>(undefined);
   const skillMatchAbort = useRef<AbortController | undefined>(undefined);
+  const recommendationContext = useRef<string | undefined>(undefined);
+  const sendContextRef = useRef('');
   function setSkillRecommendation(value: SkillRecommendation | undefined): void {
+    if (!value) recommendationContext.current = undefined;
+    else if (value.status !== 'invalidated' && (!skillRecommendationRef.current || skillRecommendationRef.current.status === 'invalidated')) recommendationContext.current = sendContextRef.current;
     skillRecommendationRef.current = value;
     setSkillRecommendationState(value);
   }
@@ -161,6 +165,21 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   const provider = providers.find(item => item.id === providerId);
   const model = provider?.models.find(item => item.id === modelId);
   const providerNeedsRecovery = useRef(true);
+  const sendContextFingerprint = JSON.stringify({
+    draftId: draftStore.current.id, message: draft.trim(), conversationId: conversation?.id,
+    providerId, modelId, effort, scope, contextPath, projectId,
+    draftProjectId: draftStore.current.projectId, projectRevision: draftStore.current.projectRevision,
+    attachments: draftStore.current.attachments, purpose: draftStore.current.purpose, selection: learningSelection
+  });
+  sendContextRef.current = sendContextFingerprint;
+  useEffect(() => {
+    const recommendation = skillRecommendationRef.current;
+    if (recommendation && recommendation.status !== 'invalidated' && recommendationContext.current !== sendContextFingerprint) {
+      skillMatchAbort.current?.abort();
+      interactionEpoch.current += 1;
+      setSkillRecommendation({ status: 'invalidated', message: '推荐已失效，请重新发送问题。', epoch: interactionEpoch.current });
+    }
+  }, [sendContextFingerprint]);
   providerNeedsRecovery.current = Boolean(providerError || provider?.status !== 'ready');
   const providerStatus = providerLoading ? '读取中' : providerError ? '读取失败' : provider?.status === 'ready' ? '已连接' : provider?.problem ? '连接异常' : '待连接';
   const sendDisabledReason = pending ? '正在发送…'
@@ -211,6 +230,9 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
 
   useEffect(() => {
     interactionEpoch.current += 1;
+    pendingRef.current = false;
+    setPending(false); setSending(false); setFailedSend(undefined);
+    clearSkillRecommendation();
     conversationRef.current = undefined;
     setConversation(undefined);
     setHistory([]); setHistoryResults([]); setHistoryNextCursor(undefined);
@@ -218,6 +240,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
     restoredDraft.current = false;
     learningNoteDrafts.current.clear();
     setRestoringConversation(false);
+    return () => { interactionEpoch.current += 1; skillMatchAbort.current?.abort(); };
   }, [api.assistantDrafts, projectId, service]);
 
   useEffect(() => {
@@ -524,12 +547,18 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
   async function dispatchSend(payload: AssistantSend): Promise<void> {
     if (!service || pendingRef.current || isRunning || !draftStore.ready || restoringConversation || missingConversation || !attachmentsReady || projectBlocked) return;
     clearSkillRecommendation();
-    interactionEpoch.current += 1; localStartedAt.current = Date.now(); setElapsed(0);
+    const epoch = ++interactionEpoch.current;
+    const draftId = draftStore.currentRef.current.id;
+    const context = sendContextRef.current;
+    const current = () => epoch === interactionEpoch.current && draftStore.currentRef.current.id === draftId;
+    localStartedAt.current = Date.now(); setElapsed(0);
     pendingRef.current = true; setPending(true); setSending(true); setError(''); setFailedSend(undefined); followOutput.current = true;
     try {
       draftStore.update({ contextPath });
       if (!await draftStore.flush()) return;
+      if (!current() || context !== sendContextRef.current) return;
       const result = await service.send(payload);
+      if (!current()) return;
       if (result.ok) { receive(result.value); draftStore.update({ conversationId: result.value.id, text: draftStore.currentRef.current.text.trim() === payload.message ? '' : draftStore.currentRef.current.text }); await draftStore.flush(); }
       else if ('state' in result && ['ASSISTANT_SKILL_STALE', 'ASSISTANT_SKILL_INVALID', 'ASSISTANT_SKILL_UNAVAILABLE'].includes(result.code ?? '')) {
         setSkillRecommendation({
@@ -544,8 +573,8 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
         setFailedSend(undefined);
         await reloadProjectContext();
       } else { setError(errorMessage(result, '未能确认消息已发送，请重试。')); setFailedSend(payload); }
-    } catch { setError('连接中断，尚未确认发送结果。可重试确认这条消息。'); setFailedSend(payload); }
-    finally { pendingRef.current = false; setPending(false); setSending(false); }
+    } catch { if (current()) { setError('连接中断，尚未确认发送结果。可重试确认这条消息。'); setFailedSend(payload); } }
+    finally { if (current()) { pendingRef.current = false; setPending(false); setSending(false); } }
   }
 
   async function matchSkill(payload: AssistantSend): Promise<void> {
@@ -597,6 +626,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
 
   async function useRecommendedSkill(): Promise<void> {
     if (!skillRecommendation || skillRecommendation.status !== 'ready') return;
+    if (skillRecommendation.epoch !== interactionEpoch.current || recommendationContext.current !== sendContextRef.current) return;
     const selected = skillRecommendation.candidates[skillRecommendation.selectedIndex];
     if (!selected) return;
     await dispatchSend({ ...skillRecommendation.payload, skillId: selected.id, skillRevision: selected.revision });
@@ -604,6 +634,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
 
   async function skipRecommendedSkill(): Promise<void> {
     if (!skillRecommendation || (skillRecommendation.status !== 'ready' && skillRecommendation.status !== 'error' && skillRecommendation.status !== 'unavailable')) return;
+    if (skillRecommendation.epoch !== interactionEpoch.current || recommendationContext.current !== sendContextRef.current) return;
     await dispatchSend(skillRecommendation.payload);
   }
 
@@ -625,22 +656,29 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
 
   async function stop() {
     if (!service || !conversation || pendingRef.current) return;
+    const epoch = interactionEpoch.current;
+    const id = conversation.id;
+    const current = () => epoch === interactionEpoch.current && conversationRef.current?.id === id;
     pendingRef.current = true; setPending(true); setError('');
-    try { const result = await service.stop(conversation.id); if (result.ok) receive(result.value); else setError(errorMessage(result, '停止请求未完成，请重试。')); }
-    catch { setError('停止请求未送达，请重试。'); }
-    finally { pendingRef.current = false; setPending(false); }
+    try { const result = await service.stop(id); if (!current()) return; if (result.ok) receive(result.value); else setError(errorMessage(result, '停止请求未完成，请重试。')); }
+    catch { if (current()) setError('停止请求未送达，请重试。'); }
+    finally { if (current()) { pendingRef.current = false; setPending(false); } }
   }
 
   async function confirmAction(action: AssistantPlanAction): Promise<void> {
     if (!service) throw new Error('当前本地服务尚未启用问问。');
+    const epoch = interactionEpoch.current;
     const result = await service.confirmAction(action.id, crypto.randomUUID());
+    if (epoch !== interactionEpoch.current) return;
     if (result.ok) { receive(result.value); return; }
     throw new Error(errorMessage(result, '确认归档未完成，请重试。'));
   }
 
   async function cancelAction(action: AssistantPlanAction): Promise<void> {
     if (!service) throw new Error('当前本地服务尚未启用问问。');
+    const epoch = interactionEpoch.current;
     const result = await service.cancelAction(action.id, crypto.randomUUID());
+    if (epoch !== interactionEpoch.current) return;
     if (result.ok) { receive(result.value); return; }
     throw new Error(errorMessage(result, '取消归档未完成，请重试。'));
   }
@@ -665,36 +703,42 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
 
   async function openConversation(item: HistoryItem) {
     if (!service || locked) return;
-    interactionEpoch.current += 1;
+    const epoch = ++interactionEpoch.current;
     clearSkillRecommendation();
     pendingRef.current = true; setPending(true); setError('');
     try {
       const result = await service.get(item.id);
+      if (epoch !== interactionEpoch.current) return;
       if (!result.ok) { setHistoryError(errorMessage(result, '未能打开这段对话。')); return; }
       if (!await draftStore.forConversation(result.value)) return;
+      if (epoch !== interactionEpoch.current) return;
       selectionRef.current = result.value.providerId; receive(result.value); setProviderId(result.value.providerId); setModelId(result.value.model); setEffort(result.value.effort ?? '');
       setFollowPageContext(false); setShowHistory(false); setFailedSend(undefined); followOutput.current = true;
-    } catch { setHistoryError('未能打开这段对话，请重试。'); }
-    finally { pendingRef.current = false; setPending(false); }
+    } catch { if (epoch === interactionEpoch.current) setHistoryError('未能打开这段对话，请重试。'); }
+    finally { if (epoch === interactionEpoch.current) { pendingRef.current = false; setPending(false); } }
   }
 
   async function startNewConversation(text = '', attachments: AttachmentSelection[] = [], selection?: LearningSelection): Promise<boolean> {
     if (pendingRef.current || isRunning || !draftStore.ready) return false;
-    pendingRef.current = true; setPending(true); interactionEpoch.current += 1; clearSkillRecommendation();
+    const epoch = ++interactionEpoch.current;
+    pendingRef.current = true; setPending(true); clearSkillRecommendation();
     try {
       if (!await draftStore.newDraft(text, attachments, selection ? { purpose: 'learning', selection, scope: 'current', contextPath: selection.path } : undefined)) return false;
+      if (epoch !== interactionEpoch.current) return false;
       conversationRef.current = undefined; setConversation(undefined); setPollError(undefined); setFollowPageContext(false);
       setError(''); setFailedSend(undefined); setShowHistory(false); setShowContinuation(false); setAttachmentRecords([]); textArea.current?.focus(); return true;
-    } finally { pendingRef.current = false; setPending(false); }
+    } finally { if (epoch === interactionEpoch.current) { pendingRef.current = false; setPending(false); } }
   }
   async function openDraft(item: AssistantDraft) {
     if (locked) return;
-    interactionEpoch.current += 1; clearSkillRecommendation(); pendingRef.current = true; setPending(true);
+    const epoch = ++interactionEpoch.current;
+    clearSkillRecommendation(); pendingRef.current = true; setPending(true);
     try {
       if (!await draftStore.select(item)) return;
+      if (epoch !== interactionEpoch.current) return;
       conversationRef.current = undefined; setConversation(undefined); setPollError(undefined); setFollowPageContext(false); setShowHistory(false); setFailedSend(undefined); setError('');
       if (item.conversationId) await restoreConversation(item.conversationId);
-    } finally { pendingRef.current = false; setPending(false); }
+    } finally { if (epoch === interactionEpoch.current) { pendingRef.current = false; setPending(false); } }
   }
 
   async function startLogin() {

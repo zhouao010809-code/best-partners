@@ -60,6 +60,39 @@ describe('clipper payload schema', () => {
 });
 
 describe('clipper delivery queue', () => {
+  it('persists before sending so a restarted worker can retry an interrupted delivery', async () => {
+    const saved = new Map<string, typeof valid>();
+    const store = {
+      async list() { return [...saved.values()]; },
+      async save(payload: typeof valid) { saved.set(payload.packetId, payload); },
+      async remove(id: string) { saved.delete(id); }
+    };
+    let finish!: (value: unknown) => void;
+    let sending!: () => void;
+    const started = new Promise<void>(resolve => { sending = resolve; });
+    const firstWorker = createPendingQueue({ store, send: () => { sending(); return new Promise(resolve => { finish = resolve; }); } });
+    const delivery = firstWorker.deliver(valid);
+    await started;
+    try {
+      expect(await store.list()).toEqual([valid]);
+      const restarted = createPendingQueue({ store, send: async () => ({ ok: true }) });
+      expect(await restarted.retryPending()).toEqual([{ ok: true }]);
+      expect(await store.list()).toEqual([]);
+    } finally { finish({ ok: true }); await delivery; }
+  });
+
+  it('does not send or claim a queued clip when persistence fails', async () => {
+    let sends = 0;
+    const store = {
+      async save() { throw new Error('quota exceeded'); },
+      async recordError() {},
+      async remove() {}
+    };
+    const queue = createPendingQueue({ store, send: async () => { sends++; return { ok: true }; } });
+    await expect(queue.deliver(valid)).rejects.toMatchObject({ queued: false });
+    expect(sends).toBe(0);
+  });
+
   it('serializes concurrent deliver and retry operations without resurrecting sent payloads', async () => {
     const first = { ...valid, packetId: 'first' };
     const second = { ...valid, packetId: 'second' };
@@ -84,6 +117,22 @@ describe('clipper delivery queue', () => {
 });
 
 describe('clipper pending persistence', () => {
+  it('keeps committed outbox state authoritative when the lightweight counter cannot be written', async () => {
+    const database = new Map<string, typeof valid>();
+    const store = createPendingStore({
+      storage: { async set() { throw new Error('metadata quota'); } },
+      database: {
+        async list() { return [...database.values()]; },
+        async put(payload: typeof valid) { database.set(payload.packetId, payload); },
+        async remove(id: string) { database.delete(id); }
+      }
+    });
+    await expect(store.save(valid)).resolves.toBeUndefined();
+    expect(await store.list()).toEqual([valid]);
+    await expect(store.remove(valid.packetId)).resolves.toBeUndefined();
+    expect(await store.list()).toEqual([]);
+  });
+
   it('keeps complete payloads in IndexedDB and only lightweight state in chrome.storage.local', async () => {
     const writes: unknown[] = [];
     const memoryDb = new Map<string, typeof valid>();
