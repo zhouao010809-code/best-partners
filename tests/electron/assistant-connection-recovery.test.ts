@@ -68,6 +68,7 @@ for (const mode of ['development', 'packaged'] as const) {
       });
       await installRecoveryFixture(instance);
       const window = await instance.firstWindow();
+      await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(720, 700));
       const sentMessages: unknown[] = [];
       window.on('request', request => {
         if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/assistant/messages') {
@@ -82,13 +83,19 @@ for (const mode of ['development', 'packaged'] as const) {
       await expect(panel.getByText('待连接', { exact: true }).first()).toBeVisible();
       await expect(send).toBeDisabled();
 
-      // Saving while the panel stays open must update its connection status.
+      // Compact windows use an overlay. Close it to reach settings, then reopen
+      // the still-mounted assistant after saving without sending a message.
+      await panel.getByRole('button', { name: '关闭问问', exact: true }).click();
+      await expect(panel).toHaveCount(0);
       await window.getByLabel('DeepSeek API Key').fill('sk-isolated-connection-recovery');
       await window.getByRole('button', { name: '保存密钥', exact: true }).click();
+      await expect(window.getByText('密钥已保存在本机，尚未验证连接。点击“验证连接”确认是否可用。', { exact: true })).toBeVisible();
+      await window.getByRole('button', { name: '打开问问 AI', exact: true }).click();
       await expect(panel.getByText('已连接', { exact: true }).first()).toBeVisible({ timeout: 20_000 });
       expect(sentMessages).toEqual([]);
       expect(await instance.evaluate(() => (globalThis as unknown as RecoveryFixtureState).completionCalls)).toBe(0);
 
+      await panel.getByRole('button', { name: '关闭问问', exact: true }).click();
       await window.getByRole('link', { name: '我的项目', exact: true }).click();
       await window.getByRole('button', { name: '添加项目', exact: true }).click();
       await window.getByRole('textbox', { name: '项目显示名（可选）' }).fill('连接恢复测试项目');

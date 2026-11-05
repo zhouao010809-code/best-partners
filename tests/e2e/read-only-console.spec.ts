@@ -16,6 +16,20 @@ async function expectNoRootOverflow(page: Page): Promise<void> {
   }))).toEqual({ documentOverflow: 0, bodyOverflow: 0 });
 }
 
+for (const width of [720, 1280]) {
+  test(`short windows keep sidebar settings and trash reachable at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 600 });
+    await openPage(page, '/');
+    for (const [name, path] of [['设置', '/settings'], ['回收站', '/trash'], ['大脑总览', '/']] as const) {
+      const link = page.getByRole('link', { name, exact: true });
+      await link.click({ timeout: 4_000 });
+      await expect(page).toHaveURL(`${APP_ORIGIN}${path}`);
+      await expect(link).toBeInViewport();
+    }
+    await expectNoRootOverflow(page);
+  });
+}
+
 test('serves deterministic indexed APIs and completes a real rebuild job', async ({ request }) => {
   const healthResponse = await request.get('/api/v1/health');
   expect(healthResponse.ok()).toBe(true);
