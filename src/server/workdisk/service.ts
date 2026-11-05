@@ -267,7 +267,10 @@ export function createWorkdiskService(config: { stateDirectory: string; protecte
                     const cached = contentCache.get(key); if (cached) return cached;
                     const source = await readBounded(current.rootPath, path, current, SEARCH_CONTENT_INPUT_LIMIT);
                     if (source.truncated) throw problem('文件超出内容查找范围。');
-                    const fileSignal = AbortSignal.any([contentSignal, AbortSignal.timeout(3_000)]);
+                    // PDF parsers stay individually bounded. Local image recognition
+                    // shares the existing whole-search budget, including model startup.
+                    const fileSignal = extname(path).toLowerCase() === '.pdf'
+                      ? AbortSignal.any([contentSignal, AbortSignal.timeout(3_000)]) : contentSignal;
                     let result;
                     try { result = await cancellableSearch(contentReader({ name: file.name, bytes: source.bytes }, fileSignal), fileSignal); }
                     catch (error) { contentSignal.throwIfAborted(); result = { text: '', partial: true }; }

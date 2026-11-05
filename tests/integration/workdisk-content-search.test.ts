@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { createWorkdiskService } from '../../src/server/workdisk/service.js';
 import { createWorkdiskSearchContentReader, type WorkdiskSearchContentReader } from '../../src/server/workdisk/content-search.js';
@@ -75,9 +76,9 @@ it('limits extraction bytes per search and progresses through uncached files on 
   expect(second.files).toHaveLength(3); expect(second.skippedCount).toBe(0); expect(reader).toHaveBeenCalledTimes(3);
 });
 
-it('stops waiting for a parser that ignores cancellation when closing', async () => {
+it.each(['pdf', 'png'])('stops waiting for a %s parser that ignores cancellation when closing', async extension => {
   let started!: () => void; const reached = new Promise<void>(resolve => { started = resolve; });
-  const f = await setup(async () => { started(); return new Promise(() => {}); }); await writeFile(join(f.root, '123.pdf'), 'input');
+  const f = await setup(async () => { started(); return new Promise(() => {}); }); await writeFile(join(f.root, `123.${extension}`), 'input');
   const searching = f.service.list({ query: 'needle' }); await reached; await f.service.close();
   const result = await searching; expect(result.files).toEqual([]); expect(result.skippedCount).toBe(1);
 });
@@ -100,6 +101,19 @@ it('times out a stuck file and continues to later files, remembering the failure
   const second = await f.service.list({ query: 'needle' });
   expect(second.files.map(file => file.name)).toEqual(['a.pdf']); expect(second.skippedCount).toBe(1); expect(reader).toHaveBeenCalledTimes(2);
 }, 6000);
+
+it('lets image recognition finish beyond the PDF file deadline within the shared search budget', async () => {
+  const reader = vi.fn<WorkdiskSearchContentReader>(async (_source, signal) => {
+    await delay(3250, undefined, { signal });
+    return { text: '短视频选题与咨询转化方法', partial: false };
+  });
+  const f = await setup(reader); await writeFile(join(f.root, '123.png'), 'controlled image fixture');
+  const result = await f.service.list({ query: '短视频' });
+  expect(result.files).toHaveLength(1);
+  expect(result.files[0]).toMatchObject({ name: '123.png', matchedBy: 'content', excerpt: expect.stringContaining('短视频') });
+  expect(result.skippedCount).toBe(0);
+  expect(reader).toHaveBeenCalledOnce();
+}, 8000);
 
 let fixtureRoot: string | undefined;
 let fixturePath: string;
