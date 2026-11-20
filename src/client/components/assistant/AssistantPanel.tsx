@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../../../shared/domain/vault-layout.js';
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
 import { ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronLeft, History, LoaderCircle, Maximize2, Minimize2, Pin, Plus, RefreshCw, Search, Square, X } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
@@ -695,7 +696,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
         : project?.availability === 'scanning' ? '正在扫描项目资料…'
           : project?.availability === 'reconnect-required' ? '项目资料需要重新连接' : '项目资料暂不可用';
   const suggestions = projectId ? ['梳理项目重点', '找资料回答问题', '起草下一步计划']
-    : contextPath ? ['解释这份资料的核心观点', contextPath.startsWith('02知识库/') ? '用这篇知识拟一个文章提纲' : '把这份资料提炼成知识候选', '举一个具体的应用例子']
+    : contextPath ? ['解释这份资料的核心观点', isKnowledgePath(contextPath) ? '用这篇知识拟一个文章提纲' : '把这份资料提炼成知识候选', '举一个具体的应用例子']
       : ['找出大脑里关于创作的方法', '搜索关于学习方法的知识', '整理资料时，你能帮我做什么？'];
   return <aside id="assistant-panel" className={`assistant-panel assistant-panel--width-${width}${expanded ? ' assistant-panel--expanded' : ''}`} data-ai-active={isRunning || sending || undefined} aria-label="问问 AI">
     <div className="assistant-panel__resize" role="separator" aria-label="调整问问面板宽度" aria-orientation="vertical" aria-valuemin={360} aria-valuemax={600} aria-valuenow={width} tabIndex={0} onPointerDown={resize} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) onWidthChange(Math.min(600, Math.max(360, window.innerWidth - event.clientX))); }} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onWidthChange(Math.min(600, Math.max(360, width + (event.key === 'ArrowLeft' ? 80 : -80)))); } }} />

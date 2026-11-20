@@ -4,8 +4,11 @@ import { createHash } from 'node:crypto';
 import { join, resolve, sep } from 'node:path';
 import { clipperMessageSchema, CLIPPER_EXTENSION_ID, type ClipperMessage } from '../shared/api/clipper.js';
 
+import { CURRENT_VAULT_LAYOUT, LEGACY_VAULT_LAYOUT, type VaultLayout } from '../shared/domain/vault-layout.js';
+
 export const MAX_NATIVE_MESSAGE_BYTES = 12 * 1024 * 1024;
-export type ClipperHostConfig = { vaultRoot: string; token: string; extensionId: string; version?: 1 };
+export type ClipperLayout = VaultLayout['id'];
+export type ClipperHostConfig = { layout?: ClipperLayout; vaultRoot: string; token: string; extensionId: string; version?: 1 };
 function fail(message: string): never { throw new Error(message); }
 function isMissing(error: unknown): boolean { return !!error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT'; }
 function isInside(root: string, candidate: string): boolean { return candidate === root || candidate.startsWith(`${root}${sep}`); }
@@ -44,12 +47,14 @@ export function decodeNativeMessage(frame: Buffer): unknown {
 export function parseClipperHostConfig(value: unknown): ClipperHostConfig {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Native host 配置无效');
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some((key) => !['version', 'vaultRoot', 'token', 'extensionId'].includes(key))) fail('Native host 配置无效');
+  if (Object.keys(input).some((key) => !['version', 'vaultRoot', 'token', 'extensionId', 'layout'].includes(key))) fail('Native host 配置无效');
   if (input.version !== 1) fail('Native host 配置版本无效');
   if (typeof input.vaultRoot !== 'string' || !input.vaultRoot.startsWith('/') || input.vaultRoot.includes('\0')) fail('Native host 配置路径无效');
   if (typeof input.token !== 'string' || input.token.length < 32 || input.token.length > 256) fail('Native host 配置令牌无效');
   if (input.extensionId !== CLIPPER_EXTENSION_ID) fail('Native host 配置扩展无效');
-  return { version: 1, vaultRoot: input.vaultRoot, token: input.token, extensionId: input.extensionId as string };
+  const layout = input.layout ?? 'legacy';
+  if (layout !== 'current' && layout !== 'legacy') fail('Native host 大脑目录格式无效');
+  return { version: 1, layout, vaultRoot: input.vaultRoot, token: input.token, extensionId: input.extensionId as string };
 }
 async function assertPrivateConfig(path: string): Promise<void> {
   const stat = await fs.lstat(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0 || stat.size > 16_384) fail('Native host 配置权限无效');
@@ -60,10 +65,10 @@ async function safeRealDirectory(path: string, root?: string): Promise<string> {
   if (!stat.isDirectory() || stat.isSymbolicLink()) fail('保存位置无效'); const real = await fs.realpath(path);
   if (root !== undefined && !isInside(root, real)) fail('保存位置无效'); return real;
 }
-async function safeInbox(vaultRoot: string): Promise<{ inbox: string }> {
+async function safeInbox(vaultRoot: string, layout: ClipperLayout = 'legacy'): Promise<{ inbox: string }> {
   const root = await safeRealDirectory(resolve(vaultRoot));
-  const library = await safeRealDirectory(join(root, '01图书馆'), root);
-  return { inbox: await safeRealDirectory(join(library, '小兆clipper'), root) };
+  const { inboxRoot } = layout === 'current' ? CURRENT_VAULT_LAYOUT : LEGACY_VAULT_LAYOUT;
+  return { inbox: await safeRealDirectory(join(root, inboxRoot), root) };
 }
 function markdownFor(message: Extract<ClipperMessage, { payload: unknown }>): string {
   const p = message.payload; return `# ${p.title}\n\n来源：${p.url}\n采集时间：${p.clippedAt}\n\n${p.content}\n`;
@@ -102,7 +107,7 @@ export async function handleClipperMessage(message: unknown, configInput: Clippe
   const config = parseClipperHostConfig(configInput); const parsed = clipperMessageSchema.safeParse(message); if (!parsed.success) fail('收藏消息格式无效');
   const m = parsed.data; if (m.extensionId !== CLIPPER_EXTENSION_ID || m.extensionId !== config.extensionId || m.token !== config.token) fail('浏览器插件未配对，请重新连接');
   if (!('payload' in m)) return { ok: true, pong: true };
-  const { inbox } = await safeInbox(config.vaultRoot); const md = markdownFor(m);
+  const { inbox } = await safeInbox(config.vaultRoot, config.layout); const md = markdownFor(m);
   const contentHash = createHash('sha256').update(md).digest('hex'); const lock = join(inbox, '.clipper.lock'); let lockHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     lockHandle = await fs.open(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);

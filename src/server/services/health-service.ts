@@ -39,7 +39,7 @@ export interface HealthSnapshot {
 }
 
 export type HealthVaultSourceSnapshot =
-  | { readonly status: 'ready'; readonly adapter: 'filesystem' | 'local-rest'; readonly displayName: string }
+  | { readonly status: 'ready'; readonly adapter: 'filesystem' | 'local-rest'; readonly displayName: string; readonly layout?: 'current' | 'legacy' }
   | { readonly status: 'unavailable'; readonly reason: 'VAULT_UNAVAILABLE' | 'VAULT_RULES_MISSING' };
 
 export type HealthPluginSnapshot =
@@ -324,6 +324,7 @@ export function createDirectReadHealthService(input: {
   readonly stateKernel: StateKernel;
   readonly indexState: HealthIndexStateSource;
   readonly displayName: string;
+  readonly layout?: 'current' | 'legacy';
   readonly probeReadiness?: (signal: AbortSignal) => Promise<VaultReadiness>;
   readonly model?: { readonly baseUrl: string; readonly name?: string };
   readonly schemaIssues?: { count(): number };
@@ -368,7 +369,7 @@ export function createDirectReadHealthService(input: {
       return {
         status: blocker === undefined && readiness.status === 'ready' ? 'ready' : 'recovery-only',
         vaultSource: readiness.status === 'ready'
-          ? { status: 'ready', adapter: 'filesystem', displayName }
+          ? { status: 'ready', adapter: 'filesystem', displayName, ...(input.layout === 'current' ? { layout: input.layout } : {}) }
           : readiness,
         index,
         model: modelSnapshot(input.model),

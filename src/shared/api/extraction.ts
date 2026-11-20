@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../domain/vault-layout.js';
 import { z } from 'zod';
 import { successEnvelopeSchema } from './schemas.js';
 import { knowledgeContentSchema } from './knowledge-content.js';
@@ -30,7 +31,7 @@ export const extractionPreviewSchema = z.strictObject({
 });
 export const extractionCandidateSchema = z.strictObject({
     title: text(300), knowledgeType: z.enum(['概念', '原理', '模型', '方法', 'SOP', '标准', '案例', '数据', '观点', '素材']),
-    suggestedPath: z.string().min(1).max(1024).refine((value) => value.startsWith('02知识库/') && !value.split('/').some((part) => !part || part === '.' || part === '..') && !/[\\\u0000-\u001f\u007f]/u.test(value)),
+    suggestedPath: z.string().min(1).max(1024).refine((value) => isKnowledgePath(value) && !value.split('/').some((part) => !part || part === '.' || part === '..') && !/[\\\u0000-\u001f\u007f]/u.test(value)),
     topics: z.array(text(512)).max(20), coreContent: text(20_000), value: text(3000), draft: knowledgeContentSchema.optional()
 });
 export const extractionResultSchema = z.strictObject({

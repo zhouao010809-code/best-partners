@@ -6,12 +6,14 @@ import { assertReadNotAborted, type NativeReadVaultPortFactory, type NativeVault
 import { MAX_FILE_BYTES } from './native-read-helper-protocol.js';
 import { sha256Bytes } from './raw-bytes.js';
 import type { OpenableVaultGateway, VaultReadiness, VersionedBytes } from './VaultGateway.js';
-import { RULE_APPROVAL_SOURCE_PATHS } from '../../shared/domain/rule-approval.js';
+import type { VaultLayout } from '../../shared/domain/vault-layout.js';
+import { identifyVaultLayout } from './vault-layout.js';
 
 export class FileSystemVaultGateway implements OpenableVaultGateway {
   readonly cacheKey: string;
 
   private constructor(
+    readonly layout: VaultLayout,
     private readonly vaultRoot: string,
     private readonly reader: NativeVaultReader,
     private readonly openExternal: ((url: string) => Promise<void>) | undefined
@@ -25,24 +27,34 @@ export class FileSystemVaultGateway implements OpenableVaultGateway {
     vaultRoot: string; nativeReader: NativeReadVaultPortFactory; openExternal?: (url: string) => Promise<void>;
   }): Promise<FileSystemVaultGateway> {
     const root = validateFilesystemRoot(input.vaultRoot);
-    return new FileSystemVaultGateway(root, await input.nativeReader.create(root), input.openExternal);
+    const reader = await input.nativeReader.create(root);
+    return new FileSystemVaultGateway(await identifyVaultLayout(reader), root, reader, input.openExternal);
+  }
+
+  private validateReadPath(path: string, kind: 'file' | 'directory' = 'file'): string {
+    const value = validateFilesystemPath(path, kind);
+    const root = value.split('/')[0];
+    if (root !== '00大脑规则' && root !== '01图书馆' && root !== this.layout.knowledgeRoot) {
+      throw new AppError('PATH_NOT_ALLOWED', 'PATH_NOT_ALLOWED');
+    }
+    return value;
   }
 
   async listDirectory(path: string, signal?: AbortSignal): Promise<readonly string[]> {
     assertReadNotAborted(signal);
-    const entries = await this.reader.listDirectory(validateFilesystemPath(path, 'directory'), signal);
+    const entries = await this.reader.listDirectory(this.validateReadPath(path, 'directory'), signal);
     return entries.map((entry) => entry.kind === 'directory' ? `${entry.name}/` : entry.name);
   }
 
   async probeReadiness(signal?: AbortSignal): Promise<VaultReadiness> {
     try {
-      for (const directory of ['01图书馆', '02知识库', '03大讲堂']) {
+      for (const directory of ['01图书馆', this.layout.knowledgeRoot, this.layout.outputRoot, ...(this.layout.id === 'current' ? ['02日记本'] : [])]) {
         await this.reader.assertDirectory(directory, signal);
       }
     } catch { return { status: 'unavailable', reason: 'VAULT_UNAVAILABLE' }; }
     try {
       await this.reader.assertDirectory('00大脑规则', signal);
-      for (const path of RULE_APPROVAL_SOURCE_PATHS) await this.reader.assertFile(path, signal);
+      for (const path of this.layout.rulePaths) await this.reader.assertFile(path, signal);
       return { status: 'ready' };
     } catch {
       try { await this.reader.assertDirectory('01图书馆', signal); }
@@ -53,7 +65,7 @@ export class FileSystemVaultGateway implements OpenableVaultGateway {
 
   async readRaw(requestedPath: string, signal?: AbortSignal): Promise<VersionedBytes> {
     assertReadNotAborted(signal);
-    const path = validateFilesystemPath(requestedPath);
+    const path = this.validateReadPath(requestedPath);
     const { bytes } = await this.reader.readFile(path, signal);
     assertReadNotAborted(signal);
     if (bytes.byteLength > MAX_FILE_BYTES) throw new AppError('FILE_TOO_LARGE', 'FILE_TOO_LARGE');
@@ -62,7 +74,7 @@ export class FileSystemVaultGateway implements OpenableVaultGateway {
 
   async openInObsidian(requestedPath: string, signal?: AbortSignal): Promise<void> {
     assertReadNotAborted(signal);
-    const path = validateFilesystemPath(requestedPath);
+    const path = this.validateReadPath(requestedPath);
     await this.reader.assertFile(path, signal);
     assertReadNotAborted(signal);
     if (!this.openExternal) throw new AppError('OBSIDIAN_OPEN_UNAVAILABLE', 'OBSIDIAN_OPEN_UNAVAILABLE', 503);

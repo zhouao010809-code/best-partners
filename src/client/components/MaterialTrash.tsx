@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../../shared/domain/vault-layout.js';
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useMatch } from 'react-router-dom';
 import { createPortal } from 'react-dom';
@@ -137,7 +138,7 @@ export function MaterialTrashProvider({ children, onChanged, allowPermanentDelet
     try { localStorage.removeItem(storageKey); } catch { setError('无法清除本机尝试记录，请检查本机存储后重试。'); return; }
     setPending(undefined); setNotRegistered(false); setDeleteNotRegistered(false); close();
   }
-  const knowledge = target?.path.startsWith('02知识库/');
+  const knowledge = target !== undefined && isKnowledgePath(target.path);
   const noun = knowledge ? '知识文档' : '原始资料';
   const restoreStillTrashed = pending?.action === 'restore' && entry?.status === 'trashed';
   return <Context.Provider value={{ available: Boolean(service), canPermanentlyDelete, busy, revision, open: (record) => void open(record), openDelete: (value) => void openDelete(value), perform }}>

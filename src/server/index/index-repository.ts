@@ -429,7 +429,8 @@ export function createIndexRepository(
         .map(knowledgeFromRow)
         .filter((record) => query.includeObsolete === true
           || query.usageStatus === '过时'
-          || record.usageStatus !== '过时')
+          || query.usageStatus === '历史记录'
+          || (record.usageStatus !== '过时' && record.usageStatus !== '历史记录'))
         .filter((record) => query.usageStatus === undefined || record.usageStatus === query.usageStatus)
         .filter((record) => query.knowledgeType === undefined || record.knowledgeType === query.knowledgeType)
         .filter((record) => query.topic === undefined || record.recallFields.topics.includes(query.topic))

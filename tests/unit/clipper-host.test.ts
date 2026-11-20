@@ -22,18 +22,19 @@ describe('clipper native messaging framing', () => {
 });
 
 describe('clipper native host writes', () => {
-  it('writes an atomic packet and treats repeated packet or content as duplicate', async () => {
+  it.each([['legacy', '小兆clipper'], ['current', '00信息入口']] as const)(
+    'writes an atomic packet into the %s inbox and deduplicates it', async (layout, inboxName) => {
     const root = await mkdtemp(join(tmpdir(), 'clipper-host-'));
-    await mkdir(join(root, '01图书馆', '小兆clipper'), { recursive: true });
-    const config = { version: 1 as const, vaultRoot: root, token: 't'.repeat(32), extensionId: CLIPPER_EXTENSION_ID };
+    await mkdir(join(root, '01图书馆', inboxName), { recursive: true });
+    const config = { layout, version: 1 as const, vaultRoot: root, token: 't'.repeat(32), extensionId: CLIPPER_EXTENSION_ID };
     const message = { extensionId: CLIPPER_EXTENSION_ID, token: config.token, payload: { packetId: 'p1', title: '标题', url: 'https://example.com', content: '正文', clippedAt: '2026-09-14T00:00:00.000Z' } };
     await expect(handleClipperMessage(message, config)).resolves.toMatchObject({ duplicate: false });
     await expect(handleClipperMessage({ ...message, payload: { ...message.payload, packetId: 'p2' } }, config)).resolves.toMatchObject({ duplicate: true });
     await expect(handleClipperMessage({ ...message, payload: { ...message.payload, content: '更新正文' } }, config)).resolves.toMatchObject({ duplicate: true });
     await expect(handleClipperMessage(message, config)).resolves.toMatchObject({ duplicate: true });
-    const files = await readdir(join(root, '01图书馆', '小兆clipper', 'p1'));
+    const files = await readdir(join(root, '01图书馆', inboxName, 'p1'));
     expect(files.sort()).toEqual(['index.md', 'metadata.json']);
-    expect(await readFile(join(root, '01图书馆', '小兆clipper', 'p1', 'metadata.json'), 'utf8')).toContain('contentHash');
+    expect(await readFile(join(root, '01图书馆', inboxName, 'p1', 'metadata.json'), 'utf8')).toContain('contentHash');
   });
   it('rejects symlinked vault path components and inbox entries', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'clipper-host-symlink-'));

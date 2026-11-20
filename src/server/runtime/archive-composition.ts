@@ -1,3 +1,4 @@
+import { selectPersonalRecoveryRoot } from '../archive/personal-recovery-root.js';
 import { join } from 'node:path';
 import { ensurePrivateDirectory } from '../db/permissions.js';
 import type { StateKernel } from '../db/database.js';
@@ -59,6 +60,8 @@ function capabilityResources(config: ArchiveCompositionConfig) {
 }
 
 export async function createArchiveComposition(config: ArchiveCompositionConfig): Promise<ArchiveComposition> {
+  const currentLayout = config.gateway.layout?.id === 'current';
+  let recoveryBase = config.appDataDir;
   let archivePort: PersonalArchivePort | undefined;
   let ingestionPort: PersonalIngestionPort | undefined;
   let ingestionService: IngestionService | undefined;
@@ -72,7 +75,8 @@ export async function createArchiveComposition(config: ArchiveCompositionConfig)
     && config.personalArchiveAddonPath) {
     const resources = capabilityResources(config);
     try {
-      const recoveryRoot = join(config.appDataDir, 'personal-intake-v1');
+      recoveryBase = selectPersonalRecoveryRoot(config.vaultRealRoot, config.appDataDir);
+      const recoveryRoot = join(recoveryBase, 'personal-intake-v1');
       ensurePrivateDirectory(recoveryRoot);
       archivePort = openPersonalArchive(config.vaultRealRoot, recoveryRoot, config.personalArchiveAddonPath);
       const ownedArchive = archivePort;
@@ -83,7 +87,7 @@ export async function createArchiveComposition(config: ArchiveCompositionConfig)
         }
         return (await loadRuleBundle(config.gateway)).fingerprint;
       };
-      const service = createIntakeService({ port: archivePort, getRuleFingerprint,
+      const service = createIntakeService({ port: archivePort, getRuleFingerprint, layout: config.gateway.layout,
         ruleFingerprint: await getRuleFingerprint(), refreshIndex: config.refreshIndex });
       const archiveMutation = <T>(action: () => Promise<T>) => config.intakeMutation(async () => {
         if (!intakeTrashService) throw new PublicApiError('RECOVERY_REQUIRED', '收件箱回收状态暂时无法核验，请重新打开 App 后再归档。', 409);
@@ -101,10 +105,10 @@ export async function createArchiveComposition(config: ArchiveCompositionConfig)
     }
   }
 
-  if (config.stateKernel.mode === 'normal' && config.repository && archivePort && config.scheduler) {
+  if (!currentLayout && config.stateKernel.mode === 'normal' && config.repository && archivePort && config.scheduler) {
     const resources = capabilityResources(config);
     try {
-      const recoveryRoot = join(config.appDataDir, 'personal-ingestion-v1');
+      const recoveryRoot = join(recoveryBase, 'personal-ingestion-v1');
       ensurePrivateDirectory(recoveryRoot);
       ingestionPort = archivePort.openIngestion(recoveryRoot);
       const ownedPort = ingestionPort;
@@ -127,7 +131,7 @@ export async function createArchiveComposition(config: ArchiveCompositionConfig)
   if (config.stateKernel.mode === 'normal' && config.repository && archivePort && config.scheduler) {
     const resources = capabilityResources(config);
     try {
-      const recoveryRoot = join(config.appDataDir, 'personal-trash-v1');
+      const recoveryRoot = join(recoveryBase, 'personal-trash-v1');
       ensurePrivateDirectory(recoveryRoot);
       trashPort = archivePort.openTrash(recoveryRoot);
       const ownedPort = trashPort;
@@ -151,7 +155,7 @@ export async function createArchiveComposition(config: ArchiveCompositionConfig)
   if (archivePort && intakeService) {
     const resources = capabilityResources(config);
     try {
-      const recoveryRoot = join(config.appDataDir, 'personal-intake-trash-v1');
+      const recoveryRoot = join(recoveryBase, 'personal-intake-trash-v1');
       ensurePrivateDirectory(recoveryRoot);
       intakeTrashPort = archivePort.openIntakeTrash(recoveryRoot);
       const ownedPort = intakeTrashPort;

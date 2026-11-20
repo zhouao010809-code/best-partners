@@ -28,13 +28,16 @@ type Trash = {
   listRecovery(): readonly string[];
   close(): void;
 };
-function fixture() {
+function fixture(current = false) {
   const base = mkdtempSync('/private/tmp/xiaozhao-personal-trash-test-');
   fixtures.push(base); chmodSync(base, 0o700);
   writeFileSync(join(base, '.test-marker'), marker, { mode: 0o600, flag: 'wx' });
   const root = join(base, 'vault'), recovery = join(base, 'intake'), trashRecovery = join(base, 'trash');
   for (const directory of [root, recovery, trashRecovery]) mkdirSync(directory, { mode: 0o700 });
-  for (const directory of ['00大脑规则', '01图书馆/小兆clipper', '02知识库', '03大讲堂', '01图书馆/来自个人/旧资料']) mkdirSync(join(root, directory), { recursive: true });
+  const directories = current ? ['00大脑规则', '01图书馆/00信息入口', '02日记本', '03知识库', '04大讲堂']
+    : ['00大脑规则', '01图书馆/小兆clipper', '02知识库', '03大讲堂', '01图书馆/来自个人/旧资料'];
+  for (const directory of directories) mkdirSync(join(root, directory), { recursive: true });
+  if (current) writeFileSync(join(root, '00大脑规则/03知识库规则.md'), '规则');
   const archive = openPersonalArchive(root, recovery, addon); handles.push(archive);
   return { base, root, recovery, trashRecovery, archive };
 }
@@ -73,6 +76,36 @@ describe('personal trash native contract in isolated temporary vaults', () => {
     expect(port.readItem(id)).toEqual(bytes); port.restore(id, path, identity);
     expect(port.stat(path)).toEqual(identity); port.move(path, secondId, identity); port.purge(secondId, identity, bytes);
     expect(port.statItem(secondId)).toBeNull(); expect(readFileSync(join(f.root, '02知识库/主题/附件.png'), 'utf8')).toBe('keep');
+  });
+  it('uses current-layout source documents, knowledge and intake without writing legacy directories', () => {
+    const f = fixture(true), port = open(f.archive, f.trashRecovery);
+    for (const path of [
+      '03知识库/思考/观察.md',
+      '01图书馆/02个人资料/其他/2026/2026-11/个人笔记/个人笔记.md',
+      '01图书馆/01公域资料/来自书籍/2026/2026-11/读书/读书.md'
+    ]) {
+      const full = join(f.root, path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, '原文');
+      const identity = port.stat(path)!;
+      port.move(path, id, identity);
+      port.restore(id, path, identity);
+      expect(readFileSync(full, 'utf8')).toBe('原文');
+    }
+    for (const path of ['02日记本/聊天.md', '02知识库/笔记.md', '04大讲堂/讲义.md', '01图书馆/00信息入口/原文.md',
+      '01图书馆/01公域资料/来自书籍/2026/2026-11/读书/附件/笔记.md']) {
+      code(() => port.stat(path), 'PATH_NOT_ALLOWED');
+    }
+    const intakeRecovery = join(f.base, 'intake-trash');
+    mkdirSync(intakeRecovery, { mode: 0o700 });
+    const intakeTrash = f.archive.openIntakeTrash(intakeRecovery); handles.push(intakeTrash);
+    writeFileSync(join(f.root, '01图书馆/00信息入口/一份资料.md'), '收件');
+    expect(f.archive.listIntake().map(entry => entry.name)).toEqual(['一份资料.md']);
+    const identity = intakeTrash.source.stat('一份资料.md')!;
+    intakeTrash.move('一份资料.md', id, identity);
+    intakeTrash.restore(id, '一份资料.md', identity);
+    expect(intakeTrash.source.read('一份资料.md').toString()).toBe('收件');
+    code(() => f.archive.ensureMonth('个人', '2026-11'), 'PATH_NOT_ALLOWED');
   });
   it('exposes explicit permanent deletion of one verified trash item', () => {
     const f = fixture(), port = open(f.archive, f.trashRecovery);

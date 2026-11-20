@@ -16,7 +16,7 @@ import { validateAssistantLoginUrl } from './assistant-login.js';
 import { runClipperHost } from './clipper-host.js';
 import { clipperPaths, installClipperHost, readClipperBridgeConfig } from './clipper-installer.js';
 import { createBridgeConfig } from './clipper-installer.js';
-import { createSkillCatalogService } from '../server/services/skill-catalog.js';
+import { personalSkillsRoot, createSkillCatalogService } from '../server/services/skill-catalog.js';
 import { createDesktopSkillNavigation } from './skill-navigation.js';
 import { checkForUpdate, RELEASES_URL } from './update-check.js';
 import { validateUpdateUrl } from './update-navigation.js';
@@ -96,11 +96,19 @@ async function bootstrap(): Promise<void> {
   const showInvalidSelection = async (): Promise<'retry' | 'cancel'> => {
     const result = await dialog.showMessageBox({
       type: 'warning', title: '文件夹暂不可用',
-      message: '请选择包含大脑规则、图书馆、知识库和大讲堂的文件夹。',
-      detail: '文件夹不能是快捷链接，也不能与应用数据目录重叠。当前大脑设置没有更改。',
+      message: '请选择大脑的根文件夹。',
+      detail: '新版根目录包含「00大脑规则、01图书馆、02日记本、03知识库、04大讲堂」。旧版四区目录也可使用。请选择包含完整规则文件的原目录。',
       buttons: ['重新选择', '取消'], defaultId: 0, cancelId: 1
     });
     return result.response === 0 ? 'retry' : 'cancel';
+  };
+  const savedUnavailable = async (path: string) => {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning', title: '上次连接的大脑暂时无法打开',
+      message: '请确认大脑文件夹仍在原位置。如果它在外接盘上，请接入后点「重试」。',
+      detail: path, buttons: ['重试', '选择其他大脑', '退出'], defaultId: 0, cancelId: 2
+    });
+    return (['retry', 'select', 'cancel'] as const)[response] ?? 'cancel';
   };
   const showInitialChoice = async () => {
     const result = await dialog.showMessageBox({
@@ -135,7 +143,7 @@ async function bootstrap(): Promise<void> {
   };
   const saved = await loadDesktopSettings({ userDataDir }).catch(() => undefined);
   const settings = testRoot === undefined
-    ? await resolveInitialVaultSettings({ saved, defaultRoot: join(app.getPath('home'), '我的大脑'), validate, chooseDirectory, showInvalidSelection, showInitialChoice, createInitial })
+    ? await resolveInitialVaultSettings({ saved, defaultRoot: join(app.getPath('home'), '我的大脑'), validate, chooseDirectory, showInvalidSelection, savedUnavailable, showInitialChoice, createInitial })
     : await validate(testRoot);
   if (settings === undefined) {
     await dialog.showMessageBox({ message: '未选择大脑文件夹，应用尚未启动', buttons: ['关闭'] });
@@ -143,7 +151,6 @@ async function bootstrap(): Promise<void> {
     return;
   }
   await saveDesktopSettings({ userDataDir, config: settings });
-  const skillCatalog = createSkillCatalogService({ skillsRoot: join(settings.vaultRoot, '.claude', 'skills') });
   const gateway = await FileSystemVaultGateway.create({
     vaultRoot: settings.vaultRoot, nativeReader,
     openExternal: async (url) => {
@@ -151,6 +158,7 @@ async function bootstrap(): Promise<void> {
       await shell.openExternal(url);
     }
   });
+  const skillCatalog = createSkillCatalogService({ skillsRoot: personalSkillsRoot(settings.vaultRoot, gateway.layout.id) });
   // Keep the server bundle separate so SQLite migrations retain their relative location.
   const { startServer } = await import(new URL('../server/start-server.js', import.meta.url).href) as typeof import('../server/start-server.js');
   const appDataDir = prepareVaultCacheDirectory({ userDataDir, vaultRoot: settings.vaultRoot, cacheKey: gateway.cacheKey });
@@ -207,7 +215,7 @@ async function bootstrap(): Promise<void> {
   });
   ipcMain.handle('desktop:install-clipper-host', async (event) => {
     assertMainSender(event);
-    await installClipperHost({ executablePath: process.execPath, configPath: clipperConfigPath, vaultRoot: settings.vaultRoot });
+    await installClipperHost({ executablePath: process.execPath, configPath: clipperConfigPath, vaultRoot: settings.vaultRoot, layout: gateway.layout.id });
   });
   ipcMain.handle('desktop:clipper-status', async (event) => {
     assertMainSender(event);
@@ -215,7 +223,7 @@ async function bootstrap(): Promise<void> {
       const config = await readClipperBridgeConfig(clipperConfigPath);
       const paths = clipperPaths();
       const installed = await Promise.all(Object.values(paths).map(async (path) => fs.lstat(path).then(stat => stat.isFile()).catch(() => false))).then(values => values.some(Boolean));
-      return { installed, connected: installed && config.vaultRoot === settings.vaultRoot };
+      return { installed, connected: installed && config.vaultRoot === settings.vaultRoot && (config.layout ?? 'legacy') === gateway.layout.id };
     } catch { return { installed: false, connected: false, message: '尚未安装浏览器收藏插件。' }; }
   });
   ipcMain.handle('desktop:choose-vault-directory', async (event) => {

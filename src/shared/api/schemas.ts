@@ -15,8 +15,8 @@ const opaqueCursorSchema = z.string()
   .regex(/^[A-Za-z0-9_-]+\.[a-f0-9]{64}$/u);
 const csrfTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
 
-export const knowledgeStatusSchema = z.enum(['未提炼', '部分入库', '已入库']);
-export const usageStatusSchema = z.enum(['AI总结', '已优化', '定论', '过时']);
+export const knowledgeStatusSchema = z.enum(['未提炼', '部分入库', '已入库', '未探讨', '部分探讨完成', '全面探讨完成']);
+export const usageStatusSchema = z.enum(['AI总结', '已优化', '定论', '过时', '现行', '历史记录']);
 
 export const materialRecordSchema = z.object({
   path: vaultPathSchema,
@@ -38,7 +38,7 @@ export const knowledgeRecordSchema = z.object({
   title: z.string().min(1).max(1000),
   createdAt: isoDateSchema.optional(),
   updatedAt: isoDateSchema.optional(),
-  sourceType: z.enum(['AI提炼', '人工输入']),
+  sourceType: z.enum(['AI提炼', '人工输入', '未标注']),
   usageStatus: usageStatusSchema,
   knowledgeType: z.string().min(1).max(128),
   recallFields: z.object({
@@ -185,6 +185,7 @@ export const healthSnapshotSchema = z.object({
     z.object({
       status: z.literal('ready'),
       adapter: z.enum(['filesystem', 'local-rest']),
+      layout: z.enum(['current', 'legacy']).optional(),
       displayName: z.string().min(1).max(128).regex(/^[^/\\\u0000-\u001f\u007f]+$/u)
     }).strict(),
     z.object({

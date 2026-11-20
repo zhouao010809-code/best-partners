@@ -4,12 +4,12 @@ import type { KnowledgeRecord } from '../../shared/domain/records.js';
 import type { ReadVaultGateway } from '../vault/VaultGateway.js';
 import { validateFilesystemPath } from '../vault/filesystem-path.js';
 
-const ROOT = '02知识库';
+import { LEGACY_VAULT_LAYOUT } from '../../shared/domain/vault-layout.js';
 const ordered = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
 
-export function knowledgeDirectoryPath(path: string): string {
+export function knowledgeDirectoryPath(path: string, root: string = LEGACY_VAULT_LAYOUT.knowledgeRoot): string {
   try {
-    return validateFilesystemPath(path ? `${ROOT}/${path}` : ROOT, 'directory');
+    return validateFilesystemPath(path ? `${root}/${path}` : root, 'directory');
   } catch {
     throw new PublicApiError('VALIDATION_ERROR', '知识目录路径无效。', 400, { path: 'Invalid knowledge directory' });
   }
@@ -17,7 +17,7 @@ export function knowledgeDirectoryPath(path: string): string {
 
 /** One live directory listing, with literal filesystem identities preserved. */
 export async function readKnowledgeDirectory(gateway: ReadVaultGateway, path: string): Promise<readonly string[]> {
-  const directory = knowledgeDirectoryPath(path);
+  const directory = knowledgeDirectoryPath(path, gateway.layout?.knowledgeRoot);
   let entries: readonly string[];
   try {
     entries = await gateway.listDirectory(directory);
@@ -52,11 +52,12 @@ function label(path: string): string {
 /** Records have already passed the shared knowledge filters, before pagination. */
 export function buildKnowledgeCatalog(input: {
   path: string;
+  knowledgeRoot?: string | undefined;
   entries: readonly string[];
   records: readonly KnowledgeRecord[];
   search?: string;
 }): Omit<KnowledgeCatalogPage, 'indexVersion' | 'nextCursor'> {
-  const prefix = `${knowledgeDirectoryPath(input.path)}/`;
+  const prefix = `${knowledgeDirectoryPath(input.path, input.knowledgeRoot)}/`;
   const records = input.records.filter((record) => record.path.startsWith(prefix))
     .sort((left, right) => ordered(left.path, right.path));
   const searching = Boolean(input.search?.trim());

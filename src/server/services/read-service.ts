@@ -20,6 +20,7 @@ import { extractWikiLinks } from '../rules/wikilinks.js';
 import type Database from 'better-sqlite3';
 import { readDeletedSourceCutoffs, readMaterialVisibility } from './material-visibility.js';
 import type { LibraryPage, libraryQuerySchema } from '../../shared/api/library.js';
+import { type VaultLayout, isKnowledgePath } from '../../shared/domain/vault-layout.js';
 import { buildLibraryCatalog } from './library-catalog.js';
 import type { KnowledgeCatalogPage, knowledgeCatalogQuerySchema } from '../../shared/api/knowledge-catalog.js';
 import { buildKnowledgeCatalog, readKnowledgeDirectory } from './knowledge-catalog.js';
@@ -28,6 +29,7 @@ type MaterialApiQuery = z.output<typeof materialQuerySchema>;
 type KnowledgeApiQuery = z.output<typeof knowledgeQuerySchema>;
 
 export interface ReadService {
+  readonly layout?: VaultLayout;
   listKnowledgeCatalog(query: z.output<typeof knowledgeCatalogQuerySchema>): Promise<KnowledgeCatalogPage>;
   listLibrary(query: z.output<typeof libraryQuerySchema>): LibraryPage;
   listDocumentIssues(query: z.output<typeof documentIssueQuerySchema>): Page<SchemaIssue>;
@@ -85,7 +87,7 @@ function normalizeKnowledgePath(input: string): string {
   } catch {
     throw publicPathError();
   }
-  if (!path.startsWith('02知识库/') || !path.endsWith('.md')) {
+  if (!isKnowledgePath(path) || !path.endsWith('.md')) {
     throw publicPathError();
   }
   return path;
@@ -275,7 +277,7 @@ type IndexedMarkdownIdentity = {
   readonly title: string;
 };
 
-function safeWikiTarget(target: string): WikiTarget | undefined {
+function safeWikiTarget(target: string, knowledgeRoot: string): WikiTarget | undefined {
   const heading = target.indexOf('#');
   const block = target.indexOf('^');
   const separators = [heading, block].filter((index) => index >= 0);
@@ -289,7 +291,7 @@ function safeWikiTarget(target: string): WikiTarget | undefined {
     || base.includes('\0')
     || /%[0-9a-f]{2}/iu.test(base)
     || /^[a-z][a-z0-9+.-]*:/iu.test(base)
-    || /^(?:00大脑规则|01图书馆|03大讲堂)(?:\/|$)/u.test(base)
+    || /^(?:00大脑规则|01图书馆|02日记本|03大讲堂|04大讲堂)(?:\/|$)/u.test(base)
   ) {
     return undefined;
   }
@@ -298,9 +300,9 @@ function safeWikiTarget(target: string): WikiTarget | undefined {
   const isMarkdownPath = filename.endsWith('.md');
   if (!isMarkdownPath && filename.includes('.')) return undefined;
 
-  const validationPath = base.startsWith('02知识库/')
+  const validationPath = isKnowledgePath(base)
     ? `${base}${isMarkdownPath ? '' : '.md'}`
-    : `02知识库/${base}${isMarkdownPath ? '' : '.md'}`;
+    : `${knowledgeRoot}/${base}${isMarkdownPath ? '' : '.md'}`;
   try {
     const path = normalizeKnowledgePath(validationPath);
     return isMarkdownPath ? { kind: 'exact', path } : { kind: 'fallback', key: base };
@@ -322,7 +324,7 @@ function indexedMarkdownIdentity(
   if (
     !path.endsWith('.md')
     || (kind === 'material' && !path.startsWith('01图书馆/'))
-    || (kind === 'knowledge' && !path.startsWith('02知识库/'))
+    || (kind === 'knowledge' && !isKnowledgePath(path))
   ) {
     return undefined;
   }
@@ -335,7 +337,7 @@ function indexedMarkdownIdentity(
 }
 
 function fallbackReferenceKeys(identity: IndexedMarkdownIdentity): string[] {
-  const root = identity.kind === 'material' ? '01图书馆/' : '02知识库/';
+  const root = identity.path.slice(0, identity.path.indexOf('/') + 1);
   const relativePath = identity.path.slice(root.length);
   const filename = relativePath.split('/').at(-1)!;
   const pathWithoutExtension = identity.path.slice(0, -3);
@@ -403,7 +405,7 @@ function resolveInternalKnowledgeLinks(
   const resolved: Array<{ path: string; title: string }> = [];
   const seen = new Set<string>();
   for (const extracted of extractWikiLinks(markdownBody(markdown))) {
-    const target = safeWikiTarget(extracted);
+    const target = safeWikiTarget(extracted, detailPath.split('/')[0]!);
     if (target === undefined) continue;
     const matches = target.kind === 'exact'
       ? exactCandidates.get(target.path)
@@ -447,6 +449,7 @@ export function createReadService(input: {
     }
   }
   return {
+    ...(input.gateway.layout ? { layout: input.gateway.layout } : {}),
     listKnowledgeCatalog: async (query) => {
       const version = readIndexVersion(input.currentIndexVersion);
       const entries = await readKnowledgeDirectory(input.gateway, query.path);
@@ -469,7 +472,7 @@ export function createReadService(input: {
       });
       const records = collectKnowledge(input.repository, filters).filter(record => !trashed.has(record.path));
       assertIndexVersionUnchanged(version, input.currentIndexVersion);
-      const catalog = buildKnowledgeCatalog({ path: query.path, entries, records, ...(search === undefined ? {} : { search }) });
+      const catalog = buildKnowledgeCatalog({ knowledgeRoot: input.gateway.layout?.knowledgeRoot, path: query.path, entries, records, ...(search === undefined ? {} : { search }) });
       return { ...catalog, ...paginateByPath(catalog.items, query.limit, context, cursorSecret), indexVersion: context.indexVersion };
     },
     listLibrary: (query) => {
@@ -511,8 +514,8 @@ export function createReadService(input: {
       let path: string;
       try { path = normalizeVaultPath(requestedPath, 'read'); }
       catch { throw publicPathError(); }
-      if (!/^(?:01图书馆|02知识库)\/.+\.md$/u.test(path)) throw publicPathError();
-      if (path.startsWith('02知识库/')) assertKnowledgeAvailable(path);
+      if (!/^(?:01图书馆|02知识库|03知识库)\/.+\.md$/u.test(path)) throw publicPathError();
+      if (isKnowledgePath(path)) assertKnowledgeAvailable(path);
       else assertMaterialVisible(path);
       const indexVersion = readIndexVersion(input.currentIndexVersion);
       const before = input.repository.getManifestEntry(path);
@@ -525,7 +528,7 @@ export function createReadService(input: {
       const after = input.repository.getManifestEntry(path);
       const issueAfter = input.repository.listIssues().find((issue) => issue.path === path);
       assertIndexVersionUnchanged(indexVersion, input.currentIndexVersion);
-      if (path.startsWith('02知识库/')) assertKnowledgeAvailable(path);
+      if (isKnowledgePath(path)) assertKnowledgeAvailable(path);
       else assertMaterialVisible(path);
       if (
         live.path !== path || live.rawSha256 !== computedSha256
@@ -570,7 +573,7 @@ export function createReadService(input: {
       });
       const records = collectMaterials(input.repository, filters).filter((record) => !trashed.has(record.path) && (query.status !== undefined
         || record.knowledgeStatus === '未提炼'
-        || record.knowledgeStatus === '部分入库'));
+        || record.knowledgeStatus === '部分入库' || input.gateway.layout?.id === 'current'));
       assertIndexVersionUnchanged(context.indexVersion, input.currentIndexVersion);
       return paginateByPath(records, query.limit, context, cursorSecret, Boolean(query.title?.trim()));
     },

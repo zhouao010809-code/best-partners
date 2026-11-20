@@ -44,6 +44,19 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('knowledge cabinet', () => {
+  it('reads notes from the current vault and offers its historical-record filter', async () => {
+    if (runtime.health.status !== 'ready') throw new Error('expected ready health');
+    runtime.health.data.vaultSource = { status: 'ready', adapter: 'filesystem', displayName: '小兆大脑', layout: 'current' };
+    const currentNote: KnowledgeRecord = { ...note, path: '03知识库/AI/边界.md', usageStatus: '现行', knowledgeType: '知识笔记' };
+    runtime.api.listKnowledgeCatalog = vi.fn(async () => ok(catalog('AI', { folders: [], items: [currentNote], directTotal: 1 })));
+    mount('/knowledge?folder=AI');
+    expect(await screen.findByRole('button', { name: `展开 ${note.title} 知识纸页` })).toBeVisible();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '知识筛选' }));
+    expect(screen.getByRole('option', { name: '历史记录' })).toBeVisible();
+    expect(screen.queryByRole('option', { name: '已优化' })).toBeNull();
+  });
+
   it('opens real domain books, nested folders and knowledge papers then returns to the original paper', async () => {
     const user = userEvent.setup(); mount();
     await user.click(await screen.findByRole('button', {name: '打开 AI 收藏册'}));

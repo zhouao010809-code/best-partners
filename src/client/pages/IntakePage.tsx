@@ -4,6 +4,7 @@ import { Archive, ArrowRight, ChevronDown, FileText, FolderOpen, RefreshCw, Shie
 import { intakePlatforms, type IntakeList, type IntakePreview, type IntakePreviewRequest, type IntakeOutcome } from '../../shared/api/intake.js';
 import type { ApiClientResult } from '../api/client.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { IntakeTray } from './intake/IntakeTray.js';
 import { IntakeMailbox } from './intake/IntakeMailbox.js';
 import { useIntakeTrash } from './intake/useIntakeTrash.js';
@@ -15,7 +16,9 @@ function message<T>(result: ApiClientResult<T>): string {
   return !result.ok && 'state' in result ? result.state.message ?? '操作未完成，请重试。' : '操作已取消，请重试。';
 }
 export function IntakePage() {
-  const { api, refreshHealth } = useConsoleRuntime(); const intake = api.intake;
+  const { api, refreshHealth, health } = useConsoleRuntime();
+  const intake = api.intake;
+  const currentLayout = vaultLayoutForHealth(health).id === 'current';
   const [data, setData] = useState<IntakeList>(); const [error, setError] = useState('');
   const [listError, setListError] = useState(''); const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false);
@@ -152,13 +155,13 @@ export function IntakePage() {
       <span className={`intake-connection${listError || data?.available === false ? ' intake-connection--warning' : ''}`}>
         <i aria-hidden="true" />{loading ? '正在连接' : listError ? '检测中断' : data?.available ? '正在接收' : '尚未连接'}
       </span>
-      <span className="intake-toolbar__hint">自动识别 · 预览整理 · 确认后归档</span>
+      <span className="intake-toolbar__hint">{currentLayout ? '浏览器收藏保存到图书馆的信息入口' : '自动识别 · 预览整理 · 确认后归档'}</span>
       {window.xiaozhaoDesktop?.installClipperHost && <Link className="intake-clipper-link" to="/settings#browser-clipper">浏览器收藏设置<ArrowRight aria-hidden="true" /></Link>}
       <button ref={refreshButton} type="button" className="intake-refresh" aria-label="刷新收件箱" title="刷新收件箱" disabled={interactionBusy || refreshing} onClick={() => void load()}>
         <RefreshCw className={refreshing ? 'intake-spin' : undefined} aria-hidden="true" />
       </button>
     </div>
-    <IntakeFileImport api={api} onArchived={() => { void load(); void refreshHealth(); }} />
+    <IntakeFileImport api={api} allowArchive={!currentLayout} onArchived={() => { void load(); void refreshHealth(); }} />
     {(error || listError) && <div role="alert" className="intake-notice intake-notice--warning">{error || listError}</div>}
     {outcome && <div role="status" className={`intake-notice${outcome.state === 'archived' ? '' : ' intake-notice--warning'}`}>
       {outcome.state === 'archived' ? (outcome.indexed ? '归档完成，已更新资料列表。知识状态：未提炼。' : '文件已归档，资料列表刷新尚未完成。请刷新列表，不要重复导入。') : '归档需要继续核验。原文件与恢复记录都已保留；下方可以继续处理。'}
@@ -172,13 +175,14 @@ export function IntakePage() {
     {loading && <div className="intake-system-state" role="status"><RefreshCw className="intake-spin" aria-hidden="true" /><p>正在读取收件箱…</p></div>}
     {!loading && (!intake || !data || data.available === false) && <div className="intake-system-state" role="status"><ShieldCheck aria-hidden="true" /><h2>收件暂未连接</h2><p>{data?.problem ?? (listError ? '连接恢复后，刷新即可继续整理资料。' : '当前连接只提供读取，请使用新版个人桌面 App。')}</p></div>}
     {data?.available && <>
+      {currentLayout && <p className="intake-notice">这里可以查看浏览器收藏。新版资料按图书馆规则归档，当前桌面归档表单仅适用于旧版大脑。</p>}
       {data.problem && <p className="intake-notice intake-notice--warning">{data.problem}</p>}
       {pending.length > 0 && <p className="intake-notice intake-notice--warning">有 {pending.length} 项归档待核验，请先处理下方的恢复记录。</p>}
       <>
       <IntakeMailbox open={mailboxOpen} count={data.items.length} busy={interactionBusy} supportsDirectImport={Boolean(api.attachments)}
         onOpen={() => setMailboxOpen(true)} onClose={closeMailbox}>
       <div ref={trayLayout} className={`intake-layout${draft ? ' intake-layout--selected' : ''}`}>
-        <IntakeTray items={data.items} selectedName={draft?.name ?? ''} busy={interactionBusy} supportsDirectImport={Boolean(api.attachments)} onSelect={select}
+        <IntakeTray allowOrganizing={!currentLayout} items={data.items} selectedName={draft?.name ?? ''} busy={interactionBusy} supportsDirectImport={Boolean(api.attachments)} onSelect={select}
           {...(trash.available ? { onTrash: (item: IntakeList['items'][number]) => {
             if (!busyRef.current && !trashBlockRef.current) trash.open({ name: item.name, title: item.fields.title || item.name });
           } } : {})} />
@@ -218,7 +222,7 @@ export function IntakePage() {
         </li>)}</ul> : <p className="intake-history__empty">完成归档后，记录会留在这里。</p>}
       </section>
       </>
-      <p className="intake-boundary"><ShieldCheck aria-hidden="true" />只整理文件名和资料信息，保留原文与附件。归档不等于提炼，也不会写入知识库。</p>
+      {!currentLayout && <p className="intake-boundary"><ShieldCheck aria-hidden="true" />只整理文件名和资料信息，保留原文与附件。归档不等于提炼，也不会写入知识库。</p>}
     </>}
     {trash.dialog}
   </div>;

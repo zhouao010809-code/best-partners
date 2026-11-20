@@ -1,3 +1,5 @@
+import type { VaultLayout } from '../../shared/domain/vault-layout.js';
+
 export type VersionedBytes = {
   readonly path: string;
   readonly bytes: Uint8Array;
@@ -20,6 +22,7 @@ export type VaultCapabilityProfile = {
 };
 
 export interface ReadVaultGateway {
+  readonly layout?: VaultLayout;
   listDirectory(path: string, signal?: AbortSignal): Promise<ReadonlyArray<string>>;
   readRaw(path: string, signal?: AbortSignal): Promise<VersionedBytes>;
 }

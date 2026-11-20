@@ -8,7 +8,7 @@ import { createExtractionService, type ExtractionService } from '../services/ext
 import { createIntakeMutationGate } from '../services/intake-mutation-gate.js';
 import { createDeepSeekAssistantAdapter } from '../assistant/deepseek-adapter.js';
 import { createAttachmentService, type AttachmentService } from '../attachments/service.js';
-import { createSkillCatalogService, type SkillCatalogService } from '../services/skill-catalog.js';
+import { personalSkillsRoot, createSkillCatalogService, type SkillCatalogService } from '../services/skill-catalog.js';
 import { createProjectService } from '../projects/project-service.js';
 import { createProjectWritePlanService } from '../projects/project-write-plans.js';
 import type { ProjectService, ProjectWritePlanService } from '../../shared/api/projects.js';
@@ -90,6 +90,7 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
       ? createDirectReadHealthService({
         ...commonHealth,
         displayName: basename(config.vaultRealRoot),
+        layout: config.gateway.layout?.id ?? 'legacy',
         ...(config.gateway.probeReadiness === undefined ? {} : {
           probeReadiness: (signal: AbortSignal) => config.gateway.probeReadiness!(signal)
         })
@@ -145,7 +146,7 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
       serviceResources.add(() => attachmentResources.dispose());
       try {
         attachmentService = createAttachmentService({ directory: join(config.appDataDir, 'assistant-attachments-v1'),
-          ...(archivePort && intakeService ? { archive: { port: archivePort, intakeService } } : {}) });
+          ...(archivePort && intakeService && config.gateway.layout?.id !== 'current' ? { archive: { port: archivePort, intakeService } } : {}) });
         const ownedAttachments = attachmentService;
         attachmentResources.add(() => ownedAttachments.close());
         await attachmentService.ready();
@@ -156,7 +157,7 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
       }
     }
     if (config.adapter === 'filesystem') {
-      skillCatalog = config.skillCatalog ?? createSkillCatalogService({ skillsRoot: join(config.vaultRealRoot, '.claude', 'skills') });
+      skillCatalog = config.skillCatalog ?? createSkillCatalogService({ skillsRoot: personalSkillsRoot(config.vaultRealRoot, config.gateway.layout?.id) });
     }
     const assistantAdapters = config.adapter === 'filesystem' && kernel.mode === 'normal'
       ? (config.modelCredentials ? [createDeepSeekAssistantAdapter({ credentials: config.modelCredentials })] : [])

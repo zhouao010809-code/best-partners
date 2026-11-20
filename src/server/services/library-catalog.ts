@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../../shared/domain/vault-layout.js';
 import type { LibraryPage, LibraryQuery } from '../../shared/api/library.js';
 import type { KnowledgeRecord, MaterialRecord } from '../../shared/domain/records.js';
 import { PublicApiError } from '../../shared/api/errors.js';
@@ -39,8 +40,8 @@ export function validateLibraryPath(path: string, mode: LibraryPage['mode']): vo
 function identityFor(kind: Identity['kind'], record: MaterialRecord | KnowledgeRecord): Identity | undefined {
   try {
     const path = normalizeVaultPath(record.path, 'read');
-    const root = kind === 'material' ? '01图书馆/' : '02知识库/';
-    if (!path.startsWith(root) || !path.endsWith('.md')) return;
+    const matches = kind === 'material' ? path.startsWith('01图书馆/') : isKnowledgePath(path);
+    if (!matches || !path.endsWith('.md')) return;
     return { kind, path, title: record.title };
   } catch { return; }
 }
@@ -66,7 +67,7 @@ function references(values: readonly string[]): string[] {
 }
 
 function knowledgeDirectory(path: string): string {
-  return parentPath(path.slice('02知识库/'.length));
+  return parentPath(path.slice(path.indexOf('/') + 1));
 }
 
 function isExplicitReference(reference: string): boolean {
@@ -85,7 +86,7 @@ function topicAssignments(materials: readonly MaterialRecord[], knowledge: reado
     for (const record of records) {
       const identity = identityFor(kind, record);
       if (!identity) continue;
-      const relative = identity.path.slice((kind === 'material' ? '01图书馆/' : '02知识库/').length);
+      const relative = identity.path.slice(identity.path.indexOf('/') + 1);
       for (const key of [identity.path, identity.path.slice(0, -3), relative, relative.slice(0, -3)]) {
         addCandidate(exactCandidates, key, `${kind}\0${identity.path}`, identity);
       }
@@ -97,7 +98,7 @@ function topicAssignments(materials: readonly MaterialRecord[], knowledge: reado
         let directory = knowledgeDirectory(identity.path);
         while (directory) {
           addCandidate(exactDirectories, directory, directory, directory);
-          addCandidate(exactDirectories, `02知识库/${directory}`, directory, directory);
+          addCandidate(exactDirectories, `${identity.path.split('/')[0]}/${directory}`, directory, directory);
           addCandidate(directories, directory.split('/').at(-1)!, directory, directory);
           addCandidate(directories, folderLabel(directory, 'topic'), directory, directory);
           directory = parentPath(directory);

@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "vault-layout.h"
 
 #if defined(PERSONAL_ARCHIVE) && defined(SANDBOX_ARCHIVE_TEST_HOOKS)
 #error Personal archive builds cannot contain test hooks.
@@ -29,7 +30,8 @@ static const napi_type_tag handle_tag = { UINT64_C(0x7969616f7a68616f), UINT64_C
 static const napi_type_tag ingestion_tag = { UINT64_C(0x7969616f7a68616f), UINT64_C(0x696e676573743031) };
 static const napi_type_tag trash_tag = { UINT64_C(0x7969616f7a68616f), UINT64_C(0x7472617368303031) };
 static const napi_type_tag intake_trash_tag = { UINT64_C(0x7969616f7a68616f), UINT64_C(0x6974726173683031) };
-static const char *core_directories[] = { "00大脑规则", "01图书馆", "02知识库", "03大讲堂" };
+static const char *diary_directories[] = { "00大脑规则", "01图书馆", "03知识库", "04大讲堂", "02日记本" };
+static const char *legacy_directories[] = { "00大脑规则", "01图书馆", "02知识库", "03大讲堂" };
 
 static void test_pause(const char *stage) {
 #ifdef SANDBOX_ARCHIVE_TEST_HOOKS
@@ -48,6 +50,7 @@ typedef struct archive_handle {
   int root_fd;
   int recovery_fd;
   bool personal;
+  bool diary_layout;
   bool ingestion;
   bool trash;
   bool intake_trash;
@@ -57,9 +60,17 @@ typedef struct archive_handle {
   char recovery_root[PATH_MAX];
   struct stat root_stat;
   struct stat recovery_stat;
-  struct stat core_stat[4];
+  struct stat core_stat[5];
   struct stat intake_stat;
 } archive_handle;
+
+static const char *intake_directory(const archive_handle *handle) {
+  return handle->diary_layout ? "00信息入口" : "小兆clipper";
+}
+
+static const char *core_directory(const archive_handle *handle, int index) {
+  return handle->diary_layout ? diary_directories[index] : legacy_directories[index];
+}
 
 typedef struct {
   char bytes[PATH_MAX];
@@ -166,19 +177,19 @@ static bool valid_platform(const char *part) {
 }
 
 // Data access can inspect these two parent layouts, but read/list begin at a package.
-static const char *data_path(napi_env env, napi_value value, archive_path *path, bool allow_parent) {
+static const char *data_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path, bool allow_parent) {
   const char *error = js_string(env, value, path->bytes, sizeof(path->bytes));
   if (error || (error = split_path(path))) return error;
   if (path->count < 2 || strcmp(path->part[0], "01图书馆")) return "PATH_NOT_ALLOWED";
-  if (!strcmp(path->part[1], "小兆clipper")) return path->count >= (allow_parent ? 2 : 3)
+  if (!strcmp(path->part[1], intake_directory(handle))) return path->count >= (allow_parent ? 2 : 3)
     && path->count <= 3 + MAX_PACKAGE_DEPTH ? NULL : "PATH_NOT_ALLOWED";
-  if (path->count < 3 || !valid_platform(path->part[1]) || !valid_month(path->part[2])) return "PATH_NOT_ALLOWED";
+  if (handle->diary_layout || path->count < 3 || !valid_platform(path->part[1]) || !valid_month(path->part[2])) return "PATH_NOT_ALLOWED";
   return path->count >= (allow_parent ? 3 : 4) ? NULL : "PATH_NOT_ALLOWED";
 }
 
-static const char *move_paths(napi_env env, napi_value source, napi_value target, archive_path *from, archive_path *to) {
-  const char *error = data_path(env, source, from, false);
-  if (!error) error = data_path(env, target, to, false);
+static const char *move_paths(archive_handle *handle, napi_env env, napi_value source, napi_value target, archive_path *from, archive_path *to) {
+  const char *error = data_path(handle, env, source, from, false);
+  if (!error) error = data_path(handle, env, target, to, false);
   if (error) return error;
   if (from->count != 3 || strcmp(from->part[1], "小兆clipper") || to->count != 4
       || !valid_platform(to->part[1])) return "PATH_NOT_ALLOWED";
@@ -258,14 +269,14 @@ static const char *check_handle(archive_handle *handle) {
   close(root_fd);
   if (!valid || fstat(handle->root_fd, &st) || !same_identity(&st, &handle->root_stat)) return "ROOT_IDENTITY_CHANGED";
   if (handle->personal) {
-    for (int index = 0; index < 4; index++) {
-      if (fstatat(handle->root_fd, core_directories[index], &st, AT_SYMLINK_NOFOLLOW)
+    for (int index = 0; index < (handle->diary_layout ? 5 : 4); index++) {
+      if (fstatat(handle->root_fd, core_directory(handle, index), &st, AT_SYMLINK_NOFOLLOW)
           || !S_ISDIR(st.st_mode) || st.st_uid != getuid() || !same_identity(&st, &handle->core_stat[index])) return "PARENT_IDENTITY_CHANGED";
     }
     if (handle->intake_trash) {
       int library = openat(handle->root_fd, "01图书馆", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
       bool intake_valid = library >= 0 && !fstat(library, &st) && same_identity(&st, &handle->core_stat[1])
-        && !fstatat(library, "小兆clipper", &st, AT_SYMLINK_NOFOLLOW) && S_ISDIR(st.st_mode)
+        && !fstatat(library, intake_directory(handle), &st, AT_SYMLINK_NOFOLLOW) && S_ISDIR(st.st_mode)
         && same_identity(&st, &handle->intake_stat);
       if (library >= 0) close(library);
       if (!intake_valid) return "PARENT_IDENTITY_CHANGED";
@@ -446,7 +457,7 @@ static napi_value archive_root_identity(napi_env env, napi_callback_info info) {
 static napi_value archive_stat(napi_env env, napi_callback_info info) {
   napi_value args[2]; archive_handle *handle; archive_path path; directory_chain chain = {0}; struct stat st;
   const char *error = arguments(env, info, 2, args, &handle, true);
-  if (!error) error = data_path(env, args[1], &path, true);
+  if (!error) error = data_path(handle, env, args[1], &path, true);
   if (!error) error = open_chain(handle, &path, path.count - 1, &chain);
   bool missing = false;
   if (!error && fstatat(chain_fd(handle, &chain), path.part[path.count - 1], &st, AT_SYMLINK_NOFOLLOW)) {
@@ -495,7 +506,7 @@ static napi_value archive_read(napi_env env, napi_callback_info info) {
   napi_value args[2]; archive_handle *handle; archive_path path; directory_chain chain = {0};
   unsigned char *bytes = NULL; size_t length = 0;
   const char *error = arguments(env, info, 2, args, &handle, true);
-  if (!error) error = data_path(env, args[1], &path, false);
+  if (!error) error = data_path(handle, env, args[1], &path, false);
   if (!error) error = open_chain(handle, &path, path.count - 1, &chain);
   if (!error) error = read_bytes(handle, chain_fd(handle, &chain), path.part[path.count - 1], MAX_FILE_BYTES, false, &bytes, &length);
   if (!error) error = check_chain(handle, &chain);
@@ -577,7 +588,7 @@ static const char *list_directory(napi_env env, archive_handle *handle, int fd, 
 static napi_value archive_list(napi_env env, napi_callback_info info) {
   napi_value args[2], result; archive_handle *handle; archive_path path; directory_chain chain = {0};
   const char *error = arguments(env, info, 2, args, &handle, true);
-  if (!error) error = data_path(env, args[1], &path, false);
+  if (!error) error = data_path(handle, env, args[1], &path, false);
   if (!error) error = open_chain(handle, &path, path.count, &chain);
   if (!error) error = list_directory(env, handle, chain_fd(handle, &chain), false, &result);
   if (!error) error = check_chain(handle, &chain);
@@ -653,7 +664,7 @@ static napi_value archive_move(napi_env env, napi_callback_info info) {
   directory_chain from = {0}, to = {0}; int source_fd = -1; bool moved = false;
   struct stat before, current; size_t count = 0;
   const char *error = arguments(env, info, 4, args, &handle, true);
-  if (!error) error = move_paths(env, args[1], args[2], &source, &target);
+  if (!error) error = move_paths(handle, env, args[1], args[2], &source, &target);
   if (!error) error = open_chain(handle, &source, source.count - 1, &from);
   if (!error) error = open_chain(handle, &target, target.count - 1, &to);
   int from_fd = -1, to_fd = -1;
@@ -701,7 +712,7 @@ static napi_value archive_move(napi_env env, napi_callback_info info) {
 static napi_value archive_sync_parents(napi_env env, napi_callback_info info) {
   napi_value args[3]; archive_handle *handle; archive_path source, target; directory_chain from = {0}, to = {0};
   const char *error = arguments(env, info, 3, args, &handle, true);
-  if (!error) error = move_paths(env, args[1], args[2], &source, &target);
+  if (!error) error = move_paths(handle, env, args[1], args[2], &source, &target);
   if (!error) error = open_chain(handle, &source, source.count - 1, &from);
   if (!error) error = open_chain(handle, &target, target.count - 1, &to);
   if (!error) error = sync_chains(handle, &from, &to);
@@ -788,9 +799,10 @@ static napi_value archive_open_personal(napi_env env, napi_callback_info info) {
         || !S_ISDIR(handle->root_stat.st_mode) || handle->root_stat.st_uid != getuid()) error = "PATH_NOT_ALLOWED";
   }
   if (!error && flock(handle->root_fd, LOCK_EX | LOCK_NB)) error = errno == EWOULDBLOCK ? "ROOT_LOCKED" : "IO_ERROR";
-  for (int index = 0; !error && index < 4; index++) {
+  if (!error) handle->diary_layout = has_diary_layout(handle->root_fd);
+  for (int index = 0; !error && index < (handle->diary_layout ? 5 : 4); index++) {
     struct stat *st = &handle->core_stat[index];
-    if (fstatat(handle->root_fd, core_directories[index], st, AT_SYMLINK_NOFOLLOW)
+    if (fstatat(handle->root_fd, core_directory(handle, index), st, AT_SYMLINK_NOFOLLOW)
         || !S_ISDIR(st->st_mode) || st->st_uid != getuid() || st->st_dev != handle->root_stat.st_dev) error = "PATH_NOT_ALLOWED";
   }
   if (!error) {
@@ -815,7 +827,7 @@ static const char *personal_arguments(napi_env env, napi_callback_info info, siz
 static napi_value archive_list_intake(napi_env env, napi_callback_info info) {
   napi_value args[1], result; archive_handle *handle; archive_path path = {0}; directory_chain chain = {0};
   const char *error = personal_arguments(env, info, 1, args, &handle);
-  if (!error) { strcpy(path.bytes, "01图书馆/小兆clipper"); error = split_path(&path); }
+  if (!error) { snprintf(path.bytes, sizeof(path.bytes), "01图书馆/%s", intake_directory(handle)); error = split_path(&path); }
   if (!error) error = open_chain(handle, &path, path.count, &chain);
   if (!error) error = list_directory(env, handle, chain_fd(handle, &chain), false, &result);
   if (!error) error = check_chain(handle, &chain);
@@ -826,6 +838,7 @@ static napi_value archive_ensure_month(napi_env env, napi_callback_info info) {
   napi_value args[3]; archive_handle *handle; archive_path path = {0}; directory_chain chain = {0};
   char platform[NAME_MAX + 1], month[16], parent[NAME_MAX + 1];
   const char *error = personal_arguments(env, info, 3, args, &handle);
+  if (!error && handle->diary_layout) error = "PATH_NOT_ALLOWED";
   if (!error) error = js_string(env, args[1], platform, sizeof(platform));
   if (!error) error = js_string(env, args[2], month, sizeof(month));
   if (!error) {
@@ -880,8 +893,8 @@ static napi_value archive_stat_recovery(napi_env env, napi_callback_info info) {
   return error ? failure(env, error) : missing ? null_value(env) : identity_value(env, &st, true);
 }
 
-static const char *main_path(napi_env env, napi_value value, archive_path *path) {
-  const char *error = data_path(env, value, path, false);
+static const char *main_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path) {
+  const char *error = data_path(handle, env, value, path, false);
   if (error) return error;
   if (path->count != 4 || strcmp(path->part[1], "小兆clipper")) return "PATH_NOT_ALLOWED";
   size_t length = strlen(path->part[3]);
@@ -909,7 +922,7 @@ static napi_value archive_swap_main(napi_env env, napi_callback_info info) {
   char stage[64]; struct stat main_before, stage_before, current; int parent = -1; bool swapped = false;
   unsigned char *main_bytes = NULL, *stage_bytes = NULL; size_t main_length = 0, stage_length = 0;
   const char *error = personal_arguments(env, info, 5, args, &handle);
-  if (!error) error = main_path(env, args[1], &path);
+  if (!error) error = main_path(handle, env, args[1], &path);
   if (!error) error = recovery_argument(env, args[2], stage);
   if (!error && !stage_name(stage)) error = "PATH_NOT_ALLOWED";
   if (!error) error = open_chain(handle, &path, 3, &chain);
@@ -949,8 +962,8 @@ static napi_value archive_rename_main(napi_env env, napi_callback_info info) {
   napi_value args[4]; archive_handle *handle; archive_path from, to; directory_chain chain = {0};
   struct stat before, current; int parent = -1; bool moved = false; unsigned char *bytes = NULL; size_t length = 0;
   const char *error = personal_arguments(env, info, 4, args, &handle);
-  if (!error) error = main_path(env, args[1], &from);
-  if (!error) error = main_path(env, args[2], &to);
+  if (!error) error = main_path(handle, env, args[1], &from);
+  if (!error) error = main_path(handle, env, args[2], &to);
   if (!error && strcmp(from.part[2], to.part[2])) error = "PATH_NOT_ALLOWED";
   if (!error) error = open_chain(handle, &from, 3, &chain);
   if (!error) {
@@ -983,12 +996,14 @@ static napi_value open_personal_child(napi_env env, napi_callback_info info, int
   napi_value args[2]; archive_handle *owner = NULL;
   const char *error = personal_arguments(env, info, 2, args, &owner);
   if (error) return failure(env, error);
+  if (kind == 1 && owner->diary_layout) return failure(env, "PATH_NOT_ALLOWED");
   archive_handle *handle = calloc(1, sizeof(*handle));
   if (!handle) return failure(env, "IO_ERROR");
   handle->root_fd = -1; handle->recovery_fd = -1;
   handle->personal = true; handle->ingestion = kind == 1; handle->trash = kind == 2;
   handle->intake_trash = kind == 3; handle->owner = owner;
   strcpy(handle->root, owner->root); handle->root_stat = owner->root_stat;
+  handle->diary_layout = owner->diary_layout;
   memcpy(handle->core_stat, owner->core_stat, sizeof(handle->core_stat));
   error = js_string(env, args[1], handle->recovery_root, sizeof(handle->recovery_root));
   if (!error && (nested_root(handle->root, handle->recovery_root) || nested_root(handle->recovery_root, handle->root)
@@ -1007,7 +1022,8 @@ static napi_value open_personal_child(napi_env env, napi_callback_info info, int
   }
   if (!error && flock(handle->recovery_fd, LOCK_EX | LOCK_NB)) error = errno == EWOULDBLOCK ? "RECOVERY_LOCKED" : "IO_ERROR";
   if (!error && handle->intake_trash) {
-    archive_path path = { .bytes = "01图书馆/小兆clipper" }; directory_chain chain = {0};
+    archive_path path = {0}; directory_chain chain = {0};
+    snprintf(path.bytes, sizeof(path.bytes), "01图书馆/%s", intake_directory(handle));
     error = split_path(&path);
     if (!error) error = open_chain(handle, &path, path.count, &chain);
     if (!error) handle->intake_stat = chain.identity[chain.count - 1];
@@ -1165,10 +1181,22 @@ static napi_value ingestion_apply(napi_env env, napi_callback_info info) {
   return error ? failure(env, moved ? "INGESTION_NEEDS_REVIEW" : error) : undefined(env);
 }
 
-static const char *trash_path(napi_env env, napi_value value, archive_path *path) {
-  // The ingestion path grammar already restricts both origins to one Markdown
-  // leaf; hold_ingestion_file excludes directories, links and unsafe modes.
-  return ingestion_path(env, value, path);
+static const char *trash_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path) {
+  if (!handle->diary_layout) return ingestion_path(env, value, path);
+  const char *error = js_string(env, value, path->bytes, sizeof(path->bytes));
+  if (error || (error = split_path(path))) return error;
+  if (path->count < 2) return "PATH_NOT_ALLOWED";
+  const char *name = path->part[path->count - 1];
+  size_t length = strlen(name);
+  if (length <= 3 || strcmp(name + length - 3, ".md")) return "PATH_NOT_ALLOWED";
+  if (!strcmp(path->part[0], "03知识库")) return NULL;
+  // Archived source documents live beside their attachments in a dated package.
+  if (path->count != 7 || strcmp(path->part[0], "01图书馆")
+      || (strcmp(path->part[1], "01公域资料") && strcmp(path->part[1], "02个人资料"))
+      || strlen(path->part[3]) != 4 || !valid_month(path->part[4])
+      || strncmp(path->part[3], path->part[4], 4)
+      || strlen(path->part[5]) != length - 3 || strncmp(path->part[5], name, length - 3)) return "PATH_NOT_ALLOWED";
+  return NULL;
 }
 
 static bool trash_item_name(const char *name) {
@@ -1190,7 +1218,7 @@ static napi_value trash_access(napi_env env, napi_callback_info info, bool item,
   char item_name[64]; const char *name = NULL; int parent = -1, held = -1;
   struct stat before, current; unsigned char *bytes = NULL; size_t length = 0; bool missing = false;
   const char *error = personal_arguments(env, info, 2, args, &handle);
-  if (!error) error = item ? trash_item_argument(env, args[1], item_name) : trash_path(env, args[1], &path);
+  if (!error) error = item ? trash_item_argument(env, args[1], item_name) : trash_path(handle, env, args[1], &path);
   if (!error && !item) error = open_chain(handle, &path, path.count - 1, &chain);
   if (!error) {
     parent = item ? handle->recovery_fd : chain_fd(handle, &chain);
@@ -1219,7 +1247,7 @@ static napi_value trash_transfer(napi_env env, napi_callback_info info, bool res
   char item[64]; int parent = -1, from = -1, to = -1, held = -1; const char *source = NULL, *target = NULL;
   struct stat before, current; unsigned char *bytes = NULL; size_t length = 0; bool moved = false;
   const char *error = personal_arguments(env, info, 4, args, &handle);
-  if (!error) error = trash_path(env, args[restore ? 2 : 1], &path);
+  if (!error) error = trash_path(handle, env, args[restore ? 2 : 1], &path);
   if (!error) error = trash_item_argument(env, args[restore ? 1 : 2], item);
   if (!error) error = open_chain(handle, &path, path.count - 1, &chain);
   if (!error) {
@@ -1350,7 +1378,7 @@ static bool intake_item_name(const char *name) {
 
 // Callers supply only a top-level intake name or a UUID, followed by optional
 // descendant segments. Neither reader accepts a vault path or recovery filename.
-static const char *intake_path(napi_env env, napi_value value, archive_path *path, bool item, bool top_only) {
+static const char *intake_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path, bool item, bool top_only) {
   archive_path input = {0}; char original[PATH_MAX];
   const char *error = js_string(env, value, original, sizeof(original));
   if (error) return error;
@@ -1365,7 +1393,7 @@ static const char *intake_path(napi_env env, napi_value value, archive_path *pat
     snprintf(slot, sizeof(slot), "%s.packet", input.part[0]);
     if (!intake_item_name(slot)) return "PATH_NOT_ALLOWED";
     length = snprintf(path->bytes, sizeof(path->bytes), "%s%s", slot, original + 36);
-  } else length = snprintf(path->bytes, sizeof(path->bytes), "01图书馆/小兆clipper/%s", original);
+  } else length = snprintf(path->bytes, sizeof(path->bytes), "01图书馆/%s/%s", intake_directory(handle), original);
   if (length < 0 || (size_t)length >= sizeof(path->bytes)) return "PATH_NOT_ALLOWED";
   return split_path(path);
 }
@@ -1374,7 +1402,7 @@ static napi_value intake_access(napi_env env, napi_callback_info info, bool item
   napi_value args[2], result; archive_handle *handle; archive_path path; directory_chain chain = {0};
   unsigned char *bytes = NULL; size_t length = 0; struct stat st; bool missing = false; int base = -1;
   const char *error = personal_arguments(env, info, 2, args, &handle);
-  if (!error) error = intake_path(env, args[1], &path, item, false);
+  if (!error) error = intake_path(handle, env, args[1], &path, item, false);
   if (!error) {
     base = item ? handle->recovery_fd : handle->root_fd;
     error = open_chain_at(handle, base, &path, path.count - (operation == 1 ? 0 : 1), &chain);
@@ -1539,8 +1567,8 @@ static napi_value intake_transfer(napi_env env, napi_callback_info info, bool re
   held_intake_tree tree = {0}; struct stat current; bool moved = false;
   int from = -1, to = -1, parent = -1; const char *source = NULL, *target = NULL;
   const char *error = personal_arguments(env, info, 4, args, &handle);
-  if (!error) error = intake_path(env, args[restore ? 2 : 1], &path, false, true);
-  if (!error) error = intake_path(env, args[restore ? 1 : 2], &slot, true, true);
+  if (!error) error = intake_path(handle, env, args[restore ? 2 : 1], &path, false, true);
+  if (!error) error = intake_path(handle, env, args[restore ? 1 : 2], &slot, true, true);
   if (!error) error = open_chain(handle, &path, path.count - 1, &chain);
   if (!error) {
     parent = chain_fd(handle, &chain); from = restore ? handle->recovery_fd : parent; to = restore ? parent : handle->recovery_fd;
@@ -1609,7 +1637,7 @@ static napi_value attachment_publish(napi_env env, napi_callback_info info) {
     from = absolute_directory(staging);
     if (from < 0 || fstat(from, &before) || !private_node(&before, 0700, true) || before.st_dev != handle->root_stat.st_dev) error = "PATH_NOT_ALLOWED";
   }
-  if (!error) { strcpy(path.bytes, "01图书馆/小兆clipper"); error = split_path(&path); }
+  if (!error) { snprintf(path.bytes, sizeof(path.bytes), "01图书馆/%s", intake_directory(handle)); error = split_path(&path); }
   if (!error) error = open_chain(handle, &path, path.count, &chain);
   if (!error) {
     to = chain_fd(handle, &chain); tree.entries = calloc(MAX_ENTRIES, sizeof(*tree.entries));
@@ -1724,7 +1752,7 @@ static const char *verify_purge_file(const held_intake_entry *entry, bool remove
 static napi_value intake_purge(napi_env env, napi_callback_info info) {
   napi_value args[3]; archive_handle *handle; archive_path slot; held_intake_tree tree = {0}; bool removed = false;
   const char *error = personal_arguments(env, info, 3, args, &handle);
-  if (!error) error = intake_path(env, args[1], &slot, true, true);
+  if (!error) error = intake_path(handle, env, args[1], &slot, true, true);
   if (!error && !(tree.entries = calloc(MAX_ENTRIES, sizeof(*tree.entries)))) error = "IO_ERROR";
   if (!error) error = hold_intake_tree(handle, &tree, handle->recovery_fd, slot.part[0], 0, 0, strlen(slot.part[0]));
   if (!error) error = verify_purge_manifest(env, args[2], &tree);

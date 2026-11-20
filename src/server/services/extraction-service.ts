@@ -134,6 +134,9 @@ export function createExtractionService(input: {
     return done;
   }
   async function snapshot(materialPath: string, requestedRange?: ExtractionSourceRange) {
+    if (input.gateway.layout?.id === 'current') {
+      throw new PublicApiError('EXTRACTION_FORMAT_UNSUPPORTED', '当前提炼流程使用旧版笔记格式。新版资料可以在大脑问问中阅读和探讨。', 409);
+    }
     const rangeResult = requestedRange === undefined ? undefined : extractionSourceRangeSchema.safeParse(requestedRange);
     if (rangeResult && !rangeResult.success) throw new PublicApiError('SOURCE_RANGE_INVALID', '提炼范围无效，请重新选择附件页码。', 400);
     const sourceRange = rangeResult?.data;

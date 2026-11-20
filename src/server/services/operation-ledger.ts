@@ -8,6 +8,7 @@ import { readMaterialVisibility, readDeletedSourceCutoffs } from './material-vis
 import type { ProjectOperation } from '../../shared/api/projects.js';
 
 interface Sources {
+  inboxRoot?: string | undefined;
   database?: Database.Database | undefined;
   intakeHistory?: (() => IntakeArchiveOutcome[] | Promise<IntakeArchiveOutcome[]>) | undefined;
   trash?: (() => { items: TrashEntry[] }) | undefined;
@@ -85,7 +86,7 @@ export function createOperationLedger(sources: Sources) {
         occurredAt: at || row.createdAt, timeLabel: at ? deleted ? '删除时间' : '恢复时间' : '移入记录时间',
         summary: row.problem || (deleted ? '指定资料已彻底删除，无法从 App 恢复。' : restored ? '资料已恢复到原位置。' : done ? '资料暂存在统一回收站，可在那里恢复或彻底删除。' : '回收操作尚需核验，请前往统一回收站。'),
         preserved: deleted ? '仅保留操作记录，不再保留可恢复的文件。' : '本页仅展示操作状态，文件处理统一在回收站完成。',
-        paths: ['materialPath' in row ? row.materialPath : `01图书馆/小兆clipper/${row.name}`],
+        paths: ['materialPath' in row ? row.materialPath : `${sources.inboxRoot ?? '01图书馆/小兆clipper'}/${row.name}`],
         nextStep: '在统一回收站查看这项记录；本页不执行恢复或删除。',
         action: { kind: 'navigate', label: '前往回收站', href: '/trash' }
       };

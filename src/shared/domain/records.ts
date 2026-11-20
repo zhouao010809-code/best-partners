@@ -1,5 +1,5 @@
-export type KnowledgeStatus = '未提炼' | '部分入库' | '已入库';
-export type UsageStatus = 'AI总结' | '已优化' | '定论' | '过时';
+export type KnowledgeStatus = '未提炼' | '部分入库' | '已入库' | '未探讨' | '部分探讨完成' | '全面探讨完成';
+export type UsageStatus = 'AI总结' | '已优化' | '定论' | '过时' | '现行' | '历史记录';
 
 export type MaterialRecord = {
   path: string;
@@ -21,7 +21,7 @@ export type KnowledgeRecord = {
   title: string;
   createdAt?: string;
   updatedAt?: string;
-  sourceType: 'AI提炼' | '人工输入';
+  sourceType: 'AI提炼' | '人工输入' | '未标注';
   usageStatus: UsageStatus;
   knowledgeType: string;
   recallFields: {

@@ -7,9 +7,8 @@ import {
 } from '../src/server/rules/read-compatible-notes.js';
 import type { KnowledgeRecord, MaterialRecord } from '../src/shared/domain/records.js';
 
-const KNOWLEDGE_ROOT = '02知识库';
+import { vaultLayoutForRuleFiles, type VaultLayout } from '../src/shared/domain/vault-layout.js';
 const SOURCE_ROOT = '01图书馆';
-const REQUIRED_ROOTS = ['00大脑规则', SOURCE_ROOT, KNOWLEDGE_ROOT, '03大讲堂'] as const;
 const MAX_BYTES = 100_000;
 const DEFAULT_BYTES = MAX_BYTES;
 const MAX_QUERY_LENGTH = 2_000;
@@ -35,8 +34,8 @@ export class VaultReaderError extends Error {
 }
 
 const SAFE_MESSAGES: Record<VaultReaderErrorCode, string> = {
-  INVALID_ROOT: 'The configured vault is not a valid four-section brain.',
-  PATH_NOT_ALLOWED: 'The path must be a Markdown file under 01图书馆/ or 02知识库/.',
+  INVALID_ROOT: 'The configured vault is not a supported brain folder.',
+  PATH_NOT_ALLOWED: 'The path must be a Markdown file in the configured source or knowledge section.',
   NOT_FOUND: 'The requested Markdown file was not found.',
   READ_FAILED: 'The Markdown file could not be read; retry after checking permissions.',
   FILE_TOO_LARGE: 'The Markdown file is larger than the safe read limit.',
@@ -96,7 +95,7 @@ export type VaultReader = {
   listKnowledgeFiles(): Promise<string[]>;
 };
 
-type Section = typeof SOURCE_ROOT | typeof KNOWLEDGE_ROOT;
+type Section = typeof SOURCE_ROOT | VaultLayout['knowledgeRoot'];
 
 function fail(code: VaultReaderErrorCode): never {
   throw new VaultReaderError(code);
@@ -129,7 +128,7 @@ function validateQuery(query: string): string {
   return query.normalize('NFC');
 }
 
-function validateRelativePath(input: string): { section: Section; parts: string[] } {
+function validateRelativePath(input: string, knowledgeRoot: VaultLayout['knowledgeRoot']): { section: Section; parts: string[] } {
   if (typeof input !== 'string' || input.length === 0 || isAbsolute(input)
     || input.includes('\\') || input.includes('\0') || Buffer.byteLength(input, 'utf8') > 4096) {
     fail('PATH_NOT_ALLOWED');
@@ -140,7 +139,7 @@ function validateRelativePath(input: string): { section: Section; parts: string[
     fail('PATH_NOT_ALLOWED');
   }
   const section = parts[0];
-  if (section !== SOURCE_ROOT && section !== KNOWLEDGE_ROOT) fail('PATH_NOT_ALLOWED');
+  if (section !== SOURCE_ROOT && section !== knowledgeRoot) fail('PATH_NOT_ALLOWED');
   if (!input.endsWith('.md')) fail('PATH_NOT_ALLOWED');
   return { section, parts };
 }
@@ -172,23 +171,29 @@ function truncateUtf8(text: string, maxBytes: number): string {
   return '';
 }
 
-async function resolveRoot(root: string): Promise<string> {
+async function resolveRoot(root: string): Promise<{ canonicalRoot: string; knowledgeRoot: VaultLayout['knowledgeRoot'] }> {
   if (typeof root !== 'string' || !isAbsolute(root) || root.includes('\0')) fail('INVALID_ROOT');
   let canonical: string;
   try {
     canonical = await realpath(root);
     const rootStat = await stat(canonical);
     if (!rootStat.isDirectory()) fail('INVALID_ROOT');
-    for (const required of REQUIRED_ROOTS) {
+    const rulesRoot = join(canonical, '00大脑规则');
+    if (await realpath(rulesRoot) !== rulesRoot) fail('INVALID_ROOT');
+    const rules = await readdir(rulesRoot, { withFileTypes: true });
+    const layout = vaultLayoutForRuleFiles(rules.filter(entry => entry.isFile()).map(entry => entry.name));
+    const requiredRoots = [SOURCE_ROOT, layout.knowledgeRoot, layout.outputRoot];
+    if (layout.id === 'current') requiredRoots.push('02日记本');
+    for (const required of requiredRoots) {
       const requiredPath = await realpath(join(canonical, required));
       const requiredStat = await stat(requiredPath);
-      if (!requiredStat.isDirectory() || !isWithin(canonical, requiredPath)) fail('INVALID_ROOT');
+      if (!requiredStat.isDirectory() || requiredPath !== join(canonical, required)) fail('INVALID_ROOT');
     }
+    return { canonicalRoot: canonical, knowledgeRoot: layout.knowledgeRoot };
   } catch (error) {
     if (error instanceof VaultReaderError) throw error;
     fail('INVALID_ROOT');
   }
-  return canonical;
 }
 
 function toRelative(root: string, absolutePath: string): string {
@@ -196,10 +201,10 @@ function toRelative(root: string, absolutePath: string): string {
 }
 
 async function createReader(root: string): Promise<VaultReader> {
-  const canonicalRoot = await resolveRoot(root);
+  const { canonicalRoot, knowledgeRoot } = await resolveRoot(root);
 
   async function resolveFile(input: string): Promise<{ section: Section; absolute: string; relativePath: string }> {
-    const { section, parts } = validateRelativePath(input);
+    const { section, parts } = validateRelativePath(input, knowledgeRoot);
     const absolute = join(canonicalRoot, ...parts);
     let canonicalFile: string;
     let fileSize = 0;
@@ -218,7 +223,7 @@ async function createReader(root: string): Promise<VaultReader> {
     } catch (error) {
       fail(fsFailureCode(error));
     }
-    if (!isWithin(sectionRoot, canonicalFile)) fail('PATH_NOT_ALLOWED');
+    if (sectionRoot !== join(canonicalRoot, section) || !isWithin(sectionRoot, canonicalFile)) fail('PATH_NOT_ALLOWED');
     if (fileSize > MAX_PHYSICAL_BYTES) fail('FILE_TOO_LARGE');
     const realParts = toRelative(canonicalRoot, canonicalFile).split('/');
     if (realParts.some((part) => part.startsWith('.'))) fail('PATH_NOT_ALLOWED');
@@ -258,7 +263,7 @@ async function createReader(root: string): Promise<VaultReader> {
   async function readKnowledgeAtLimit(path: string, maxBytes: number | undefined, allowPhysicalLimit: boolean): Promise<KnowledgeRead> {
     const limit = validateLimit(maxBytes, allowPhysicalLimit ? MAX_PHYSICAL_BYTES : MAX_BYTES);
     const resolved = await resolveFile(path);
-    if (resolved.section !== KNOWLEDGE_ROOT) fail('PATH_NOT_ALLOWED');
+    if (resolved.section !== knowledgeRoot) fail('PATH_NOT_ALLOWED');
     const { bytes, raw } = await readResolved(resolved, limit);
     const parsed = parseKnowledgeNoteForRead(bytes, resolved.relativePath);
     if (!parsed.record || parsed.issues.length > 0) fail('INVALID_NOTE');
@@ -319,7 +324,8 @@ async function createReader(root: string): Promise<VaultReader> {
   }
 
   async function listKnowledgeFiles(): Promise<string[]> {
-    const root = await realpath(join(canonicalRoot, KNOWLEDGE_ROOT));
+    const root = join(canonicalRoot, knowledgeRoot);
+    if (await realpath(root) !== root) fail('PATH_NOT_ALLOWED');
     const output: string[] = [];
     const visited = new Set<string>();
     async function walk(directory: string): Promise<void> {

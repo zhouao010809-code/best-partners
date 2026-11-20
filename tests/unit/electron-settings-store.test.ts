@@ -58,9 +58,11 @@ describe('initial vault selection', () => {
     expect(await resolveInitialVaultSettings(args)).toEqual({ vaultRoot: '/saved' });
     expect(args.chooseDirectory).not.toHaveBeenCalled();
   });
-  it('uses a valid default after stale saved settings', async () => {
+  it('preserves an unavailable saved vault instead of silently selecting the local default', async () => {
     const args = input(['/default']);
-    expect(await resolveInitialVaultSettings(args)).toEqual({ vaultRoot: '/default' });
+    expect(await resolveInitialVaultSettings({ ...args, savedUnavailable: async () => 'cancel' })).toBeUndefined();
+    expect(args.validate).not.toHaveBeenCalledWith('/default');
+    expect(await resolveInitialVaultSettings({ ...args, saved: undefined })).toEqual({ vaultRoot: '/default' });
   });
   it('retries an invalid selection and accepts the next valid directory', async () => {
     const args = input(['/picked']);
@@ -79,7 +81,7 @@ describe('initial vault selection', () => {
     const args = input([]);
     const createInitial = vi.fn(async () => ({ vaultRoot: '/created' }));
     expect(await resolveInitialVaultSettings({
-      ...args,
+      ...args, saved: undefined,
       showInitialChoice: vi.fn(async () => 'create' as const),
       createInitial
     })).toEqual({ vaultRoot: '/created' });

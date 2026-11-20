@@ -72,7 +72,7 @@ export function registerApplicationRoutes(input: ApplicationRouteRegistryInput):
     options.skillCatalog,
     options.skillCatalog === undefined ? undefined : createSkillMatcherService({ catalog: options.skillCatalog })
   );
-  registerOperationRoutes(app, { database: options.readApi?.database,
+  registerOperationRoutes(app, { inboxRoot: options.readApi?.gateway.layout?.inboxRoot, database: options.readApi?.database,
     intakeHistory: options.intakeService?.history,
     trash: options.trashService ? () => options.trashService!.list() : undefined,
     intakeTrash: options.intakeTrashService ? () => options.intakeTrashService!.list() : undefined,

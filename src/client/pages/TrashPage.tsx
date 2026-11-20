@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArchiveRestore, Check, FileText, Package, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { MaterialTrashProvider, useMaterialTrash } from '../components/MaterialTrash.js';
 import { useTrashInventory, trashOrigins, type TrashPaper } from '../components/useTrashInventory.js';
 import { RecycleBinLid } from '../components/RecycleBinArtwork.js';
@@ -10,7 +11,6 @@ import '../styles/unified-trash.css';
 
 const statusText = { moving: '正在移入', trashed: '可恢复', restoring: '正在恢复', restored: '已恢复', 'needs-review': '需要核验', deleting: '删除待核验', deleted: '已彻底删除' };
 const dateText = (value: string) => new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-const paperPath = (paper: TrashPaper) => paper.kind === 'document' ? paper.entry.materialPath : `01图书馆/小兆clipper/${paper.entry.name}`;
 const sourceLabel = (paper: TrashPaper) => trashOrigins.find(origin => origin.id === paper.origin)!.label;
 
 export function TrashPage() {
@@ -20,7 +20,9 @@ export function TrashPage() {
 }
 
 function TrashWorkspace({ onChanged }: { onChanged: () => void }) {
-  const { api, dataRevision } = useConsoleRuntime();
+  const { api, dataRevision, health } = useConsoleRuntime();
+  const inboxRoot = vaultLayoutForHealth(health).inboxRoot;
+  const paperPath = (paper: TrashPaper) => paper.kind === 'document' ? paper.entry.materialPath : `${inboxRoot}/${paper.entry.name}`;
   const material = useMaterialTrash();
   const [autoOpenPacketPending] = useState(() => { try { return !localStorage.getItem('brain-trash-pending-operation'); } catch { return true; } });
   const intake = useIntakeTrash(onChanged, { autoOpenPending: autoOpenPacketPending, allowPermanentDelete: true });

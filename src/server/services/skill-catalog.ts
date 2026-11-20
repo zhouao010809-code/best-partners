@@ -146,6 +146,10 @@ async function readBoundedFile(path: string, expected?: { dev: number; ino: numb
   }
 }
 
+export function personalSkillsRoot(vaultRoot: string, layout: 'legacy' | 'current' = 'legacy'): string {
+  return layout === 'current' ? join(vaultRoot, '00大脑规则', 'Skills') : join(vaultRoot, '.claude', 'skills');
+}
+
 export function createSkillCatalogService(input: {
   skillsRoot: string;
   /**
@@ -162,7 +166,8 @@ export function createSkillCatalogService(input: {
   const configuredVault = dirname(configuredParent);
 
   function hasCanonicalNames(): boolean {
-    return basename(configuredParent) === '.claude' && basename(configuredRoot) === 'skills';
+    return configuredRoot === personalSkillsRoot(configuredVault, 'legacy')
+      || configuredRoot === personalSkillsRoot(configuredVault, 'current');
   }
 
   async function fixedRoot(): Promise<string> {

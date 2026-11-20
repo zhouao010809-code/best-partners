@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../../../shared/domain/vault-layout.js';
 import type { KnowledgeCatalogPage, KnowledgeCatalogQuery } from '../../../shared/api/knowledge-catalog.js';
 import type { KnowledgeRecord } from '../../../shared/domain/records.js';
 
@@ -8,7 +9,7 @@ export function catalogRecord(record: KnowledgeCatalogPage['items'][number]): Kn
 }
 export const directoryLabel = (name: string): string => name.replace(/^\d+[\s._、-]*/u, '') || name;
 export function noteDirectory(path: string): string {
-  return path.startsWith('02知识库/') ? path.slice('02知识库/'.length).split('/').slice(0, -1).join('/') : '';
+  return isKnowledgePath(path) ? path.split('/').slice(1, -1).join('/') : '';
 }
 export function directoryCrumbs(path: string) {
   return [{path: '', label: '知识书柜'}, ...path.split('/').filter(Boolean).map((name, i, parts) => ({
@@ -18,7 +19,7 @@ export function directoryCrumbs(path: string) {
 const count = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
 const metadata = (page: KnowledgeCatalogPage) => JSON.stringify([page.path, page.breadcrumbs, page.folders, page.total, page.directTotal, page.indexVersion]);
 
-export function validKnowledgeCatalog(page: KnowledgeCatalogPage, query: KnowledgeCatalogQuery, prior?: KnowledgeCatalogData, cursor?: string): boolean {
+export function validKnowledgeCatalog(page: KnowledgeCatalogPage, query: KnowledgeCatalogQuery, knowledgeRoot: string, prior?: KnowledgeCatalogData, cursor?: string): boolean {
   if (!page || page.path !== (query.path ?? '') || !Array.isArray(page.items) || !Array.isArray(page.folders)
     || !Array.isArray(page.breadcrumbs) || !count(page.total) || !count(page.directTotal) || page.directTotal > page.total || !count(page.indexVersion)) return false;
   const expected = directoryCrumbs(page.path);
@@ -37,9 +38,9 @@ export function validKnowledgeCatalog(page: KnowledgeCatalogPage, query: Knowled
   if (prior && metadata(prior) !== metadata(page)) return false;
   const paths = new Set(prior?.items.map(item => item.path));
   if (page.items.some(item => {
-    if (!item || typeof item.path !== 'string' || paths.has(item.path) || !item.path.startsWith(`02知识库/${prefix}`)
+    if (!item || typeof item.path !== 'string' || paths.has(item.path) || !item.path.startsWith(`${knowledgeRoot}/${prefix}`)
       || !query.search && noteDirectory(item.path) !== page.path
-      || !query.includeObsolete && item.usageStatus === '过时'
+      || !query.includeObsolete && (item.usageStatus === '过时' || item.usageStatus === '历史记录')
       || query.usageStatus && item.usageStatus !== query.usageStatus
       || query.knowledgeType && item.knowledgeType !== query.knowledgeType
       || query.topic && !item.recallFields.topics.includes(query.topic)) return true;

@@ -42,11 +42,12 @@ function EnvelopeArtwork() {
   );
 }
 
-export function IntakeTray({ items, selectedName, busy, supportsDirectImport = false, onSelect, onTrash }: {
+export function IntakeTray({ items, selectedName, busy, supportsDirectImport = false, allowOrganizing = true, onSelect, onTrash }: {
   items: IntakeList['items'];
   selectedName?: string;
   busy: boolean;
   supportsDirectImport?: boolean;
+  allowOrganizing?: boolean;
   onSelect: (item: IntakeItem) => void;
   onTrash?: (item: IntakeItem) => void;
 }) {
@@ -93,7 +94,7 @@ export function IntakeTray({ items, selectedName, busy, supportsDirectImport = f
                     type="button"
                     aria-label={`整理 ${item.name}`}
                     aria-pressed={selectedName === item.name}
-                    disabled={busy || item.kind !== 'directory' || !item.mainCandidates.length}
+                    disabled={!allowOrganizing || busy || item.kind !== 'directory' || !item.mainCandidates.length}
                     onClick={() => { setLastSelectedName(item.name); onSelect(item); }}
                     title={[title, ...issues].join('；')}
                   >

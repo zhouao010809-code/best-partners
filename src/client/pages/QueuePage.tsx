@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Archive, CircleAlert, Search, SlidersHorizontal, Maximize2, Minimize2, X } from 'lucide-react';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { MaterialTrashProvider } from '../components/MaterialTrash.js';
@@ -18,10 +18,14 @@ const SOURCES = intakePlatforms;
 
 export function QueuePage() {
   const { api, health, refreshHealth } = useConsoleRuntime();
-  const [, setParams] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const [revision, setRevision] = useState(0);
   const source = 'data' in health ? health.data?.vaultSource : undefined;
   const legacyAdapter = source?.status === 'ready' && source.adapter === 'local-rest';
+  if (source?.status === 'ready' && source.layout === 'current') {
+    const path = params.get('materialPath');
+    return <Navigate to={path ? `/library?${new URLSearchParams({ path })}` : '/library'} replace />;
+  }
   // Read-only adapters retain their existing material-list capability.
   return <MaterialTrashProvider onChanged={entry => {
     if (entry.status === 'trashed' || entry.status === 'deleted') setParams(current => { const next = new URLSearchParams(current); if (next.get('materialPath') === entry.materialPath) { next.delete('materialPath'); next.delete('run'); next.delete('pane'); } return next; }, { replace: true });

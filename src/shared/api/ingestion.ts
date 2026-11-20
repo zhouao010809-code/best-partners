@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { successEnvelopeSchema } from './schemas.js';
+import { successEnvelopeSchema, usageStatusSchema } from './schemas.js';
 import { knowledgeContentDraftSchema } from './knowledge-content.js';
 
 const path = z.string().min(1).max(1024);
@@ -45,7 +45,7 @@ export const ingestionPreviewSchema = z.strictObject({
 });
 export const ingestionMatchQuerySchema = z.strictObject({ candidateId: z.string().min(1).max(64), search: z.string().max(200).optional() });
 export const ingestionMatchesSchema = z.strictObject({
-  items: z.array(z.strictObject({ path, title: z.string().max(1000), usageStatus: z.enum(['AI总结', '已优化', '定论', '过时']),
+  items: z.array(z.strictObject({ path, title: z.string().max(1000), usageStatus: usageStatusSchema,
     conclusion: z.string().max(6000), reason: z.string().max(500) })).max(50)
 });
 export const ingestionRecoveryRequestSchema = z.strictObject({ sourceChoice: z.enum(['current', 'preserved']).optional(), newTargets: z.record(path, path).refine((value) => Object.keys(value).length <= 12).optional() });

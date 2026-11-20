@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../../shared/domain/vault-layout.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -25,7 +26,7 @@ const sameIdentity = (a:{dev:string;ino:string}|null,b:{dev:string;ino:string})=
 function fail(code:string,message:string,status=409):never {throw new PublicApiError(code,message,status);}
 function allowedPath(path:string,origin?:TrashOrigin):TrashOrigin {
   try {validateFilesystemPath(path);trashDocumentPathSchema.parse(path);} catch {fail('PATH_NOT_ALLOWED','请选择已归档原始资料或知识库中的单个 Markdown 文件。',400);}
-  const knowledge=path.startsWith('02知识库/');
+  const knowledge=isKnowledgePath(path);
   if(origin!==undefined&&(!trashOriginSchema.safeParse(origin).success||(knowledge?origin!=='knowledge':origin==='knowledge')))fail('TRASH_ORIGIN_MISMATCH','所选来源与文件位置不一致，请从对应页面重新预览。',400);
   return origin??(knowledge?'knowledge':'library');
 }

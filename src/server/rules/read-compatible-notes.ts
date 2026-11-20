@@ -1,3 +1,4 @@
+import { parseCurrentKnowledge, parseCurrentMaterial } from './current-vault-notes.js';
 import { isMap, isSeq, parseDocument, visit } from 'yaml';
 import type { KnowledgeRecord, MaterialRecord, ParsedNote } from '../../shared/domain/records.js';
 import { sha256Bytes } from '../vault/raw-bytes.js';
@@ -114,6 +115,9 @@ export function parseLibraryNoteForRead(
   path = 'unknown.md',
   upstreamVersion?: string
 ): ParsedNote<MaterialRecord> {
+  if (/^01图书馆\/(?:00信息入口|01公域资料|02个人资料)\//u.test(path)) {
+    return parseCurrentMaterial(bytes, path, upstreamVersion);
+  }
   return parseNoteForRead(bytes, path, upstreamVersion, parseLibraryNote, ['所属主题', '生成知识']);
 }
 
@@ -123,5 +127,6 @@ export function parseKnowledgeNoteForRead(
   path = 'unknown.md',
   upstreamVersion?: string
 ): ParsedNote<KnowledgeRecord> {
+  if (path.startsWith('03知识库/')) return parseCurrentKnowledge(bytes, path, upstreamVersion);
   return parseNoteForRead(bytes, path, upstreamVersion, parseKnowledgeNote, ['所属主题', '来源资料']);
 }

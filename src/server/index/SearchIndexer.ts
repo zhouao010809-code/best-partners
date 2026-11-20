@@ -5,9 +5,7 @@ import type { ReadVaultGateway, VersionedBytes } from '../vault/VaultGateway.js'
 import { sha256Bytes } from '../vault/raw-bytes.js';
 import { canonicalJson, type IndexedFile, type IndexRepository } from './index-repository.js';
 
-const INDEX_ROOTS = ['01图书馆', '02知识库'] as const;
-
-type IndexRoot = typeof INDEX_ROOTS[number];
+import { LEGACY_VAULT_LAYOUT, isKnowledgePath } from '../../shared/domain/vault-layout.js';
 
 type StagedScan = {
   readonly paths: string[];
@@ -58,9 +56,9 @@ function validateDirectEntry(entry: string): { name: string; directory: boolean 
   return { name, directory };
 }
 
-function rootForPath(path: string): IndexRoot {
-  if (path.startsWith('01图书馆/')) return '01图书馆';
-  if (path.startsWith('02知识库/')) return '02知识库';
+function isMaterialPath(path: string): boolean {
+  if (path.startsWith('01图书馆/')) return true;
+  if (isKnowledgePath(path)) return false;
   throw new Error('INDEX_PATH_OUTSIDE_ALLOWED_ROOTS');
 }
 
@@ -191,7 +189,7 @@ export class SearchIndexer {
 
   private async listAllowedMarkdown(signal?: AbortSignal): Promise<string[]> {
     const paths: string[] = [];
-    for (const root of INDEX_ROOTS) {
+    for (const root of ['01图书馆', (this.gateway.layout ?? LEGACY_VAULT_LAYOUT).knowledgeRoot]) {
       await this.walkDirectory(root, paths, signal);
       assertNotAborted(signal);
     }
@@ -229,8 +227,7 @@ export class SearchIndexer {
     const raw = await this.gateway.readRaw(path, signal);
     assertNotAborted(signal);
     assertRawResponse(path, raw);
-    const root = rootForPath(path);
-    if (root === '01图书馆') {
+    if (isMaterialPath(path)) {
       const parsed = parseLibraryNoteForRead(raw.bytes, path, raw.upstreamVersion);
       if (parsed.record !== undefined) {
         assertNotAborted(signal);

@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../../../../shared/domain/vault-layout.js';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useConsoleRuntime } from '../../../app/ConsoleRuntime.js';
@@ -13,7 +14,7 @@ export function incompleteFields(candidate: ReviewCandidate): string[] {
   if (!candidate.draft.title.trim()) fields.push('知识标题');
   if (!candidate.draft.coreContent.trim()) fields.push('核心正文');
   if (!candidate.draft.value.trim()) fields.push('复用价值');
-  if (!candidate.draft.suggestedPath.startsWith('02知识库/')) fields.push('存放目录');
+  if (!isKnowledgePath(candidate.draft.suggestedPath)) fields.push('存放目录');
   const labels: Record<string, string> = { keywords: '关键词 3–6 个', scenarios: '适用场景 2–3 条', conclusion: '核心结论', keyPoints: '关键要点 2–4 条', boundary: '使用边界', quotes: '原文摘录', summaries: '可复用表达 1–3 条' };
   const result = knowledgeContentSchema.safeParse(candidate.draft.draft);
   if (!result.success) for (const issue of result.error.issues) fields.push(labels[String(issue.path[0])] ?? '召回字段');
@@ -23,7 +24,7 @@ export function incompleteFields(candidate: ReviewCandidate): string[] {
 
 export function CandidateReading({ value }: { value: CandidateDraft }) {
   return <div className="ingestion-reading">
-    <div className="ingestion-reading-meta"><span>{value.knowledgeType}</span><span>{value.suggestedPath.replace(/^02知识库\//u, '') || '尚未选择目录'}</span></div>
+    <div className="ingestion-reading-meta"><span>{value.knowledgeType}</span><span>{(isKnowledgePath(value.suggestedPath) ? value.suggestedPath.split('/').slice(1).join('/') : value.suggestedPath) || '尚未选择目录'}</span></div>
     <SafeMarkdown>{value.coreContent || '核心正文待补充。'}</SafeMarkdown>
     <div className="ingestion-reading-value"><strong>复用价值</strong><p>{value.value || '待补充'}</p></div>
     <p className="ingestion-reading-evidence" role="status">原文依据：{value.draft.quotes.length ? `已找到 ${value.draft.quotes.length} 条逐字摘录` : '暂无直接摘录，请打开原文依据核对。'}</p>

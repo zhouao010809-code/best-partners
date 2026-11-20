@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createBrainToolHandlers } from '../../mcp-server/tools.js';
@@ -32,6 +32,23 @@ describe('brain MCP tool handlers', () => {
 
     const outdatedResult = resultValue(await handlers.search_knowledge({ query: '证据', status: '过时', limit: 20 }));
     expect(outdatedResult.items.map((item: { path: string }) => item.path)).toContain(OUTDATED_PATH);
+  });
+
+  it('searches and reads only the active knowledge section of a diary-layout vault', async () => {
+    const fixture = await createBrainFixture(); fixtures.push(fixture);
+    for (const directory of ['02日记本', '03知识库', '04大讲堂']) await mkdir(join(fixture.root, directory));
+    await writeFile(join(fixture.root, '00大脑规则/03知识库规则.md'), '规则');
+    const path = '03知识库/证据.md';
+    const note = '---\n类型: 知识笔记\n关键词: [证据]\n核心内容: 核对证据\n关联资料: []\n---\n笔记正文';
+    await writeFile(join(fixture.root, path), note);
+    await writeFile(join(fixture.root, '03知识库/旧版.md'), note.replace('类型: 知识笔记', '类型: 知识历史记录'));
+    const reader = await createVaultReader(fixture.root);
+    const handlers = createBrainToolHandlers(reader);
+    expect(resultValue(await handlers.search_knowledge({ query: '证据' })).items.map((row: { path: string }) => row.path)).toEqual([path]);
+    expect(resultValue(await handlers.search_knowledge({ query: '证据', status: '历史记录' })).items).toHaveLength(1);
+    expect(resultValue(await handlers.read_knowledge({ path })).title).toBe('证据');
+    await expect(reader.readMarkdown(KNOWLEDGE_PATH)).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+    await expect(reader.readMarkdown('02日记本/日记.md')).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
   });
 
   it('reads knowledge, source, and evidence through structured JSON', async () => {

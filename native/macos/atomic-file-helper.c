@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "vault-layout.h"
 
 #define MAX_FILE_BYTES (10U * 1024U * 1024U)
 #define MAX_LIST_BYTES (12U * 1024U * 1024U)
@@ -104,16 +105,18 @@ static void validate_components(const char *path, bool absolute) {
   }
 }
 
-static void validate_relative(const char *path, const char *command) {
+static void validate_relative(const char *path, const char *command, bool diary_layout) {
   validate_components(path, false);
   const char *slash = strchr(path, '/');
   size_t root_length = slash == NULL ? strlen(path) : (size_t)(slash - path);
-  const char *roots[] = {"00大脑规则", "01图书馆", "02知识库"};
+  const char *roots[] = {"00大脑规则", "01图书馆", diary_layout ? "03知识库" : "02知识库"};
   bool allowed = false;
   for (size_t i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
     if (root_length == strlen(roots[i]) && memcmp(path, roots[i], root_length) == 0) allowed = true;
   }
-  if (strcmp(command, "stat-file") == 0 && strcmp(path, "03大讲堂") == 0) allowed = true;
+  if (strcmp(command, "stat-file") == 0
+      && (!strcmp(path, diary_layout ? "04大讲堂" : "03大讲堂")
+          || (diary_layout && !strcmp(path, "02日记本")))) allowed = true;
   if (!allowed || (strcmp(command, "read-file") == 0 && slash == NULL)) fail("PATH_NOT_ALLOWED");
 }
 
@@ -286,7 +289,6 @@ int main(int argc, char **argv) {
   uintmax_t device = 0, inode = 0;
   if (!probe) {
     device = parse_identity(argv[3]); inode = parse_identity(argv[4]);
-    validate_relative(argv[5], command);
   }
   int root_fd = open_root(argv[2]);
   struct stat root;
@@ -294,6 +296,7 @@ int main(int argc, char **argv) {
   test_pause("root");
   if (probe) { success(command, &root, NULL, NULL, 0); close(root_fd); return 0; }
   if ((uintmax_t)root.st_dev != device || (uintmax_t)root.st_ino != inode) fail("ROOT_IDENTITY_CHANGED");
+  validate_relative(argv[5], command, has_diary_layout(root_fd));
   char *relative = strdup(argv[5]);
   if (relative == NULL) fail("READ_FAILED");
   char *name;

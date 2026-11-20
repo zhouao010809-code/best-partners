@@ -1,4 +1,4 @@
-import { USAGE_STATUSES } from '../src/server/rules/knowledge-schema.js';
+import { usageStatusSchema } from '../src/shared/api/schemas.js';
 import type { UsageStatus } from '../src/shared/domain/records.js';
 import { VaultReaderError, type VaultReader, type KnowledgeRead } from './vault-reader.js';
 
@@ -36,7 +36,7 @@ function validateInput(input: SearchKnowledgeInput): { query: string; status?: U
   if (typeof input.query !== 'string' || input.query.length < 1 || input.query.length > 2_000 || input.query.includes('\0')) {
     throw new VaultReaderError('INVALID_LIMIT');
   }
-  if (input.status !== undefined && !USAGE_STATUSES.includes(input.status)) {
+  if (input.status !== undefined && !usageStatusSchema.safeParse(input.status).success) {
     throw new VaultReaderError('INVALID_LIMIT');
   }
   const limit = input.limit ?? 10;
@@ -97,7 +97,7 @@ export async function searchKnowledge(
       truncated = true;
       break;
     }
-    if (status === undefined && note.record.usageStatus === '过时') continue;
+    if (status === undefined && (note.record.usageStatus === '过时' || note.record.usageStatus === '历史记录')) continue;
     if (status !== undefined && note.record.usageStatus !== status) continue;
     const score = scoreNote(note, query);
     if (score <= 0) continue;

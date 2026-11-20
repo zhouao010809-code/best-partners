@@ -4,9 +4,9 @@ import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { CLIPPER_EXTENSION_ID, CLIPPER_HOST_NAME } from '../shared/api/clipper.js';
-import { parseClipperHostConfig } from './clipper-host.js';
+import { parseClipperHostConfig, type ClipperHostConfig, type ClipperLayout } from './clipper-host.js';
 
-export type ClipperBridgeConfig = { version: 1; vaultRoot: string; token: string; extensionId: string };
+export type ClipperBridgeConfig = ClipperHostConfig & { version: 1 };
 export function hostManifest(wrapperPath: string) { return { name: CLIPPER_HOST_NAME, description: '最佳拍档浏览器收藏桥接', path: wrapperPath, type: 'stdio', allowed_origins: [`chrome-extension://${CLIPPER_EXTENSION_ID}/`] }; }
 export function clipperPaths(home = homedir()) { return { chrome: join(home, 'Library/Application Support/Google/Chrome/NativeMessagingHosts', `${CLIPPER_HOST_NAME}.json`), edge: join(home, 'Library/Application Support/Microsoft Edge/NativeMessagingHosts', `${CLIPPER_HOST_NAME}.json`) }; }
 function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
@@ -26,12 +26,12 @@ export async function readClipperBridgeConfig(configPath: string): Promise<Clipp
   const stat = await fs.lstat(configPath); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0) throw new Error('Native host 配置权限无效');
   return parseClipperHostConfig(JSON.parse(await fs.readFile(configPath, 'utf8'))) as ClipperBridgeConfig;
 }
-export async function installClipperHost(opts: { executablePath: string; configPath: string; vaultRoot?: string; home?: string; wrapperPath?: string }) {
+export async function installClipperHost(opts: { executablePath: string; configPath: string; vaultRoot?: string; layout?: ClipperLayout; home?: string; wrapperPath?: string }) {
   const paths = clipperPaths(opts.home); const wrapperPath = opts.wrapperPath ?? join(dirname(opts.configPath), 'clipper-host-wrapper');
   await fs.mkdir(dirname(opts.configPath), { recursive: true, mode: 0o700 });
   let config: ClipperBridgeConfig;
   try { config = await readClipperBridgeConfig(opts.configPath); } catch { if (opts.vaultRoot === undefined) throw new Error('需要指定大脑文件夹'); config = createBridgeConfig(opts.vaultRoot); }
-  if (opts.vaultRoot !== undefined) config = { ...config, vaultRoot: opts.vaultRoot };
+  if (opts.vaultRoot !== undefined) config = { ...config, vaultRoot: opts.vaultRoot, layout: opts.layout ?? 'legacy' };
   await writePrivateFile(opts.configPath, `${JSON.stringify(config, null, 2)}\n`, 0o600);
   const wrapper = `#!/bin/sh\nexec ${shellQuote(opts.executablePath)} --clipper-host "$@"\n`;
   await writePrivateFile(wrapperPath, wrapper, 0o755);

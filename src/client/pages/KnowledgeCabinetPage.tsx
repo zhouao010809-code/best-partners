@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import type { KnowledgeCatalogFolder, KnowledgeCatalogQuery } from '../../shared/api/knowledge-catalog.js';
 import type { KnowledgeRecord, UsageStatus } from '../../shared/domain/records.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { KnowledgeReader } from '../components/knowledge/KnowledgeReader.js';
 import { askAssistant } from '../components/assistant/assistantIntent.js';
 import { catalogRecord, directoryCrumbs, directoryLabel, noteDirectory, validKnowledgeCatalog, type KnowledgeCatalogData } from '../components/knowledge/knowledgeCatalogResponse.js';
@@ -12,7 +13,8 @@ import { PageState } from '../components/PageState.js';
 import { indexCanServe, isCancelled, stableFailure, validationState, type PageResource } from './pageSupport.js';
 import '../styles/knowledge-cabinet.css';
 
-const STATUSES: readonly UsageStatus[] = ['AI总结', '已优化', '定论', '过时'];
+const CURRENT_STATUSES: readonly UsageStatus[] = ['现行', '历史记录'];
+const LEGACY_STATUSES: readonly UsageStatus[] = ['AI总结', '已优化', '定论', '过时'];
 const TYPES = ['概念', '原理', '模型', '方法', 'SOP', '标准', '案例', '数据', '观点', '素材'];
 
 function Bookcase({ folders, onOpen, register }: { folders: readonly KnowledgeCatalogFolder[]; onOpen: (path: string) => void; register: (path: string, node: HTMLButtonElement | null) => void }) {
@@ -47,7 +49,11 @@ export function KnowledgeCabinetPage() {
   const searchScope = params.get('scope') === 'all' || !folder ? 'all' : 'current';
   const layout = params.get('layout') === 'compact' ? 'compact' : params.get('layout') === 'papers' ? 'papers' : readCatalogSession(sessionKey).layout ?? 'papers';
   const search = params.get('search')?.trim() ?? '';
-  const status = STATUSES.find(value => value === params.get('usageStatus'));
+  const vaultLayout = vaultLayoutForHealth(runtime.health);
+  const currentLayout = vaultLayout.id === 'current';
+  const statuses = currentLayout ? CURRENT_STATUSES : LEGACY_STATUSES;
+  const archivedStatus = currentLayout ? '历史记录' : '过时';
+  const status = statuses.find(value => value === params.get('usageStatus'));
   const knowledgeType = params.get('knowledgeType')?.trim() ?? '';
   const topic = params.get('topic')?.trim() ?? '';
   const [draft, setDraft] = useState({search, status: status ?? '', knowledgeType, topic});
@@ -57,13 +63,13 @@ export function KnowledgeCabinetPage() {
   const [recent, setRecent] = useState(() => readCatalogSession(sessionKey).recent);
   const [motion, setMotion] = useState<'none' | 'folder' | 'paper'>('none');
   const query = useMemo<KnowledgeCatalogQuery>(() => ({path: searchScope === 'all' ? '' : folder, limit: 200,
-    ...(search ? {search} : {}), ...(status ? {usageStatus: status} : {}), ...(status === '过时' ? {includeObsolete: true} : {}),
+    ...(search ? {search} : {}), ...(status ? {usageStatus: status} : {}), ...(status === archivedStatus ? {includeObsolete: true} : {}),
     ...(knowledgeType ? {knowledgeType} : {}), ...(topic ? {topic} : {})
-  }), [folder, search, status, knowledgeType, topic, searchScope]);
+  }), [folder, search, status, knowledgeType, topic, searchScope, archivedStatus]);
   const healthIndex = 'data' in runtime.health ? runtime.health.data?.index : undefined;
   const indexVersion = healthIndex && 'version' in healthIndex ? healthIndex.version : undefined;
   const unavailable = runtime.health.status === 'failed' || 'data' in runtime.health && runtime.health.data !== undefined && !indexCanServe(runtime.health.data);
-  const scope = JSON.stringify([query, refresh, runtime.dataRevision, indexVersion, unavailable]);
+  const scope = JSON.stringify([vaultLayout.id, query, refresh, runtime.dataRevision, indexVersion, unavailable]);
   const scopeRef = useRef(scope); scopeRef.current = scope;
   const [resource, setResource] = useState<PageResource<KnowledgeCatalogData>>({status: 'loading'});
   const controllerRef = useRef<AbortController | undefined>(undefined);
@@ -99,7 +105,7 @@ export function KnowledgeCabinetPage() {
         const result = await list({...query, ...(nextCursor ? {cursor: nextCursor} : {})}, controller.signal);
         if (controller.signal.aborted || scopeRef.current !== scope || isCancelled(result)) return;
         if (!result.ok) { setResource({status: 'failed', state: stableFailure(result.state.status, '读取知识'), ...(prior ? {data: prior} : {})}); return; }
-        if (!validKnowledgeCatalog(result.value, query, accumulated, nextCursor)) {
+        if (!validKnowledgeCatalog(result.value, query, vaultLayout.knowledgeRoot, accumulated, nextCursor)) {
           setResource({status: 'failed', state: validationState('知识目录响应不符合当前路径或分页规则，请刷新重试。'), ...(prior ? {data: prior} : {})}); return;
         }
         const page = result.value; const seenCursors = new Set(accumulated?.seenCursors);
@@ -112,7 +118,7 @@ export function KnowledgeCabinetPage() {
         return;
       }
     })().catch(() => { if (!controller.signal.aborted && scopeRef.current === scope) setResource({status: 'failed', state: stableFailure('operation-error', '读取知识'), ...(prior ? {data: prior} : {})}); });
-  }, [runtime.api, query, scope, listPositionKey, sessionKey]);
+  }, [runtime.api, query, scope, listPositionKey, sessionKey, vaultLayout.knowledgeRoot]);
   useEffect(() => {
     recordsRef.current.clear(); controllerRef.current?.abort();
     // Wait for the initial index identity so its arrival cannot replace a just-restored paper.
@@ -199,10 +205,10 @@ export function KnowledgeCabinetPage() {
       <button type="button" className="kb-icon-button" aria-label="刷新知识" disabled={busy} onClick={() => {setMotion('none'); setRefresh(value => value + 1);}}><RefreshCw aria-hidden="true" /></button>
     </div>
     {filtersOpen && <form className="kb-filters" aria-label="知识筛选条件" onSubmit={event => {event.preventDefault(); applyFilters();}}>
-      <label>使用状态<select value={draft.status} onChange={event => setDraft({...draft, status: event.target.value})}><option value="">活跃知识</option>{STATUSES.map(value => <option key={value}>{value}</option>)}</select></label>
-      <label>知识类型<select value={draft.knowledgeType} onChange={event => setDraft({...draft, knowledgeType: event.target.value})}><option value="">全部类型</option>{TYPES.map(value => <option key={value}>{value}</option>)}</select></label>
+      <label>使用状态<select value={draft.status} onChange={event => setDraft({...draft, status: event.target.value})}><option value="">活跃知识</option>{statuses.map(value => <option key={value}>{value}</option>)}</select></label>
+      <label>知识类型<select value={draft.knowledgeType} onChange={event => setDraft({...draft, knowledgeType: event.target.value})}><option value="">全部类型</option>{(currentLayout ? ['知识笔记', '知识历史记录'] : TYPES).map(value => <option key={value}>{value}</option>)}</select></label>
       <label>主题<input value={draft.topic} onChange={event => setDraft({...draft, topic: event.target.value})} placeholder="主题名称或路径" /></label><button type="submit" className="kb-button">应用筛选</button>
-      <small>搜索标题、关键词与结论；默认不展示过时知识。</small>
+      <small>{currentLayout ? '搜索标题、关键词与核心内容。' : '搜索标题、关键词与结论；默认不展示过时知识。'}</small>
     </form>}
     <header className="kb-section-heading"><div><span>PRIVATE KNOWLEDGE</span><h2 ref={headingRef} tabIndex={-1}>{linkedPath ? '展开阅读' : search ? '搜索结果' : opened ? displayName : '我的知识书柜'}</h2></div><p>{data ? `共 ${data.total} 篇知识` : '本机知识收藏'}{search && <small>{searchScope === 'all' ? '全部知识' : '当前目录及子目录'}</small>}</p></header>
     {!linkedPath && recent && <div className="kb-recent"><History aria-hidden="true" /><span>继续调阅</span><button type="button" aria-label={`继续上次调阅：${recent.title}`} onClick={() => {readingScrollRef.current = window.scrollY; setMotion('paper'); setParams(recent.query);}}>{recent.title}<ArrowUpRight aria-hidden="true" /></button><button type="button" aria-label="清除上次知识调阅" onClick={() => { updateCatalogSession(sessionKey, { recent: undefined }); setRecent(undefined); }}>清除</button></div>}
@@ -232,6 +238,6 @@ export function KnowledgeCabinetPage() {
         </div>
       </div>
     </div>
-    <footer className="kb-footnote"><span>本机知识 · 只读调阅</span><span>{status === '过时' ? '正在查看过时知识' : '默认不展示过时知识'}</span></footer>
+    <footer className="kb-footnote"><span>本机知识 · 只读调阅</span><span>{currentLayout ? (status === '历史记录' ? '正在查看历史记录' : '展示现行知识') : status === '过时' ? '正在查看过时知识' : '默认不展示过时知识'}</span></footer>
   </section>;
 }

@@ -47,6 +47,21 @@ describe('descriptor-anchored native read contract', () => {
     await expect(reader.readFile('03大讲堂/a.md')).rejects.toThrow('PATH_NOT_ALLOWED');
   });
 
+  it('reads the active knowledge directory and only stats the diary and output roots', async () => {
+    const { root } = await fixture();
+    await writeFile(join(root, '00大脑规则/03知识库规则.md'), '规则');
+    for (const directory of ['02日记本', '03知识库', '04大讲堂']) await mkdir(join(root, directory));
+    const identity = (await raw('probe-root', root)).root;
+    await writeFile(join(root, '03知识库/文章.md'), '知识');
+    expect((await raw('read-file', root, identity, '03知识库/文章.md')).payload.toString()).toBe('知识');
+    for (const directory of ['02日记本', '04大讲堂']) {
+      expect((await raw('stat-file', root, identity, directory)).kind).toBe('directory');
+      await expect(raw('list-dir', root, identity, directory)).rejects.toThrow('PATH_NOT_ALLOWED');
+      await expect(raw('read-file', root, identity, directory + '/文章.md')).rejects.toThrow('PATH_NOT_ALLOWED');
+    }
+    await expect(raw('list-dir', root, identity, '02知识库')).rejects.toThrow('PATH_NOT_ALLOWED');
+  });
+
   it('omits hidden names and reports directories', async () => {
     const { root } = await fixture();
     await writeFile(join(root, '02知识库', '.hidden'), 'hidden');

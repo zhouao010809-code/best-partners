@@ -19,7 +19,7 @@ export async function loadRuleBundle(gateway: ReadVaultGateway): Promise<RuleBun
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const sources: Array<{ path: string; text: string; rawSha256: string }> = [];
 
-  for (const path of RULE_BUNDLE_SOURCE_PATHS) {
+  for (const path of gateway.layout?.rulePaths ?? RULE_BUNDLE_SOURCE_PATHS) {
     const source = await gateway.readRaw(path);
     const rawSha256 = sha256Bytes(source.bytes);
     sources.push({ path, text: decoder.decode(source.bytes), rawSha256 });

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { assertStateRootOutsideVault, ensurePrivateDirectory } from '../server/db/permissions.js';
-import { RULE_BUNDLE_SOURCE_PATHS } from '../server/rules/rule-bundle.js';
+import { detectVaultLayout } from '../server/vault/vault-layout.js';
 import type { NativeReadVaultPortFactory } from '../server/vault/NativeReadVaultPort.js';
 import { copyDefaultVaultTemplate, resolveDefaultVaultTemplateRoot } from './vault-template.js';
 
@@ -76,8 +76,7 @@ export async function validateDesktopVault(input: {
   const config = settingsSchema.parse({ vaultRoot: input.vaultRoot });
   assertStateRootOutsideVault(input.userDataDir, config.vaultRoot);
   const reader = await input.nativeReaderFactory.create(config.vaultRoot);
-  for (const path of ['00大脑规则', '01图书馆', '02知识库', '03大讲堂']) await reader.assertDirectory(path);
-  for (const path of RULE_BUNDLE_SOURCE_PATHS) await reader.assertFile(path);
+  await detectVaultLayout(reader);
   return config;
 }
 
@@ -101,12 +100,19 @@ export async function selectValidatedVaultDirectory(input: VaultSelectionInput):
 export async function resolveInitialVaultSettings(input: VaultSelectionInput & {
   readonly saved: DesktopSettings | undefined;
   readonly defaultRoot: string;
+  readonly savedUnavailable?: (path: string) => Promise<'retry' | 'select' | 'cancel'>;
   readonly showInitialChoice?: () => Promise<InitialVaultChoice>;
   readonly createInitial?: () => Promise<DesktopSettings | undefined>;
 }): Promise<DesktopSettings | undefined> {
-  for (const candidate of [input.saved?.vaultRoot, input.defaultRoot]) {
-    if (candidate === undefined) continue;
-    try { return await input.validate(candidate); } catch { /* A stale location returns to selection. */ }
+  const candidate = input.saved?.vaultRoot ?? input.defaultRoot;
+  for (;;) {
+    try { return await input.validate(candidate); }
+    catch {
+      if (!input.saved) break;
+      const action = await input.savedUnavailable?.(candidate) ?? 'select';
+      if (action === 'cancel') return undefined;
+      if (action === 'select') return selectValidatedVaultDirectory(input);
+    }
   }
   if (input.showInitialChoice !== undefined && input.createInitial !== undefined) {
     const choice = await input.showInitialChoice();

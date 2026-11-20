@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../../shared/domain/vault-layout.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { ASSISTANT_MAX_SOURCES, type AssistantAdapter, type AssistantEvent, type AssistantTool } from '../assistant/types.js';
@@ -118,7 +119,7 @@ export function createCreationAssistant(input: { adapter: AssistantAdapter; proj
           allowCandidateWrites: false, model: model.id, signal, emit: collectSource, sourceAllocator
         }).filter(tool => ['search_knowledge', 'read_document'].includes(tool.name));
         tools.push(...knowledgeTools.map(tool => ({ ...tool, effect: 'read' as const, async execute(value: unknown) {
-          if (tool.name === 'read_document' && (!value || typeof value !== 'object' || !('path' in value) || typeof value.path !== 'string' || !value.path.startsWith('02知识库/'))) {
+          if (tool.name === 'read_document' && (!value || typeof value !== 'object' || !('path' in value) || typeof value.path !== 'string' || !isKnowledgePath(value.path))) {
             throw new PublicApiError('CREATION_KNOWLEDGE_SCOPE', '创作时只能参考全局知识库或当前项目资料。', 403);
           }
           return tool.execute(value);

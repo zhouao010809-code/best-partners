@@ -5,7 +5,7 @@ export const trashIdSchema = z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9
 export const trashOriginSchema = z.enum(['library', 'queue', 'knowledge']);
 /** This document-only scope must not widen extraction or intake paths. */
 export const trashDocumentPathSchema = z.string().min(1).max(1024).refine((path) =>
-  /^(?:01图书馆\/来自(?:B站|YouTube|抖音|小红书|公众号|飞书|X推特|Reddit|小宇宙|独立站|个人|其他)|02知识库)\/.+\.md$/u.test(path)
+  /^(?:01图书馆\/来自(?:B站|YouTube|抖音|小红书|公众号|飞书|X推特|Reddit|小宇宙|独立站|个人|其他)|01图书馆\/(?:01公域资料|02个人资料)|02知识库|03知识库)\/.+\.md$/u.test(path)
   && !/[\\\u0000-\u001f\u007f]/u.test(path)
   && !path.split('/').some((part) => !part || part.startsWith('.')));
 export const trashPathRequestSchema = z.strictObject({ materialPath: trashDocumentPathSchema, origin: trashOriginSchema.optional() });

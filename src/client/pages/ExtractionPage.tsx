@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, FileText, Sparkles } from 'lucide-react';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { SafeMarkdown } from '../components/SafeMarkdown.js';
 import type { DeepSeekSettings, ExtractionPreview, ExtractionRun } from '../../shared/api/extraction.js';
 import { CandidateReview } from './queue/CandidateReview.js';
@@ -21,6 +22,10 @@ export function ExtractionPage() {
   const { id = 'new' } = useParams();
   const [query] = useSearchParams();
   const materialPath = query.get('materialPath') ?? '';
+  const { health } = useConsoleRuntime();
+  if (vaultLayoutForHealth(health).id === 'current') {
+    return <Navigate to={materialPath ? `/library?${new URLSearchParams({ path: materialPath })}` : '/library'} replace />;
+  }
   const initialReadingState = query.get('readingState') === '已看' ? '已看' : '未看';
   return <ExtractionWorkbench key={`${id}:${materialPath}:${initialReadingState}`} id={id} materialPath={materialPath} initialReadingState={initialReadingState} />;
 }

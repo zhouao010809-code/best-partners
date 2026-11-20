@@ -1,3 +1,4 @@
+import { isKnowledgePath } from '../../../shared/domain/vault-layout.js';
 import { useEffect, useState } from 'react';
 import { ArrowRight, Check, Copy, FileText, MessageCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -7,7 +8,7 @@ import { SafeMarkdown } from '../SafeMarkdown.js';
 import { AssistantActionPlanCard } from './AssistantActionPlanCard.js';
 import { AssistantProjectWriteCard } from './AssistantProjectWriteCard.js';
 
-export const assistantSourceHref = (path: string) => `${path.startsWith('02知识库/') ? '/knowledge' : '/library'}?${new URLSearchParams({ path })}`;
+export const assistantSourceHref = (path: string) => `${isKnowledgePath(path) ? '/knowledge' : '/library'}?${new URLSearchParams({ path })}`;
 export const assistantPathTitle = (path: string) => path.split('/').at(-1)?.replace(/\.md$/iu, '') ?? path;
 export function projectSourceHref(path: string): string | undefined {
   if (!path.startsWith('project:')) return undefined;

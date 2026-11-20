@@ -1,6 +1,6 @@
 import { AppError } from '../../shared/api/errors.js';
 
-const READ_ROOTS = new Set(['00大脑规则', '01图书馆', '02知识库']);
+const READ_ROOTS = new Set(['00大脑规则', '01图书馆', '02知识库', '03知识库']);
 
 function reject(): never {
   throw new AppError('PATH_NOT_ALLOWED', 'PATH_NOT_ALLOWED');
@@ -20,7 +20,7 @@ export function validateFilesystemPath(
   if (!validText(input)) reject();
   const parts = input.split('/');
   if (parts.some((part) => !part || part.startsWith('.') || Buffer.byteLength(part, 'utf8') > 255)) reject();
-  if (kind === 'directory-check' && input === '03大讲堂') return input;
+  if (kind === 'directory-check' && ['03大讲堂', '04大讲堂', '02日记本'].includes(input)) return input;
   if (!READ_ROOTS.has(parts[0]!) || (kind === 'file' && parts.length < 2)) reject();
   return input;
 }

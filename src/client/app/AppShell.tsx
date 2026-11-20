@@ -602,7 +602,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
         <button type="button" className="global-search-trigger" aria-label="搜索大脑" title="搜索大脑 · ⌘ K" onClick={() => setSearchOpen(true)}><Search size={16} /><span>搜索大脑</span><kbd>⌘ K</kbd></button>
         <div className="sidebar-section-label">WORKSPACE</div>
         <nav className="main-navigation" aria-label="主导航">
-          {NAVIGATION.map(({ to, label, icon: Icon, end }) => (
+          {NAVIGATION.filter(({ to }) => !(to === '/queue' && vaultSource?.status === 'ready' && vaultSource.layout === 'current')).map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to === '/queue' ? queueHref.current : to}
