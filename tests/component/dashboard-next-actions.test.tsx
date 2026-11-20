@@ -15,7 +15,7 @@ vi.mock('../../src/client/components/material-deck/MaterialDeck.js', () => ({ Ma
 afterEach(cleanup);
 const ok = <T,>(value: T) => ({ ok: true as const, value });
 const sha = 'a'.repeat(64);
-function fixture(options: { modern?: boolean; modelConfigured?: boolean; empty?: boolean } = {}) {
+function fixture(options: { modern?: boolean; modelConfigured?: boolean; empty?: boolean; layout?: 'legacy' | 'current' } = {}) {
   const modern = options.modern ?? true;
   const items: ExtractionQueueItem[] = options.empty ? [] : (['pending', 'generating', 'ready', 'unfinished'] as const).map((view, i) => ({
     materialPath: `01图书馆/${view}.md`, title: view, view, canExtract: view !== 'generating', sourceRawSha256: sha,
@@ -27,7 +27,7 @@ function fixture(options: { modern?: boolean; modelConfigured?: boolean; empty?:
     ? { pending: 0, generating: 0, ready: 0, unfinished: 0 }
     : { pending: 1, generating: 1, ready: 3, unfinished: 1 };
   const list = vi.fn(async (query: ExtractionQueueQuery) => ok({ counts, items: query.visibility === 'removed' || query.reviewState === 'complete' ? [] : items.filter(item => item.view === query.view) }));
-  const health = { status: 'ready' as const, vaultSource: { status: 'ready' as const, adapter: 'filesystem' as const, displayName: 'Test' }, index: { status: 'ready' as const, version: 1, refreshedAt: '2026-09-10T00:00:00Z' }, model: options.modelConfigured ? { status: 'configured' as const, providerHost: 'test.invalid', name: 'test-model' } : { status: 'unconfigured' as const, providerHost: 'test.invalid' }, writeGate: { status: 'blocked' as const, missing: [], fingerprintMatches: true }, schemaIssues: { status: 'available' as const, count: 0 } };
+  const health = { status: 'ready' as const, vaultSource: { status: 'ready' as const, adapter: 'filesystem' as const, displayName: 'Test', ...(options.layout ? {layout: options.layout} : {}) }, index: { status: 'ready' as const, version: 1, refreshedAt: '2026-09-10T00:00:00Z' }, model: options.modelConfigured ? { status: 'configured' as const, providerHost: 'test.invalid', name: 'test-model' } : { status: 'unconfigured' as const, providerHost: 'test.invalid' }, writeGate: { status: 'blocked' as const, missing: [], fingerprintMatches: true }, schemaIssues: { status: 'available' as const, count: 0 } };
   const api = { getHealth: vi.fn(async () => ok(health)), listMaterials: vi.fn(async () => ok({ items: items.map(item => ({ path: item.materialPath, title: item.title, rawSha256: sha, knowledgeStatus: '未提炼', processingStatus: '已归档', sourcePlatform: '个人', generatedKnowledge: [] })) })), listKnowledge: vi.fn(async () => ok({ items: [] })), listOperations: vi.fn(async () => ok({ items: [] })), extraction: {}, intake: {},
     ...(modern ? { extractionQueue: { list } } : {}) } as unknown as ReadConsoleApi;
   runtime = { api, health: { status: 'ready', data: health }, refreshHealth: vi.fn(), dataRevision: 0 };
@@ -36,8 +36,8 @@ function fixture(options: { modern?: boolean; modelConfigured?: boolean; empty?:
 function Location() { const location = useLocation(); return <output aria-label="location">{location.pathname}{location.search}</output>; }
 function show() { render(<MemoryRouter><DashboardPage /><Location /></MemoryRouter>); }
 
-it('keeps material actions available without a duplicate continue-work section', async () => {
-  const f = fixture(); const user = userEvent.setup(); show();
+it.each(['legacy', 'current'] as const)('keeps the same material actions in a %s vault', async (layout) => {
+  const f = fixture({ layout }); const user = userEvent.setup(); show();
   expect(await screen.findByTestId('metric-materials')).toHaveTextContent('4');
   expect(screen.queryByRole('navigation', { name: '继续工作' })).not.toBeInTheDocument();
   expect(screen.getByRole('link', { name: '提炼队列' })).toHaveAttribute('href', '/queue');

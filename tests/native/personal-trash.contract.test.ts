@@ -105,7 +105,7 @@ describe('personal trash native contract in isolated temporary vaults', () => {
     intakeTrash.move('一份资料.md', id, identity);
     intakeTrash.restore(id, '一份资料.md', identity);
     expect(intakeTrash.source.read('一份资料.md').toString()).toBe('收件');
-    code(() => f.archive.ensureMonth('个人', '2026-11'), 'PATH_NOT_ALLOWED');
+    code(() => f.archive.ensureMonth('不存在的分类', '2026-11'), 'PATH_NOT_ALLOWED');
   });
   it('exposes explicit permanent deletion of one verified trash item', () => {
     const f = fixture(), port = open(f.archive, f.trashRecovery);

@@ -1,11 +1,14 @@
 import { stringify } from 'yaml';
+import { currentArchiveCategory, currentIntakePlatforms } from '../../shared/api/intake.js';
+import type { VaultLayout } from '../../shared/domain/vault-layout.js';
+import { parseCurrentMaterial } from '../rules/current-vault-notes.js';
 import { isIsoCalendarDate } from '../../shared/domain/iso-date.js';
 import { parseFrontmatter } from '../rules/frontmatter.js';
 import { parseLibraryNote, SOURCE_PLATFORMS } from '../rules/library-schema.js';
 import { validateArchivePaths } from './archive-snapshot.js';
 
-export type IntakeFields = { platform: string; title: string; collectedAt: string; author?: string | undefined; url?: string | undefined };
-type SourcePlatform = typeof SOURCE_PLATFORMS[number];
+export type IntakeFields = { platform: string; sourceName?: string | undefined; title: string; collectedAt: string; author?: string | undefined; url?: string | undefined };
+type SourcePlatform = typeof SOURCE_PLATFORMS[number] | typeof currentIntakePlatforms[number];
 type InferredIntakeFields = Partial<Omit<IntakeFields, 'platform'>> & { platform?: SourcePlatform };
 
 const MESSAGES = {
@@ -115,7 +118,7 @@ function validDate(value: string): boolean {
   return /^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$/u.test(value) && isIsoCalendarDate(value);
 }
 
-export function inferIntakeFields(mainName: string, bytes: Buffer): InferredIntakeFields {
+export function inferIntakeFields(mainName: string, bytes: Buffer, layout?: VaultLayout, clip?: { title: string; url: string }): InferredIntakeFields {
   assertName(mainName, true);
   const { data } = readMain(bytes);
   const title = mainName.slice(0, -3);
@@ -127,6 +130,17 @@ export function inferIntakeFields(mainName: string, bytes: Buffer): InferredInta
     if (validDate(date) && platform !== undefined) {
       fallback = { title: canonical[5]!, platform, collectedAt: date };
     }
+  }
+  if (layout?.id === 'current') {
+    const inferred = mappedFields({ ...clip, ...data }, false);
+    const sourceName = scalar([data.资料来源], false);
+    const platform = currentIntakePlatforms.find(value => value === sourceName || value === canonical?.[4] || value === inferred.platform);
+    const sourceDate = scalar([data.发生日期, data.发布时间, data.published], false);
+    const collectedAt = sourceDate?.slice(0, 10);
+    return { title: scalar([data.标题, data.原始标题, data.title, clip?.title], false) ?? canonical?.[5] ?? title,
+      ...(inferred.author ? { author: inferred.author } : {}), ...(inferred.url ? { url: inferred.url } : {}),
+      ...(platform ? { platform } : {}), ...(sourceName ? { sourceName } : {}),
+      ...(collectedAt && validDate(collectedAt) ? { collectedAt } : {}) };
   }
   return { ...fallback, ...mappedFields(data, false) };
 }
@@ -164,8 +178,64 @@ export function preserveIntakeBody(bytes: Buffer, collectedAt: string): Buffer {
   return Buffer.concat([block, original.body]);
 }
 
-export function planIntakeMain(input: { packageName: string; mainName: string; bytes: Buffer; fields: IntakeFields }) {
+type IntakeMainInput = { packageName: string; mainName: string; bytes: Buffer; fields: IntakeFields; layout?: VaultLayout | undefined; now?: Date };
+type IntakePlan = { platform: string; month: string; packageName: string; mainName: string; bytes: Buffer; sourceMainName: string; target: string };
+
+const currentKeys = ['类型', '资料来源', '标题', '作者', '原始链接', '入馆时间', '发布时间', '发生日期', '关键词', '探讨状态', '关联日记', '备注'];
+
+export function preserveCurrentIntakeBody(bytes: Buffer): Buffer {
+  const original = readMain(bytes);
+  const extra = Object.fromEntries(Object.entries(original.data).filter(([key, value]) => !currentKeys.includes(key) && meaningful(value)));
+  if (!Object.keys(extra).length) return original.body;
+  const yaml = stringify(extra, { lineWidth: 0, defaultKeyType: 'QUOTE_DOUBLE', defaultStringType: 'QUOTE_DOUBLE', doubleQuotedAsJSON: true });
+  const nl = original.newline;
+  const block = ['## 原始资料信息', '', '```yaml', yaml.trimEnd(), '```', '', ''].join('\n').replaceAll('\n', nl);
+  return Buffer.concat([Buffer.from(block), original.body]);
+}
+
+function planCurrentIntake(input: IntakeMainInput): IntakePlan {
+  const original = readMain(input.bytes);
+  const data = original.data;
+  if (meaningful(data.类型) && data.类型 !== '原始资料') throw new IntakePlanError('INTAKE_FRONTMATTER_INVALID');
+  const platform = input.fields.platform;
+  const category = currentArchiveCategory(platform);
+  if (!category) throw new IntakePlanError('INTAKE_PLATFORM_REQUIRED');
+  const personal = category.startsWith('02个人资料/');
+  const timestamp = (input.now ?? new Date()).getTime();
+  // Shanghai is UTC+08:00 throughout the supported date range for new captures.
+  const local = new Date(timestamp + 8 * 3600_000).toISOString();
+  const archivedAt = scalar([data.入馆时间], true) ?? local.slice(0, 16).replace('T', '-');
+  const dateField = personal ? '发生日期' : '发布时间';
+  const sourceDate = input.fields.collectedAt || scalar([data[dateField]], true);
+  if (sourceDate && !validDate(sourceDate)) throw new IntakePlanError('INTAKE_DATE_INVALID');
+  const filingDate = personal && sourceDate ? sourceDate : archivedAt.slice(0, 10);
+  if (!validDate(filingDate)) throw new IntakePlanError('INTAKE_DATE_INVALID');
+  const title = input.fields.title.trim();
+  const shortTitle = Array.from(title.replace(/[<>:"/\\|?*｜\p{Cc}]/gu, ' ').replace(/\s+/gu, ' ').trim()).slice(0, 36).join('').trim();
+  if (!shortTitle || !validText(title)) throw new IntakePlanError('INTAKE_TITLE_INVALID');
+  const source = input.fields.sourceName?.trim() || scalar([data.资料来源], true) || (platform === '其他' ? null : platform);
+  const name = `${filingDate.replaceAll('-', '')}｜${platform}｜${shortTitle}`;
+  const mainName = `${name}.md`;
+  const month = filingDate.slice(0, 7);
+  const target = `01图书馆/${category}/${filingDate.slice(0, 4)}/${month}/${name}`;
+  validateArchivePaths(`01图书馆/00信息入口/${input.packageName}`, target);
+  const remarks = [scalar([data.备注], true)];
+  if (personal && !sourceDate && !remarks[0]?.includes('发生日期不明')) remarks.push('发生日期不明，按记录日期归档。');
+  if (meaningful(data[personal ? '发布时间' : '发生日期'])) remarks.push(`${personal ? '发布时间' : '发生日期'}：${scalar([data[personal ? '发布时间' : '发生日期']], true)}`);
+  const metadata = { 类型: '原始资料', 资料来源: source, 标题: title,
+    作者: input.fields.author?.trim() || scalar([data.作者, data.author], false) || null,
+    原始链接: input.fields.url?.trim() || scalar([data.原始链接, data.url], false) || null,
+    [dateField]: sourceDate || null, 入馆时间: archivedAt, 关键词: data.关键词 ?? [],
+    探讨状态: data.探讨状态 ?? '未探讨', 关联日记: data.关联日记 ?? [], 备注: remarks.filter(Boolean).join(' ') || null };
+  const yaml = stringify(metadata, { lineWidth: 0, defaultKeyType: 'PLAIN', defaultStringType: 'QUOTE_DOUBLE', doubleQuotedAsJSON: true }).replaceAll('\n', original.newline);
+  const bytes = Buffer.concat([Buffer.from(`${original.bom ? '\uFEFF' : ''}---${original.newline}${yaml}---${original.newline}`), preserveCurrentIntakeBody(input.bytes)]);
+  if (!parseCurrentMaterial(bytes, `${target}/${mainName}`).record) throw new IntakePlanError('INTAKE_METADATA_CONFIRMATION_REQUIRED');
+  return { platform, month, target, packageName: name, mainName, bytes, sourceMainName: input.mainName };
+}
+
+export function planIntakeMain(input: IntakeMainInput): IntakePlan {
   assertName(input.packageName); assertName(input.mainName, true);
+  if (input.layout?.id === 'current') return planCurrentIntake(input);
   const original = readMain(input.bytes);
   const data = original.data;
   if (Object.entries(data).some(([key, value]) => !CANONICAL_KEYS.includes(key) && !PLUGIN_KEYS.includes(key) && meaningful(value))) {
@@ -206,5 +276,5 @@ export function planIntakeMain(input: { packageName: string; mainName: string; b
   const yaml = stringify(metadata, { lineWidth: 0 }).replaceAll('\n', original.newline);
   const bytes = Buffer.concat([Buffer.from(`${original.bom ? '\uFEFF' : ''}---${original.newline}${yaml}---${original.newline}`), preserveIntakeBody(input.bytes, collectedAt)]);
   if (!parseLibraryNote(bytes, mainName).record) throw new IntakePlanError('INTAKE_METADATA_CONFIRMATION_REQUIRED');
-  return { platform, month: collectedAt.slice(0, 7), packageName, mainName, bytes, sourceMainName: input.mainName };
+  return { platform, month: collectedAt.slice(0, 7), target: `01图书馆/来自${platform}/${collectedAt.slice(0, 7)}/${packageName}`, packageName, mainName, bytes, sourceMainName: input.mainName };
 }

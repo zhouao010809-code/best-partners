@@ -60,7 +60,6 @@ function capabilityResources(config: ArchiveCompositionConfig) {
 }
 
 export async function createArchiveComposition(config: ArchiveCompositionConfig): Promise<ArchiveComposition> {
-  const currentLayout = config.gateway.layout?.id === 'current';
   let recoveryBase = config.appDataDir;
   let archivePort: PersonalArchivePort | undefined;
   let ingestionPort: PersonalIngestionPort | undefined;
@@ -105,7 +104,7 @@ export async function createArchiveComposition(config: ArchiveCompositionConfig)
     }
   }
 
-  if (!currentLayout && config.stateKernel.mode === 'normal' && config.repository && archivePort && config.scheduler) {
+  if (config.stateKernel.mode === 'normal' && config.repository && archivePort && config.scheduler) {
     const resources = capabilityResources(config);
     try {
       const recoveryRoot = join(recoveryBase, 'personal-ingestion-v1');

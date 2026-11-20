@@ -54,7 +54,7 @@ describe('knowledge cabinet', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '知识筛选' }));
     expect(screen.getByRole('option', { name: '历史记录' })).toBeVisible();
-    expect(screen.queryByRole('option', { name: '已优化' })).toBeNull();
+    expect(screen.getByRole('option', { name: '已优化' })).toBeVisible();
   });
 
   it('opens real domain books, nested folders and knowledge papers then returns to the original paper', async () => {

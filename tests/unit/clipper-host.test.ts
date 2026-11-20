@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readdir, readFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, rename, writeFile, symlink } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,9 +32,19 @@ describe('clipper native host writes', () => {
     await expect(handleClipperMessage({ ...message, payload: { ...message.payload, packetId: 'p2' } }, config)).resolves.toMatchObject({ duplicate: true });
     await expect(handleClipperMessage({ ...message, payload: { ...message.payload, content: '更新正文' } }, config)).resolves.toMatchObject({ duplicate: true });
     await expect(handleClipperMessage(message, config)).resolves.toMatchObject({ duplicate: true });
-    const files = await readdir(join(root, '01图书馆', inboxName, 'p1'));
-    expect(files.sort()).toEqual(['index.md', 'metadata.json']);
-    expect(await readFile(join(root, '01图书馆', inboxName, 'p1', 'metadata.json'), 'utf8')).toContain('contentHash');
+    const packet = join(root, '01图书馆', inboxName, 'p1');
+    expect((await readdir(packet)).sort()).toEqual(layout === 'current' ? ['index.md', '附件'] : ['index.md', 'metadata.json']);
+    const metadataPath = layout === 'current' ? join(packet, '附件', 'metadata.json') : join(packet, 'metadata.json');
+    expect(JSON.parse(await readFile(metadataPath, 'utf8'))).toMatchObject({ url: message.payload.url, title: message.payload.title, contentHash: expect.any(String) });
+    expect(await readFile(join(packet, 'index.md'), 'utf8')).toBe('# 标题\n\n来源：https://example.com\n采集时间：2026-09-14T00:00:00.000Z\n\n正文\n');
+    if (layout === 'current') {
+      await rename(metadataPath, join(packet, 'metadata.json'));
+      await expect(handleClipperMessage({ ...message, payload: { ...message.payload, packetId: 'retry-flat' } }, config)).resolves.toMatchObject({ duplicate: true });
+    }
+    const lock = join(root, '01图书馆', inboxName, '.clipper.lock');
+    await writeFile(lock, 'active');
+    await expect(handleClipperMessage(message, config)).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(await readFile(lock, 'utf8')).toBe('active');
   });
   it('rejects symlinked vault path components and inbox entries', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'clipper-host-symlink-'));

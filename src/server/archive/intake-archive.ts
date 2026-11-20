@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual as equal } from 'node:util';
 import { z } from 'zod';
 import { sha256Bytes } from '../vault/raw-bytes.js';
+import { parseCurrentMaterial } from '../rules/current-vault-notes.js';
 import { parseLibraryNote } from '../rules/library-schema.js';
 import { captureArchiveTree, parseArchiveIntent, sealArchiveIntent, sameArchiveIdentity,
   validateArchivePaths, type ArchiveIntent, type ArchiveTreeEntry } from './archive-snapshot.js';
 import type { PersonalArchivePort } from './sandbox-native.js';
-import { preserveIntakeBody, type planIntakeMain } from './intake-plan.js';
+import { preserveCurrentIntakeBody, preserveIntakeBody, type planIntakeMain } from './intake-plan.js';
 
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
 const MAX_RECEIPT_BYTES = 4096;
@@ -46,11 +47,12 @@ function validateStored(value: Stored): ArchiveIntent {
   if (value.newMain !== value.oldMain && base.tree.some((e) => e.path === value.newMain)) throw new Error('INTAKE_MAIN_EXISTS');
   const bytes = Buffer.from(value.newBytes, 'base64');
   if (bytes.toString('base64') !== value.newBytes || bytes.length > 10 * 1024 * 1024) throw new Error('INTAKE_INTENT_INVALID');
-  const parsed = parseLibraryNote(bytes, `${base.target}/${value.newMain}`);
-  if (!parsed.record || parsed.record.processingStatus !== '已归档' || parsed.record.knowledgeStatus !== '未提炼'
+  const current = base.source.startsWith('01图书馆/00信息入口/');
+  const parsed = (current ? parseCurrentMaterial : parseLibraryNote)(bytes, `${base.target}/${value.newMain}`);
+  if (!parsed.record || parsed.record.processingStatus !== '已归档' || (!current && parsed.record.knowledgeStatus !== '未提炼')
     || parsed.record.generatedKnowledge.length !== 0) throw new Error('INTAKE_MAIN_INVALID');
   const oldBytes = Buffer.from(old.bytesBase64, 'base64');
-  const expectedBody = preserveIntakeBody(oldBytes, parsed.record.collectedAt ?? '');
+  const expectedBody = current ? preserveCurrentIntakeBody(oldBytes) : preserveIntakeBody(oldBytes, parsed.record.collectedAt ?? '');
   if (!Buffer.from(parsed.bodyBytes).equals(expectedBody)) throw new Error('INTAKE_BODY_CHANGED');
   return base;
 }
@@ -89,7 +91,8 @@ function readReceipt(port: PersonalArchivePort, id: string): z.infer<typeof rece
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     const result = receiptSchema.parse(JSON.parse(text));
     if (JSON.stringify(result) !== text || result.id !== id || Buffer.byteLength(result.target) > 1023) throw new Error();
-    validateArchivePaths('01图书馆/小兆clipper/history', result.target);
+    const inbox = /^01图书馆\/(01公域资料|02个人资料)\//u.test(result.target) ? '00信息入口' : '小兆clipper';
+    validateArchivePaths(`01图书馆/${inbox}/history`, result.target);
     if (!sameArchiveIdentity(port.rootIdentity, result.root)) throw new Error();
     return result;
   } catch { throw new Error('INTAKE_RESULT_INVALID'); }
@@ -154,11 +157,11 @@ export function prepareIntakeArchive(port: PersonalArchivePort, request: {
   if (!equal(captureArchiveTree(port, request.source), request.tree)) throw new Error('INTAKE_PREVIEW_STALE');
   const p = request.plan;
   // Multi-file packages with renamed Markdown need link-aware review; never rewrite sibling content.
-  if (p.mainName !== p.sourceMainName && request.tree.some((e) => e.kind === 'file' && /\.md$/iu.test(e.path) && e.path !== p.sourceMainName)) {
+  if (p.mainName !== p.sourceMainName && request.tree.some((e) => e.kind === 'file' && /\.md$/iu.test(e.path) && e.path !== p.sourceMainName && !(request.source.startsWith('01图书馆/00信息入口/') && e.path.startsWith('附件/')))) {
     throw new Error('INTAKE_LINK_REVIEW_REQUIRED');
   }
   port.ensureMonth(p.platform, p.month);
-  const target = `01图书馆/来自${p.platform}/${p.month}/${p.packageName}`;
+  const target = p.target;
   const sourceParent = port.stat(parent(request.source)); const targetParent = port.stat(parent(target));
   if (sourceParent?.kind !== 'directory' || targetParent?.kind !== 'directory') throw new Error('INTAKE_PARENT_MISSING');
   if (port.stat(target)) throw new Error('INTAKE_TARGET_EXISTS');

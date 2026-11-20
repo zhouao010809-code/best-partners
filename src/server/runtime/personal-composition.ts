@@ -1,3 +1,4 @@
+import { selectPersonalRecoveryRoot } from '../archive/personal-recovery-root.js';
 import { createProjectCreationService } from '../projects/project-creations.js';
 import type { ProjectCreationService } from '../../shared/api/project-creations.js';
 import { basename, join } from 'node:path';
@@ -146,7 +147,8 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
       serviceResources.add(() => attachmentResources.dispose());
       try {
         attachmentService = createAttachmentService({ directory: join(config.appDataDir, 'assistant-attachments-v1'),
-          ...(archivePort && intakeService && config.gateway.layout?.id !== 'current' ? { archive: { port: archivePort, intakeService } } : {}) });
+          ...(archivePort && intakeService ? { archive: { port: archivePort, intakeService, layout: config.gateway.layout,
+            stagingDirectory: join(selectPersonalRecoveryRoot(config.vaultRealRoot, config.appDataDir), 'personal-attachment-staging-v1') } } : {}) });
         const ownedAttachments = attachmentService;
         attachmentResources.add(() => ownedAttachments.close());
         await attachmentService.ready();

@@ -13,8 +13,9 @@ const data: IntakeList = { available: true, automaticArchive: false, items: [ite
 const preview: IntakePreview = { token: 'e52917bc-a9df-482f-aae8-8c4b6da4301d', target: '01图书馆/来自个人/2026-09/测试资料', mainName: '测试资料.md', markdown: '---\n知识入库状态: 未提炼\n---\n<script>原文</script>', truncated: false, expiresAt: '2026-09-06T00:00:00.000Z' };
 const api = { list: vi.fn(), preview: vi.fn(), commit: vi.fn(), resume: vi.fn() };
 const trashApi = { list: vi.fn(), preview: vi.fn(), commit: vi.fn(), get: vi.fn(), restore: vi.fn(), retry: vi.fn() };
-vi.mock('../../src/client/app/ConsoleRuntime.js', () => ({ useConsoleRuntime: () => ({ api: { intake: api, intakeTrash: trashApi }, refreshHealth: vi.fn() }) }));
-afterEach(() => { cleanup(); localStorage.clear(); vi.resetAllMocks(); });
+let layout: 'legacy' | 'current' = 'legacy';
+vi.mock('../../src/client/app/ConsoleRuntime.js', () => ({ useConsoleRuntime: () => ({ health: { status: 'ready', data: { vaultSource: { status: 'ready', layout } } }, api: { intake: api, intakeTrash: trashApi }, refreshHealth: vi.fn() }) }));
+afterEach(() => { layout = 'legacy'; cleanup(); localStorage.clear(); vi.resetAllMocks(); });
 it('keeps every envelope inside a closed mailbox until opened and closes back to the shell', async () => {
   api.list.mockResolvedValue(ok(data)); const user = userEvent.setup(); render(<IntakePage />);
   const mailbox = await screen.findByRole('button', { name: '打开收件箱' });
@@ -101,6 +102,26 @@ it('previews literal content, then commits only after explicit confirmation', as
   await user.click(screen.getByRole('button', { name: '继续整理' }));
   expect(screen.queryByRole('link', { name: '提炼这份' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '整理 测试资料包' })).toBeVisible();
+});
+it('archives a current-layout packet without requiring a source date and links to its extraction', async () => {
+  layout = 'current';
+  const user = userEvent.setup();
+  const target = '01图书馆/02个人资料/线上会议/测试资料';
+  api.list.mockResolvedValue(ok({ ...data, items: [{ ...item, fields: { title: item.fields.title } }] }));
+  api.preview.mockResolvedValue(ok({ ...preview, target }));
+  api.commit.mockResolvedValue(ok({ id: preview.token, target, state: 'archived', indexed: true }));
+  render(<IntakePage />);
+  await user.click(await screen.findByRole('button', { name: '打开收件箱' }));
+  await user.click(screen.getByRole('button', { name: '整理 测试资料包' }));
+  expect(screen.getByRole('option', { name: /^个人$/u })).toBeInTheDocument();
+  await user.selectOptions(screen.getByRole('combobox', { name: '来源平台' }), '线上会议');
+  await user.click(screen.getByRole('button', { name: '预览归档结果' }));
+  expect(api.preview).toHaveBeenCalledWith({ name: item.name, mainName: '原文.md', fields: {
+    title: item.fields.title, platform: '线上会议', collectedAt: ''
+  } });
+  await user.click(await screen.findByRole('button', { name: '确认归档' }));
+  const link = await screen.findByRole('link', { name: '提炼这份' });
+  expect(link).toHaveAttribute('href', `/extractions/new?materialPath=${encodeURIComponent(`${target}/${preview.mainName}`)}`);
 });
 it('invalidates a preview if the user changes fields', async () => {
   const user = userEvent.setup(); api.list.mockResolvedValue(ok(data)); api.preview.mockResolvedValue(ok(preview)); render(<IntakePage />);

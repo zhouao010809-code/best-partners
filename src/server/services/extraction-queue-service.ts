@@ -1,3 +1,4 @@
+import { currentMaterialIngestionProgress } from './material-ingestion-progress.js';
 import type Database from 'better-sqlite3';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
@@ -45,13 +46,10 @@ function summary(row: SummaryRow): ExtractionRunSummary {
 
 function collectMaterials(repository: IndexRepository): MaterialRecord[] {
   const records: MaterialRecord[] = [];
-  // Explicit statuses retain historical sources even if default library queries exclude ingested notes.
-  for (const knowledgeStatus of ['未提炼', '部分入库', '已入库'] as const) {
-    for (let page = 1; ; page++) {
-      const result = repository.listMaterials({ knowledgeStatus, page, pageSize: 200 });
-      records.push(...result.items);
-      if (page * result.pageSize >= result.total || result.items.length === 0) break;
-    }
+  for (let page = 1; ; page++) {
+    const result = repository.listMaterials({ page, pageSize: 200 });
+    records.push(...result.items);
+    if (page * result.pageSize >= result.total || result.items.length === 0) break;
   }
   return records;
 }
@@ -85,6 +83,7 @@ export function createExtractionQueueService(input: {
 
   function readSnapshot() {
     const materials = collectMaterials(input.repository);
+    const progress = currentMaterialIngestionProgress(input.database);
     const runs = allRuns.all() as SummaryRow[];
     const visibility = readMaterialVisibility(input.database);
     const deletedCutoffs = readDeletedSourceCutoffs(input.database);
@@ -104,8 +103,10 @@ export function createExtractionQueueService(input: {
       const record = indexed.get(materialPath);
       const group = grouped.get(materialPath);
       const coveragePending = group?.ready !== undefined && isPartialExtractionJson(group.ready.source_range_json);
-      const eligible = record?.processingStatus === '已归档' && (record.knowledgeStatus === '未提炼'
-        || record.knowledgeStatus === '部分入库' && coveragePending && group?.pendingCount === 0);
+      const knowledgeStatus = record && ['未探讨', '部分探讨完成', '全面探讨完成'].includes(record.knowledgeStatus)
+        ? progress.get(materialPath) ?? '未提炼' : record?.knowledgeStatus;
+      const eligible = record?.processingStatus === '已归档' && (knowledgeStatus === '未提炼'
+        || knowledgeStatus === '部分入库' && coveragePending && group?.pendingCount === 0);
       if (!group && !eligible) continue;
       const view = group?.active ? 'generating' : group?.latest.status === 'ready' ? coveragePending && group.pendingCount === 0 ? 'pending' : 'ready' : group ? 'unfinished' : 'pending';
       items.push({ materialPath, title: record?.title ?? group!.latest.title, view,

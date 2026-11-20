@@ -5,11 +5,11 @@ import '../../styles/intake-tray.css';
 
 type IntakeItem = IntakeList['items'][number];
 
-function itemIssues(item: IntakeItem): string[] {
+function itemIssues(item: IntakeItem, requireCollectionDate: boolean): string[] {
   const missing = [
     !item.fields.title && '标题',
     !item.fields.platform && '平台',
-    !item.fields.collectedAt && '采集日期',
+    requireCollectionDate && !item.fields.collectedAt && '采集日期',
   ].filter(Boolean);
   const issues = missing.length ? [`缺${missing.join('、')}`] : [];
   if (item.mainCandidates.length > 1) issues.push('需选择主文件');
@@ -42,12 +42,12 @@ function EnvelopeArtwork() {
   );
 }
 
-export function IntakeTray({ items, selectedName, busy, supportsDirectImport = false, allowOrganizing = true, onSelect, onTrash }: {
+export function IntakeTray({ items, selectedName, busy, supportsDirectImport = false, requireCollectionDate = true, onSelect, onTrash }: {
   items: IntakeList['items'];
   selectedName?: string;
   busy: boolean;
   supportsDirectImport?: boolean;
-  allowOrganizing?: boolean;
+  requireCollectionDate?: boolean;
   onSelect: (item: IntakeItem) => void;
   onTrash?: (item: IntakeItem) => void;
 }) {
@@ -55,7 +55,7 @@ export function IntakeTray({ items, selectedName, busy, supportsDirectImport = f
   const [showAll, setShowAll] = useState(false);
   const [lastSelectedName, setLastSelectedName] = useState<string>();
   const listId = useId();
-  const needsInfo = items.filter((item) => itemIssues(item).length > 0);
+  const needsInfo = items.filter((item) => itemIssues(item, requireCollectionDate).length > 0);
   const filtered = filter === 'needs-info' ? needsInfo : items;
   const pinnedName = selectedName || lastSelectedName;
   const selectedBeyondPreview = filtered.slice(4).find((item) => item.name === pinnedName);
@@ -85,7 +85,7 @@ export function IntakeTray({ items, selectedName, busy, supportsDirectImport = f
           <ul className="intake-tray__grid" id={listId}>
             {visible.map((item) => {
               const title = item.fields.title || item.name;
-              const issues = itemIssues(item);
+              const issues = itemIssues(item, requireCollectionDate);
               const metadata = [item.fields.platform, item.fields.collectedAt].filter(Boolean).join(' · ');
               return (
                 <li className="intake-tray__slot" key={item.name}>
@@ -94,7 +94,7 @@ export function IntakeTray({ items, selectedName, busy, supportsDirectImport = f
                     type="button"
                     aria-label={`整理 ${item.name}`}
                     aria-pressed={selectedName === item.name}
-                    disabled={!allowOrganizing || busy || item.kind !== 'directory' || !item.mainCandidates.length}
+                    disabled={busy || item.kind !== 'directory' || !item.mainCandidates.length}
                     onClick={() => { setLastSelectedName(item.name); onSelect(item); }}
                     title={[title, ...issues].join('；')}
                   >

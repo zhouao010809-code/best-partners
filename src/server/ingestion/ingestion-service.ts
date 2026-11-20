@@ -1,3 +1,7 @@
+import { currentMaterialIngestionProgress } from '../services/material-ingestion-progress.js';
+import { createCurrentNote, mergeCurrentNote, currentKnowledgePath, currentNoteTimestamp } from './current-note-format.js';
+import { LEGACY_VAULT_LAYOUT } from '../../shared/domain/vault-layout.js';
+import { parseCurrentKnowledge } from '../rules/current-vault-notes.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { PublicApiError } from '../../shared/api/errors.js';
@@ -23,7 +27,6 @@ import { isPartialExtraction } from '../services/extraction-coverage.js';
 type BatchRow = { id: string; run_id: string; created_at: string; status: IngestionBatch['status']; indexed: number; plan_json: string; problem: string | null };
 function fail(code: string, message: string, status = 409): never { throw new PublicApiError(code, message, status); }
 const bytesEqual = (value: Buffer | null, expected: string | null) => expected === null ? value === null : value?.equals(Buffer.from(expected)) === true;
-const sourceStatus = (bytes: Buffer) => parseLibraryNoteForRead(bytes).record?.knowledgeStatus ?? '未提炼';
 const stamp = (items: ReviewCandidate[]) => sha256Bytes(Buffer.from(canonicalJson(items.map(({ batchId: _batch, ...item }) => item))));
 const calendar = (date: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 
@@ -32,6 +35,16 @@ export function createIngestionService(input: {
   refreshIndex(): Promise<boolean>; now?: () => Date;
 }) {
   const db = input.database; const port = input.port; const store = createReviewStore(db); const now = input.now ?? (() => new Date());
+  const layout = input.gateway.layout ?? LEGACY_VAULT_LAYOUT;
+  const currentLayout = layout.id === 'current';
+  const createNote = currentLayout ? createCurrentNote : createKnowledgeNote;
+  const mergeNote = currentLayout ? mergeCurrentNote : mergeKnowledgeNote;
+  const parseTarget = currentLayout ? parseCurrentKnowledge : parseKnowledgeNote;
+  const timestamp = () => currentLayout ? currentNoteTimestamp(now()) : calendar(now());
+  function sourceStatus(bytes: Buffer, path: string) {
+    return currentLayout ? currentMaterialIngestionProgress(db).get(path) ?? '未提炼'
+      : parseLibraryNoteForRead(bytes, path).record?.knowledgeStatus ?? '未提炼';
+  }
   let busy = false; let closed = false; let running: Promise<unknown> | undefined;
   const recoveryPreviews = new Map<string, { plan: IngestionPlan; basePlanSha: string; expiresAt: string }>();
   function requireIdle() { if (closed) fail('INGESTION_CLOSED', '应用正在关闭，已保存进度，请重新打开。'); if (busy) fail('INGESTION_BUSY', '正在完成入库，请稍后再操作。'); }
@@ -40,7 +53,7 @@ export function createIngestionService(input: {
     try { return await work; } finally { busy = false; if (running === work) running = undefined; }
   }
   function assertNotInTrash(path: string): void {
-    if (path.startsWith('02知识库/')) {
+    if (path.startsWith(layout.knowledgeRoot + '/')) {
       if (readMaterialVisibility(db).trashed.has(path)) fail('KNOWLEDGE_IN_TRASH', '目标知识已在回收站或正在恢复，请先恢复该笔记，或选择其他新标题。');
       return;
     }
@@ -58,7 +71,7 @@ export function createIngestionService(input: {
     assertNotInTrash(path);
     let bytes: Buffer | null;
     try { bytes = port.read(path); } catch { return fail('SOURCE_UNAVAILABLE', '原资料暂时无法读取，草稿仍保存在本机。'); }
-    if (!bytes || !parseLibraryNoteForRead(bytes, path).record || parseFrontmatter(bytes).data.处理状态 !== '已归档') {
+    if (!bytes || parseLibraryNoteForRead(bytes, path).record?.processingStatus !== '已归档') {
       return fail('SOURCE_UNAVAILABLE', '原资料已移走或格式发生变化，请先在 App 原始资料中检查。');
     }
     return bytes;
@@ -82,10 +95,12 @@ export function createIngestionService(input: {
         if (!entry.endsWith('/')) continue;
         const name = entry.slice(0, -1);
         if (!name || name.startsWith('.') || /[/\\\u0000-\u001f]/u.test(name)) continue;
-        const child = `${path}/${name}`; result.push(child); await walk(child, depth + 1);
+        const child = `${path}/${name}`;
+        if (currentLayout && child === '03知识库/档案室') continue;
+        result.push(child); await walk(child, depth + 1);
       }
     }
-    try { await walk('02知识库', 0); } catch (error) { if (error instanceof PublicApiError) throw error; fail('DIRECTORY_UNAVAILABLE', '知识目录暂时无法读取，请稍后刷新。'); }
+    try { await walk(layout.knowledgeRoot, 0); } catch (error) { if (error instanceof PublicApiError) throw error; fail('DIRECTORY_UNAVAILABLE', '知识目录暂时无法读取，请稍后刷新。'); }
     return result.sort();
   }
   function getRow(id: string): BatchRow {
@@ -112,7 +127,7 @@ export function createIngestionService(input: {
     try { bytes = readSource(run.materialPath); } catch { /* History remains accessible if the source disappears. */ }
     const rows = db.prepare('SELECT id FROM personal_ingestion_batches WHERE run_id=? ORDER BY created_at DESC,rowid DESC LIMIT 200').all(runId) as { id: string }[];
     return ingestionReviewSchema.parse({ runId, materialPath: run.materialPath, title: run.title, candidates, directories: await directories(),
-      sourceStatus: bytes ? sourceStatus(bytes) : '未提炼', ...(bytes ? { sourceCurrentSha: sha256Bytes(bytes) } : {}),
+      sourceStatus: bytes ? sourceStatus(bytes, run.materialPath) : '未提炼', ...(bytes ? { sourceCurrentSha: sha256Bytes(bytes) } : {}),
       sourceChanged: bytes ? sourceChanged(runId, bytes) : true, complete: candidates.every((item) => item.state !== 'pending'),
       relatedRuns: related.filter((item) => item.id !== runId).slice(0, 200).map((item) => ({ id: item.id, createdAt: item.createdAt, pendingCount: store.list(item.id).filter((c) => c.state === 'pending').length })),
       batches: rows.map((row) => batch(row.id)) });
@@ -151,18 +166,22 @@ export function createIngestionService(input: {
       const before = readSource(run.materialPath); const currentSha = sha256Bytes(before);
       if (sourceChanged(run.id, before) && request.acknowledgedSourceSha !== currentSha) fail('SOURCE_CHANGED', '资料已变化，请查看当前原文，核对后再继续。');
       const dirs = await directories(); const rule = await loadRuleBundle(input.gateway);
+      const date = timestamp();
+      const classification = rule.sources.find(file => file.path === '00大脑规则/06知识库分类规则.md')?.text ?? '';
       const groups = new Map<string, ReviewCandidate[]>();
       for (const c of choices.filter((item) => item.decision === 'keep')) {
         validateDraft(c.draft); assertKnowledgeTitle(c.draft.title);
         if (!dirs.includes(c.draft.suggestedPath)) fail('DIRECTORY_UNAVAILABLE', '请从当前知识目录中选择分类。');
         for (const topic of c.draft.topics) {
           validateFilesystemPath(`${linkTarget(topic)}.md`);
-          if (!topic.startsWith('02知识库/') || !port.read(`${linkTarget(topic)}.md`)) fail('TOPIC_NOT_FOUND', '所属主题必须是已存在的知识节点。');
+          if (!topic.startsWith(layout.knowledgeRoot + '/') || !port.read(`${linkTarget(topic)}.md`)) fail('TOPIC_NOT_FOUND', '所属主题必须是已存在的知识节点。');
         }
         const originalBody = Buffer.from(parseFrontmatter(before).bodyBytes).toString('utf8');
         if (c.draft.draft.quotes.some((quote) => !originalBody.includes(quote))) fail('QUOTE_NOT_VERIFIED', '原文引用必须能在当前原资料正文中逐字找到；请修改引用或留空。');
-        const path = c.target.mode === 'new' ? `${c.draft.suggestedPath}/${c.draft.title}.md` : c.target.path;
-        if (!path || !path.startsWith('02知识库/') || !path.endsWith('.md')) fail('TARGET_INVALID', '请选择有效的知识笔记目标。');
+        const newPath = currentLayout ? currentKnowledgePath(c.draft.suggestedPath, c.draft.title, date, classification)
+          : `${c.draft.suggestedPath}/${c.draft.title}.md`;
+        const path = c.target.mode === 'new' ? newPath : c.target.path;
+        if (!path || !path.startsWith(layout.knowledgeRoot + '/') || !path.endsWith('.md')) fail('TARGET_INVALID', '请选择有效的知识笔记目标。');
         validateFilesystemPath(path);
         const group = groups.get(path) ?? []; group.push(c); groups.set(path, group);
       }
@@ -173,9 +192,9 @@ export function createIngestionService(input: {
         const existing = port.read(path); const mode = group[0]!.target.mode;
         if (mode === 'new' && existing) fail('TARGET_EXISTS', '这个标题对应的笔记已存在，请选择合并或修改标题。');
         if (mode !== 'new' && !existing) fail('TARGET_NOT_FOUND', '目标笔记已移走，请重新选择。');
-        let after = mode === 'new' ? createKnowledgeNote(group[0]!.draft, run.materialPath, calendar(now()))
-          : mergeKnowledgeNote(existing!, group.map((c) => c.draft), run.materialPath, calendar(now()), mode, group.every((c) => c.target.confirmLegacySources === true));
-        if (mode === 'new' && group.length > 1) after = mergeKnowledgeNote(after, group.slice(1).map((c) => c.draft), run.materialPath, calendar(now()), 'merge');
+        let after = mode === 'new' ? createNote(group[0]!.draft, run.materialPath, date)
+          : mergeNote(existing!, group.map((c) => c.draft), run.materialPath, date, mode, group.every((c) => c.target.confirmLegacySources === true));
+        if (mode === 'new' && group.length > 1) after = mergeNote(after, group.slice(1).map((c) => c.draft), run.materialPath, date, 'merge');
         files.push({ path, kind: existing ? 'update' : 'new', before: existing?.toString('utf8') ?? null, after: after.toString('utf8'), stageId: randomUUID() });
         decisions.push(...group.map((c) => ({ id: c.id, version: c.version, state: 'committed' as const, path })));
       }
@@ -185,7 +204,7 @@ export function createIngestionService(input: {
       const sourceRecord = parseLibraryNoteForRead(before, run.materialPath).record!;
       const anyIngested = sourceRecord.generatedKnowledge.length > 0 || decisions.some((d) => d.state === 'committed') || all.some((c) => c.state === 'committed');
       const status = anyIngested ? pendingCount || isPartialExtraction(run.sourceRange) ? '部分入库' : '已入库' : '未提炼';
-      const afterSource = anyIngested ? patchSource(before, decisions.flatMap((d) => d.path ? [d.path] : []), status) : before;
+      const afterSource = !currentLayout && anyIngested ? patchSource(before, decisions.flatMap((d) => d.path ? [d.path] : []), status) : before;
       if (!before.equals(afterSource)) files.push({ path: run.materialPath, kind: 'source', before: before.toString('utf8'), after: afterSource.toString('utf8'), stageId: randomUUID() });
       const id = randomUUID(); const expiresAt = new Date(now().getTime() + 600_000).toISOString();
       const publicPreview = ingestionPreviewSchema.parse({ id, runId: run.id, expiresAt, files: files.map(({ stageId: _stage, ...file }) => file),
@@ -293,16 +312,30 @@ export function createIngestionService(input: {
       const knowledgeFiles = original.files.filter((f) => f.kind !== 'source');
       if (Object.keys(newTargets).some((path) => !knowledgeFiles.some((file) => file.path === path))) return fail('TARGET_INVALID', '只能调整本批已有的知识目标。');
       const dirs = await directories();
+      const rule = await loadRuleBundle(input.gateway);
+      const date = timestamp();
+      const classification = rule.sources.find(file => file.path === '00大脑规则/06知识库分类规则.md')?.text ?? '';
+      const replacements = new Map<string, string>();
+      for (const [from, proposed] of Object.entries(newTargets)) {
+        validateFilesystemPath(proposed);
+        const directory = proposed.slice(0, proposed.lastIndexOf('/'));
+        const title = proposed.slice(proposed.lastIndexOf('/') + 1, -3);
+        assertKnowledgeTitle(title);
+        if (!proposed.startsWith(layout.knowledgeRoot + '/') || !proposed.endsWith('.md') || !dirs.includes(directory)) {
+          return fail('TARGET_INVALID', '新笔记必须放在当前已存在的知识目录。');
+        }
+        replacements.set(from, currentLayout ? currentKnowledgePath(directory, title, date, classification) : proposed);
+      }
       const candidates = allCandidates(original.materialPath);
-      const decisions = original.decisions.map((decision) => decision.path && Object.hasOwn(newTargets, decision.path) ? { ...decision, path: newTargets[decision.path]! } : decision);
+      const decisions = original.decisions.map(decision => decision.path && replacements.has(decision.path)
+        ? { ...decision, path: replacements.get(decision.path)! } : decision);
       const restoredWithoutSource: string[] = [];
       const files: IngestionPlan['files'] = knowledgeFiles.flatMap((file) => {
         const current = port.read(file.path); const backup = preserved(file.path);
-        const alternative = Object.hasOwn(newTargets, file.path) ? newTargets[file.path] : undefined;
+        const alternative = replacements.get(file.path);
         if (alternative) {
           validateFilesystemPath(alternative);
           const directory = alternative.slice(0, alternative.lastIndexOf('/')); const title = alternative.slice(alternative.lastIndexOf('/') + 1, -3);
-          if (!alternative.startsWith('02知识库/') || !alternative.endsWith('.md') || !dirs.includes(directory)) return fail('TARGET_INVALID', '新笔记必须放在当前已存在的知识目录。');
           assertKnowledgeTitle(title);
           assertNotInTrash(alternative);
           if (alternative === file.path || port.read(alternative)) return fail('TARGET_EXISTS', '新标题对应的笔记已存在，请换一个标题。');
@@ -311,17 +344,17 @@ export function createIngestionService(input: {
           if (!selected.length || selected.some((item) => !item)) return fail('CANDIDATE_NOT_FOUND', '本批草稿无法核对，未修改文件。');
           const drafts = selected.map((item) => item!.draft);
           drafts.forEach(validateDraft);
-          let after = createKnowledgeNote({ ...drafts[0]!, title, suggestedPath: directory }, original.materialPath, calendar(now()));
-          if (drafts.length > 1) after = mergeKnowledgeNote(after, drafts.slice(1), original.materialPath, calendar(now()), 'merge');
-          const replacements: IngestionPlan['files'] = [];
+          let after = createNote({ ...drafts[0]!, title, suggestedPath: directory }, original.materialPath, date);
+          if (drafts.length > 1) after = mergeNote(after, drafts.slice(1), original.materialPath, date, 'merge');
+          const replacementFiles: IngestionPlan['files'] = [];
           if (backup && current?.equals(Buffer.from(file.after))) {
-            const record = parseKnowledgeNote(backup, file.path).record;
+            const record = parseTarget(backup, file.path).record;
             if (!record) return fail('RECOVERY_TARGET_INVALID', '保留的知识版本格式无法核对，未覆盖当前文件。');
             if (!record.sourceMaterials.map(linkTarget).includes(linkTarget(original.materialPath))) restoredWithoutSource.push(linkTarget(file.path));
-            replacements.push({ path: file.path, kind: 'update', before: current.toString('utf8'), after: backup.toString('utf8'), preserved: backup.toString('utf8'), stageId: randomUUID() });
+            replacementFiles.push({ path: file.path, kind: 'update', before: current.toString('utf8'), after: backup.toString('utf8'), preserved: backup.toString('utf8'), stageId: randomUUID() });
           }
-          replacements.push({ path: alternative, kind: 'new', before: null, after: after.toString('utf8'), stageId: randomUUID() });
-          return replacements;
+          replacementFiles.push({ path: alternative, kind: 'new', before: null, after: after.toString('utf8'), stageId: randomUUID() });
+          return replacementFiles;
         }
         // This file is an explicitly approved restoration, not a candidate merge.
         // An ancestor stage may have advanced before that restoration could run.
@@ -329,7 +362,7 @@ export function createIngestionService(input: {
           && !original.decisions.some((decision) => decision.path === file.path);
         if (restoringPreserved && (bytesEqual(current, file.before) || bytesEqual(current, file.after))) {
           const after = backup ?? Buffer.from(file.after);
-          const record = parseKnowledgeNote(after, file.path).record;
+          const record = parseTarget(after, file.path).record;
           if (!record) return fail('RECOVERY_TARGET_INVALID', '保留的知识版本格式无法核对，未覆盖当前文件。');
           if (!record.sourceMaterials.map(linkTarget).includes(linkTarget(original.materialPath))) restoredWithoutSource.push(linkTarget(file.path));
           return [{ ...file, before: current?.toString('utf8') ?? null, after: after.toString('utf8'), preserved: after.toString('utf8'),
@@ -346,10 +379,10 @@ export function createIngestionService(input: {
       if (new Set(files.map((file) => file.path)).size !== files.length) return fail('TARGET_CONFLICT', '本批不同笔记的新标题不能指向同一个文件。');
       const resolved = new Set(decisions.map((d) => d.id));
       const pendingCount = candidates.filter((c) => c.state === 'pending' && !resolved.has(c.id)).length;
-      const anyIngested = parseLibraryNoteForRead(evidence).record!.generatedKnowledge.length > 0 || decisions.some((d) => d.state === 'committed') || candidates.some((c) => c.state === 'committed');
+      const anyIngested = parseLibraryNoteForRead(evidence, original.materialPath).record!.generatedKnowledge.length > 0 || decisions.some((d) => d.state === 'committed') || candidates.some((c) => c.state === 'committed');
       const status = anyIngested ? pendingCount || isPartialExtraction(store.run(original.runId).sourceRange) ? '部分入库' : '已入库' : '未提炼';
       let sourceBase = evidence;
-      if (restoredWithoutSource.length) {
+      if (!currentLayout && restoredWithoutSource.length) {
         const previousLinks = normalizeWikiLinkList(parseFrontmatter(Buffer.from(original.sourceBefore)).data.生成知识 as string[] ?? []).map(linkTarget);
         const currentLinks = parseFrontmatter(evidence).data.生成知识 as string[] ?? [];
         sourceBase = patchFrontmatter(evidence, { 生成知识: currentLinks.filter((link) => {
@@ -357,14 +390,14 @@ export function createIngestionService(input: {
           return !restoredWithoutSource.includes(target) || previousLinks.includes(target);
         }) });
       }
-      const sourceAfter = anyIngested ? patchSource(sourceBase, decisions.flatMap((d) => d.path ? [d.path] : []), status) : sourceBase;
+      const sourceAfter = !currentLayout && anyIngested ? patchSource(sourceBase, decisions.flatMap((d) => d.path ? [d.path] : []), status) : sourceBase;
       const sourceFile = { path: original.materialPath, kind: 'source' as const, before: currentSource.toString('utf8'), after: sourceAfter.toString('utf8'),
         ...(preservedSource ? { preserved: preservedSource.toString('utf8') } : {}), stageId: randomUUID() };
       const plan = ingestionPlanSchema.parse({ ...original, journalId: randomUUID(), sourceBefore: currentSource.toString('utf8'), sourceAfter: sourceAfter.toString('utf8'),
         sourceEvidenceBefore: evidence.toString('utf8'), decisions, reviewStamp: stamp(candidates),
         recoveryReadSet: observed.map(({ read }) => read),
         preview: { ...original.preview, pendingCount, sourceStatus: status },
-        ruleFingerprint: (await loadRuleBundle(input.gateway)).fingerprint, files: currentSource.equals(sourceAfter) ? files : [...files, sourceFile] });
+        ruleFingerprint: rule.fingerprint, files: currentSource.equals(sourceAfter) ? files : [...files, sourceFile] });
       assertNoOverlappingBatch(plan);
       assertPlanNotInTrash(plan);
       const token = randomUUID(); const expiresAt = new Date(now().getTime() + 600_000).toISOString();

@@ -73,13 +73,24 @@ async function safeInbox(vaultRoot: string, layout: ClipperLayout = 'legacy'): P
 function markdownFor(message: Extract<ClipperMessage, { payload: unknown }>): string {
   const p = message.payload; return `# ${p.title}\n\n来源：${p.url}\n采集时间：${p.clippedAt}\n\n${p.content}\n`;
 }
-async function findDuplicate(inbox: string, packetId: string, contentHash: string): Promise<boolean> {
+async function findDuplicate(inbox: string, packetId: string, contentHash: string, layout: ClipperLayout): Promise<boolean> {
   const readMetadata = async (directory: string): Promise<string | undefined> => {
-    const metadataPath = join(directory, 'metadata.json');
-    const stat = await fs.lstat(metadataPath).catch((error) => { if (isMissing(error)) return undefined; throw error; });
-    if (!stat) return undefined;
-    if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) fail('保存位置无效');
-    return fs.readFile(metadataPath, 'utf8');
+    const locations = [join(directory, 'metadata.json')];
+    if (layout === 'current') {
+      const attachments = join(directory, '附件');
+      const stat = await fs.lstat(attachments).catch((error) => { if (!isMissing(error)) throw error; });
+      if (stat) {
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail('保存位置无效');
+        locations.unshift(join(attachments, 'metadata.json'));
+      }
+    }
+    for (const metadataPath of locations) {
+      const stat = await fs.lstat(metadataPath).catch((error) => { if (!isMissing(error)) throw error; });
+      if (!stat) continue;
+      if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) fail('保存位置无效');
+      return fs.readFile(metadataPath, 'utf8');
+    }
+    return undefined;
   };
   const direct = join(inbox, packetId);
   try {
@@ -107,21 +118,32 @@ export async function handleClipperMessage(message: unknown, configInput: Clippe
   const config = parseClipperHostConfig(configInput); const parsed = clipperMessageSchema.safeParse(message); if (!parsed.success) fail('收藏消息格式无效');
   const m = parsed.data; if (m.extensionId !== CLIPPER_EXTENSION_ID || m.extensionId !== config.extensionId || m.token !== config.token) fail('浏览器插件未配对，请重新连接');
   if (!('payload' in m)) return { ok: true, pong: true };
-  const { inbox } = await safeInbox(config.vaultRoot, config.layout); const md = markdownFor(m);
+  const layout = config.layout ?? 'legacy';
+  const { inbox } = await safeInbox(config.vaultRoot, layout); const md = markdownFor(m);
   const contentHash = createHash('sha256').update(md).digest('hex'); const lock = join(inbox, '.clipper.lock'); let lockHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     lockHandle = await fs.open(lock, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    if (await findDuplicate(inbox, m.payload.packetId, contentHash)) return { ok: true, packetId: m.payload.packetId, duplicate: true, contentHash };
+    if (await findDuplicate(inbox, m.payload.packetId, contentHash, layout)) return { ok: true, packetId: m.payload.packetId, duplicate: true, contentHash };
     const temporary = await fs.mkdtemp(join(inbox, `.packet-${m.payload.packetId}-`));
     try {
-      await fs.writeFile(join(temporary, 'index.md'), md, { mode: 0o600 }); await fs.writeFile(join(temporary, 'metadata.json'), `${JSON.stringify({ ...m.payload, contentHash }, null, 2)}\n`, { mode: 0o600 });
+      await fs.writeFile(join(temporary, 'index.md'), md, { mode: 0o600 });
+      const metadataDir = layout === 'current' ? join(temporary, '附件') : temporary;
+      const { packetId, title, url, clippedAt } = m.payload;
+      const metadata = layout === 'current' ? { packetId, title, url, clippedAt, contentHash } : { ...m.payload, contentHash };
+      if (layout === 'current') await fs.mkdir(metadataDir, { mode: 0o700 });
+      await fs.writeFile(join(metadataDir, 'metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
       await fs.rename(temporary, join(inbox, m.payload.packetId)); return { ok: true, packetId: m.payload.packetId, duplicate: false, contentHash };
     } catch (error) {
       await fs.rm(temporary, { recursive: true, force: true }).catch(() => undefined);
-      if ((error as NodeJS.ErrnoException)?.code === 'EEXIST' && await findDuplicate(inbox, m.payload.packetId, contentHash)) return { ok: true, packetId: m.payload.packetId, duplicate: true, contentHash };
+      if ((error as NodeJS.ErrnoException)?.code === 'EEXIST' && await findDuplicate(inbox, m.payload.packetId, contentHash, layout)) return { ok: true, packetId: m.payload.packetId, duplicate: true, contentHash };
       throw error;
     }
-  } finally { await lockHandle?.close().catch(() => undefined); await fs.unlink(lock).catch((error) => { if (!isMissing(error)) throw error; }); }
+  } finally {
+    if (lockHandle) {
+      await lockHandle.close().catch(() => undefined);
+      await fs.unlink(lock).catch((error) => { if (!isMissing(error)) throw error; });
+    }
+  }
 }
 export async function runClipperHost(opts: { configPath: string; input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }) {
   await assertPrivateConfig(opts.configPath); const config = parseClipperHostConfig(JSON.parse(await fs.readFile(opts.configPath, 'utf8'))); const input = opts.input ?? process.stdin; const output = opts.output ?? process.stdout;

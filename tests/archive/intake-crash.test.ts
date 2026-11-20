@@ -2,14 +2,15 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
-import { createPersonalIntakeFixture } from '../helpers/personal-intake-fixture.js';
+import { createCurrentIntakeFixture, createPersonalIntakeFixture } from '../helpers/personal-intake-fixture.js';
 import { openPersonalArchive } from '../../src/server/archive/sandbox-native.js';
 import { executeIntakeArchive, listIntakeArchives } from '../../src/server/archive/intake-archive.js';
-it.each(['intent', 'swapMain', 'renameMain', 'move'])('recovers a real SIGKILL after %s', async (checkpoint) => {
-  const f = createPersonalIntakeFixture();
+it.each(['legacy', 'current'].flatMap(layout => ['intent', 'swapMain', 'renameMain', 'move'].map(checkpoint => ({ layout, checkpoint }))))(
+  'recovers a real $layout SIGKILL after $checkpoint', async ({ layout, checkpoint }) => {
+  const f = layout === 'current' ? createCurrentIntakeFixture() : createPersonalIntakeFixture();
   try {
     const result = await new Promise<{ output: string; signal: string | null }>((accept, reject) => {
-      const child = spawn(process.execPath, ['--import', 'tsx', resolve('tests/helpers/intake-crash-worker.ts'), f.root, f.recovery, resolve('dist/native/personal-archive.node'), checkpoint]);
+      const child = spawn(process.execPath, ['--import', 'tsx', resolve('tests/helpers/intake-crash-worker.ts'), f.root, f.recovery, resolve('dist/native/personal-archive.node'), checkpoint, layout]);
       let output = ''; let error = '';
       const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('INTAKE_WORKER_TIMEOUT')); }, 10_000);
       child.stdout.on('data', (chunk) => { output += String(chunk); }); child.stderr.on('data', (chunk) => { error += String(chunk); });

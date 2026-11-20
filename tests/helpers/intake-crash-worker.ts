@@ -2,11 +2,13 @@ import { openPersonalArchive, type PersonalArchivePort } from '../../src/server/
 import { captureArchiveTree } from '../../src/server/archive/archive-snapshot.js';
 import { prepareIntakeArchive, executeIntakeArchive } from '../../src/server/archive/intake-archive.js';
 import { planIntakeMain } from '../../src/server/archive/intake-plan.js';
-import { archiveSource as source } from './archive-fixture.js';
-const [root, recovery, addon, checkpoint] = process.argv.slice(2);
+import { CURRENT_VAULT_LAYOUT, LEGACY_VAULT_LAYOUT } from '../../src/shared/domain/vault-layout.js';
+const [root, recovery, addon, checkpoint, format] = process.argv.slice(2);
 if (!root || !recovery || !addon || !checkpoint) throw new Error('INVALID_FIXTURE');
 const port = openPersonalArchive(root, recovery, addon);
-const plan = planIntakeMain({ packageName: '资料包', mainName: '原文.md', bytes: port.read(`${source}/原文.md`),
+const layout = format === 'current' ? CURRENT_VAULT_LAYOUT : LEGACY_VAULT_LAYOUT;
+const source = `${layout.inboxRoot}/资料包`;
+const plan = planIntakeMain({ layout, packageName: '资料包', mainName: '原文.md', bytes: port.read(`${source}/原文.md`),
   fields: { platform: '个人', title: '资料包', collectedAt: '2026-09-05' } });
 const intent = prepareIntakeArchive(port, { source, tree: captureArchiveTree(port, source), plan, ruleFingerprint: 'a'.repeat(64) });
 function crash() { process.stdout.write(`INTAKE_ID:${intent.id}\n`); process.kill(process.pid, 'SIGKILL'); }

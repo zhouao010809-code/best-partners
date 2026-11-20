@@ -1,3 +1,4 @@
+import { parseCurrentKnowledge } from '../rules/current-vault-notes.js';
 import { z } from 'zod';
 import type { PersonalIngestionPort } from './ingestion-native.js';
 import { ingestionFileSchema, ingestionPreviewSchema } from '../../shared/api/ingestion.js';
@@ -31,13 +32,15 @@ export function validatePlan(plan: IngestionPlan, port: PersonalIngestionPort): 
   if (plan.root.dev !== port.rootIdentity.dev || plan.root.ino !== port.rootIdentity.ino
     || plan.id !== plan.preview.id || plan.runId !== plan.preview.runId) throw new Error('PLAN_IDENTITY_CHANGED');
   validateFilesystemPath(plan.materialPath);
-  if (!/^01图书馆\/来自[^/]+\/.+\.md$/u.test(plan.materialPath)) throw new Error('SOURCE_PATH_INVALID');
+  const currentLayout = /^01图书馆\/(?:01公域资料|02个人资料)\//u.test(plan.materialPath);
+  const knowledgeRoot = currentLayout ? '03知识库/' : '02知识库/';
+  if (!currentLayout && !/^01图书馆\/来自[^/]+\/.+\.md$/u.test(plan.materialPath)) throw new Error('SOURCE_PATH_INVALID');
   if (plan.sourceEvidenceBefore !== undefined && plan.journalId === plan.id) throw new Error('RECOVERY_APPROVAL_REQUIRED');
   if (plan.recoveryReadSet?.length && plan.journalId === plan.id) throw new Error('RECOVERY_APPROVAL_REQUIRED');
   const stageIds = new Set(plan.files.map((file) => file.stageId));
   for (const read of plan.recoveryReadSet ?? []) {
     validateFilesystemPath(read.path);
-    if (stageIds.has(read.stageId) || (read.path !== plan.materialPath && (!read.path.startsWith('02知识库/') || !read.path.endsWith('.md')))) throw new Error('RECOVERY_READ_SET_INVALID');
+    if (stageIds.has(read.stageId) || (read.path !== plan.materialPath && (!read.path.startsWith(knowledgeRoot) || !read.path.endsWith('.md')))) throw new Error('RECOVERY_READ_SET_INVALID');
     stageIds.add(read.stageId);
   }
   if (sourceEvidenceSha(Buffer.from(plan.sourceEvidenceBefore ?? plan.sourceBefore)) !== sourceEvidenceSha(Buffer.from(plan.sourceAfter))) throw new Error('SOURCE_BODY_CHANGED');
@@ -49,12 +52,20 @@ export function validatePlan(plan: IngestionPlan, port: PersonalIngestionPort): 
       if (file.path !== plan.materialPath || file.before !== plan.sourceBefore || file.after !== plan.sourceAfter) throw new Error('SOURCE_PLAN_INVALID');
       sourceSeen = true;
     } else {
-      if (!file.path.startsWith('02知识库/') || !file.path.endsWith('.md') || (file.kind === 'new') !== (file.before === null)) throw new Error('KNOWLEDGE_PATH_INVALID');
-      const record = parseKnowledgeNote(Buffer.from(file.after), file.path).record;
+      if (!file.path.startsWith(knowledgeRoot) || !file.path.endsWith('.md') || (file.kind === 'new') !== (file.before === null)) throw new Error('KNOWLEDGE_PATH_INVALID');
+      const record = (currentLayout ? parseCurrentKnowledge : parseKnowledgeNote)(Buffer.from(file.after), file.path).record;
       const restoringPreserved = plan.journalId !== plan.id && file.preserved !== undefined && file.after === file.preserved
         && !plan.decisions.some((decision) => decision.path === file.path);
       if (!record || (!restoringPreserved && !record.sourceMaterials.map(linkTarget).includes(linkTarget(plan.materialPath)))) throw new Error('KNOWLEDGE_LINK_INVALID');
     }
+  }
+  if (currentLayout) {
+    if (sourceSeen || plan.sourceBefore !== plan.sourceAfter) throw new Error('SOURCE_PLAN_INVALID');
+    const linkedTargets = new Set(plan.files.filter(file => file.kind !== 'source').map(file => file.path));
+    for (const decision of plan.decisions) {
+      if (decision.state === 'committed' && (!decision.path || !linkedTargets.has(decision.path))) throw new Error('KNOWLEDGE_LINK_INVALID');
+    }
+    return;
   }
   const source = parseFrontmatter(Buffer.from(plan.sourceAfter)).data;
   const links = normalizeWikiLinkList(source.生成知识 as string[] ?? []).map(linkTarget);

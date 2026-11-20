@@ -1,3 +1,4 @@
+import { clipperPayloadSchema } from '../../shared/api/clipper.js';
 import { LEGACY_VAULT_LAYOUT, type VaultLayout } from '../../shared/domain/vault-layout.js';
 import { randomUUID } from 'node:crypto';
 import { intakeFieldsSchema, type IntakeList, type IntakePreview, type IntakePreviewRequest, type IntakeOutcome } from '../../shared/api/intake.js';
@@ -27,6 +28,17 @@ function publicFailure(error: unknown): PublicApiError {
     INTAKE_TOO_LARGE: '资料包超出当前安全处理大小，原文件已保留。'
   };
   return new PublicApiError('RECOVERY_REQUIRED', messages[code] ?? '归档未完成。原文件与恢复记录均保留，请刷新收件箱查看待处理项。', 409);
+}
+
+const clipperMetadata = clipperPayloadSchema.pick({ packetId: true, title: true, url: true }).strip();
+function readClipperMetadata(port: PersonalArchivePort, path: string, packetId: string) {
+  const stat = port.stat(path);
+  if (stat?.kind !== 'file' || stat.size > 256 * 1024) return;
+  const bytes = port.read(path);
+  try {
+    const result = clipperMetadata.safeParse(JSON.parse(bytes.toString('utf8')));
+    if (result.success && result.data.packetId === packetId) return result.data;
+  } catch { /* Other capture tools may use a different sidecar format. */ }
 }
 
 export function createIntakeService(input: {
@@ -67,12 +79,23 @@ export function createIntakeService(input: {
           if (entry.kind !== 'directory') return { ...item, problem: '这是单个文件，当前需按资料包归档；尚未移动。' };
           try {
             const source = `${layout.inboxRoot}/${entry.name}`;
-            item.mainCandidates = port.list(source).filter((child) => child.kind === 'file' && /\.md$/u.test(child.name)).map((child) => child.name).sort().slice(0, 100);
+            const children = port.list(source);
+            item.mainCandidates = children.filter((child) => child.kind === 'file' && /\.md$/u.test(child.name)).map((child) => child.name).sort().slice(0, 100);
             if (!item.mainCandidates.length) item.problem = '没有找到主 Markdown，文件和附件均保持原样。';
             else if (item.mainCandidates.length === 1) {
-              const path = `${source}/${item.mainCandidates[0]}`;
-              if ((port.stat(path)?.size ?? Infinity) <= 256 * 1024) {
-                const fields = intakeFieldsSchema.partial().safeParse(inferIntakeFields(item.mainCandidates[0]!, port.read(path)));
+              const mainName = item.mainCandidates[0]!;
+              const path = `${source}/${mainName}`;
+              const smallMain = (port.stat(path)?.size ?? Infinity) <= 256 * 1024;
+              let clip;
+              if (layout.id === 'current' && mainName === 'index.md') {
+                if (children.some(entry => entry.name === '附件' && entry.kind === 'directory'))
+                  clip = readClipperMetadata(port, `${source}/附件/metadata.json`, entry.name);
+                if (!clip && children.some(entry => entry.name === 'metadata.json'))
+                  clip = readClipperMetadata(port, `${source}/metadata.json`, entry.name);
+              }
+              if (smallMain || clip) {
+                const bytes = smallMain ? port.read(path) : Buffer.alloc(0);
+                const fields = intakeFieldsSchema.partial().safeParse(inferIntakeFields(mainName, bytes, layout, clip));
                 if (fields.success) item.fields = fields.data;
                 else item.problem = '资料信息超出显示范围，请在预览中核对并补充；原文件保持不变。';
               }
@@ -89,7 +112,6 @@ export function createIntakeService(input: {
     },
     async preview(request) {
       try {
-        if (layout.id === 'current') throw new PublicApiError('INTAKE_FORMAT_UNSUPPORTED', '当前归档表单只支持旧版图书馆格式。', 409);
         await currentRules(); expire();
         if (previews.size >= 10) previews.delete(previews.keys().next().value!);
         const source = `${layout.inboxRoot}/${request.name}`;
@@ -97,14 +119,14 @@ export function createIntakeService(input: {
         const main = tree.find((entry) => entry.path === request.mainName);
         if (main?.kind !== 'file') throw new PublicApiError('VALIDATION_ERROR', '请选择资料包中的主 Markdown。', 400);
         const plan = planIntakeMain({ packageName: request.name, mainName: request.mainName,
-          bytes: Buffer.from(main.bytesBase64, 'base64'), fields: request.fields });
-        if (plan.mainName !== plan.sourceMainName && tree.some((e) => e.kind === 'file' && /\.md$/iu.test(e.path) && e.path !== plan.sourceMainName)) {
+          bytes: Buffer.from(main.bytesBase64, 'base64'), fields: request.fields, layout, now: new Date(now()) });
+        if (plan.mainName !== plan.sourceMainName && tree.some((e) => e.kind === 'file' && /\.md$/iu.test(e.path) && e.path !== plan.sourceMainName && !(layout.id === 'current' && e.path.startsWith('附件/')))) {
           throw new Error('INTAKE_LINK_REVIEW_REQUIRED');
         }
         const token = randomUUID(); const expires = now() + 5 * 60_000;
         previews.set(token, { source, tree, plan, expires });
         const markdown = new TextDecoder('utf-8', { fatal: true }).decode(plan.bytes);
-        return { token, target: `01图书馆/来自${plan.platform}/${plan.month}/${plan.packageName}`, mainName: plan.mainName,
+        return { token, target: plan.target, mainName: plan.mainName,
           markdown: markdown.slice(0, 30000), truncated: markdown.length > 30000, expiresAt: new Date(expires).toISOString() };
       } catch (error) { throw publicFailure(error); }
     },

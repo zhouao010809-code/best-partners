@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Navigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Archive, CircleAlert, Search, SlidersHorizontal, Maximize2, Minimize2, X } from 'lucide-react';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { MaterialTrashProvider } from '../components/MaterialTrash.js';
@@ -9,23 +9,19 @@ import { QueueCabinet, type CabinetDrawerState } from './queue/QueueCabinet.js';
 import type { ExtractionQueueItem, ExtractionQueuePage, ExtractionQueueQuery, ExtractionQueueView } from '../../shared/api/extraction-queue.js';
 import type { ExtractionRun } from '../../shared/api/extraction.js';
 import { isIsoCalendarDate } from './pageSupport.js';
-import { intakePlatforms } from '../../shared/api/intake.js';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
+import { currentIntakePlatforms, intakePlatforms } from '../../shared/api/intake.js';
 import '../styles/queue-drawer-workspace.css';
 
 const VIEWS = [{ id: 'pending', label: '待提炼' }, { id: 'generating', label: '提炼中' }, { id: 'ready', label: '已有结果' }, { id: 'unfinished', label: '未完成' }] as const;
 const DRAWERS = [{ id: 'pending', label: '待提炼' }, { id: 'generating', label: '提炼中' }, { id: 'ready', label: '待确认' }] as const;
-const SOURCES = intakePlatforms;
 
 export function QueuePage() {
   const { api, health, refreshHealth } = useConsoleRuntime();
-  const [params, setParams] = useSearchParams();
+  const [, setParams] = useSearchParams();
   const [revision, setRevision] = useState(0);
   const source = 'data' in health ? health.data?.vaultSource : undefined;
   const legacyAdapter = source?.status === 'ready' && source.adapter === 'local-rest';
-  if (source?.status === 'ready' && source.layout === 'current') {
-    const path = params.get('materialPath');
-    return <Navigate to={path ? `/library?${new URLSearchParams({ path })}` : '/library'} replace />;
-  }
   // Read-only adapters retain their existing material-list capability.
   return <MaterialTrashProvider onChanged={entry => {
     if (entry.status === 'trashed' || entry.status === 'deleted') setParams(current => { const next = new URLSearchParams(current); if (next.get('materialPath') === entry.materialPath) { next.delete('materialPath'); next.delete('run'); next.delete('pane'); } return next; }, { replace: true });
@@ -35,6 +31,7 @@ export function QueuePage() {
 
 function ExtractionQueueWorkspace() {
   const { api, dataRevision, health, refreshHealth } = useConsoleRuntime();
+  const sources = vaultLayoutForHealth(health).id === 'current' ? [...intakePlatforms, ...currentIntakePlatforms] : intakePlatforms;
   const indexReady = 'data' in health && health.data?.index.status === 'ready';
   const service = api.extractionQueue!;
   const [params, setParams] = useSearchParams();
@@ -295,7 +292,7 @@ function ExtractionQueueWorkspace() {
     {visibilityError && <p className="queue-visibility-notice" role="alert">{visibilityError}</p>}
     <div className="queue-toolbar">
       <label className="queue-search"><Search aria-hidden="true" /><input type="search" aria-label="搜索资料标题" placeholder="在处理柜中查找…" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-      <select aria-label="来源平台" value={sourcePlatform} onChange={(event) => updateQuery({ sourcePlatform: event.target.value })}><option value="">全部来源</option>{[...new Set([...SOURCES, sourcePlatform])].filter(Boolean).map((source) => <option key={source}>{source}</option>)}</select>
+      <select aria-label="来源平台" value={sourcePlatform} onChange={(event) => updateQuery({ sourcePlatform: event.target.value })}><option value="">全部来源</option>{[...new Set([...sources, sourcePlatform])].filter(Boolean).map((source) => <option key={source}>{source}</option>)}</select>
       <button type="button" className="quiet-button" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}><SlidersHorizontal aria-hidden="true" />日期{(collectedFrom || collectedTo) && <span className="queue-filter-dot" />}</button>
       {filterActive && <button type="button" className="queue-text-button" onClick={() => { setSearch(''); updateQuery({ title: undefined, sourcePlatform: undefined, collectedFrom: undefined, collectedTo: undefined }); }}>清除筛选</button>}
     </div>

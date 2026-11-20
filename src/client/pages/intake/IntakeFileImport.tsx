@@ -7,7 +7,7 @@ import { AttachmentPicker } from '../../components/assistant/AttachmentPicker.js
 import { askAssistant } from '../../components/assistant/assistantIntent.js';
 import '../../styles/intake-file-import.css';
 
-export function IntakeFileImport({ api, onArchived, allowArchive = true }: { api: ReadConsoleApi; onArchived: () => void; allowArchive?: boolean }) {
+export function IntakeFileImport({ api, onArchived }: { api: ReadConsoleApi; onArchived: () => void }) {
   const service = api.attachments;
   const [selection, setSelection] = useState<AttachmentSelection[]>([]);
   const [groupId] = useState(() => crypto.randomUUID());
@@ -73,11 +73,11 @@ export function IntakeFileImport({ api, onArchived, allowArchive = true }: { api
   const actions = (record: Attachment) => <>
     {record.status === 'ready' && <button type="button" disabled={Boolean(busy)} onClick={() => askAssistant({ prompt: '请帮我理解这份文件的核心内容。', scope: 'brain', attachments: [selectedFile(record.id)] })}><MessageCircle />问问这份</button>}
     {record.archive?.state === 'archived' && record.archive.materialPath ? <><Link to={`/library?${new URLSearchParams({ path: record.archive.materialPath })}`}>打开归档<ArrowRight /></Link>{record.status === 'ready' && <button type="button" disabled={Boolean(busy)} onClick={() => askAssistant({ prompt: '请提炼这份文件所选范围的知识候选，保留原文引用。', scope: 'brain', attachments: [selectedFile(record.id)] })}>提炼这份<ArrowRight /></button>}</>
-      : allowArchive && <button type="button" disabled={Boolean(busy) || record.status === 'processing'} onClick={() => void archive(record)}><Archive />{busy === record.id ? '正在归档…' : record.archive?.state === 'needs-review' ? '继续核验归档' : '归档原件'}</button>}
+      : <button type="button" disabled={Boolean(busy) || record.status === 'processing'} onClick={() => void archive(record)}><Archive />{busy === record.id ? '正在归档…' : record.archive?.state === 'needs-review' ? '继续核验归档' : '归档原件'}</button>}
   </>;
   const history = records.filter(record => !selection.some(item => item.id === record.id));
   return <section className="intake-file-import" aria-label="导入本地资料">
-    <header><div><h2>把资料带进来</h2><p>{allowArchive ? '先暂存并阅读，归档后进入你的大脑。' : '暂存文件或文本，供问问读取。'}</p></div><button type="button" onClick={() => setPasteOpen(value => !value)} aria-expanded={pasteOpen}><Plus />粘贴文本</button></header>
+    <header><div><h2>把资料带进来</h2><p>先暂存并阅读，归档后进入你的大脑。</p></div><button type="button" onClick={() => setPasteOpen(value => !value)} aria-expanded={pasteOpen}><Plus />粘贴文本</button></header>
     <AttachmentPicker api={api} value={selection} onChange={setSelection} groupId={groupId} disabled={Boolean(busy)} onAttachmentsChange={updateRecords} renderActions={actions} refreshKey={revision} />
     {pasteOpen && <form className="intake-file-import__paste" onSubmit={event => { event.preventDefault(); void addText(); }}><label>资料标题<input value={title} maxLength={70} required disabled={Boolean(busy)} onChange={event => setTitle(event.target.value)} /></label><label>粘贴正文<textarea value={text} maxLength={300_000} rows={6} required disabled={Boolean(busy)} onChange={event => setText(event.target.value)} /></label><button type="submit" disabled={Boolean(busy) || !title.trim() || !text.trim()}>{busy === 'paste' ? '正在保存…' : '添加为临时资料'}</button></form>}
     {error && <p role="alert" className="intake-file-import__error">{error}<button type="button" disabled={Boolean(busy)} onClick={() => void load()}><RefreshCw />重新读取</button></p>}

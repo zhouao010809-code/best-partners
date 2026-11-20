@@ -97,15 +97,18 @@ export function MatchPicker({ runId, candidate, disabled, onChange }: { runId: s
     {error && <p role="alert">{error}<button type="button" className="quiet-button" onClick={() => setRevision((value) => value + 1)}>重新查重</button></p>}
     {!items && !error && <p role="status">正在查找相关知识…</p>}
     {items?.length === 0 && <p className="extraction-muted">当前检索没有找到相关笔记；仍请核对标题和存放目录。</p>}
-    <div className="ingestion-matches">{items?.map((item) => <section className="ingestion-match" key={item.path}>
-      <div className="ingestion-row"><h4>{item.title}</h4><span className={`ingestion-badge${item.usageStatus === '过时' ? ' ingestion-badge--warning' : ''}`}>{item.usageStatus}</span></div>
+    <div className="ingestion-matches">{items?.map((item) => {
+      const archived = item.usageStatus === '过时' || item.usageStatus === '历史记录';
+      return <section className="ingestion-match" key={item.path}>
+      <div className="ingestion-row"><h4>{item.title}</h4><span className={`ingestion-badge${archived ? ' ingestion-badge--warning' : ''}`}>{item.usageStatus}</span></div>
       <p>{item.conclusion}</p><p className="extraction-muted">{item.reason}</p><p className="extraction-path">{item.path}</p>
       <div className="extraction-actions"><button type="button" className="quiet-button" disabled={reading} onClick={() => void read(item.path)}>查看正文：{item.title}</button>
-        {item.usageStatus !== '定论' && item.usageStatus !== '过时' && <button type="button" className="quiet-button" disabled={disabled} onClick={() => onChange({ mode: 'merge', path: item.path })}>合并到 {item.title}</button>}
-        {item.usageStatus !== '过时' && <button type="button" className="quiet-button" disabled={disabled} onClick={() => onChange({ mode: 'reference', path: item.path })}>只补充来源到 {item.title}</button>}
-      </div>{item.usageStatus === '过时' && <p className="extraction-muted">此笔记已过时，不能作为本次写入目标。</p>}
+        {item.usageStatus !== '定论' && !archived && <button type="button" className="quiet-button" disabled={disabled} onClick={() => onChange({ mode: 'merge', path: item.path })}>合并到 {item.title}</button>}
+        {!archived && <button type="button" className="quiet-button" disabled={disabled} onClick={() => onChange({ mode: 'reference', path: item.path })}>只补充来源到 {item.title}</button>}
+      </div>{archived && <p className="extraction-muted">{item.usageStatus === '历史记录' ? '此条为历史记录，请选择现行笔记。' : '此笔记已过时，不能作为本次写入目标。'}</p>}
       {item.usageStatus === '定论' && <p className="extraction-muted">定论仅允许补充来源。</p>}
-    </section>)}</div>
+    </section>;
+    })}</div>
     {reading && <p role="status">正在读取已有正文…</p>}
     {detail && <section className="ingestion-existing" aria-label="已有知识正文"><div className="ingestion-row"><h4>已有知识正文</h4><Link to={`/knowledge?path=${encodeURIComponent(detail.path)}`}>打开完整知识</Link></div><SafeMarkdown>{detail.markdown}</SafeMarkdown></section>}
   </details>;

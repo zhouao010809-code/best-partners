@@ -1,7 +1,10 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { createPersonalIntakeFixture } from '../helpers/personal-intake-fixture.js';
+import { handleClipperMessage } from '../../src/electron/clipper-host.js';
+import { CLIPPER_EXTENSION_ID } from '../../src/shared/api/clipper.js';
+import { CURRENT_VAULT_LAYOUT } from '../../src/shared/domain/vault-layout.js';
+import { createCurrentIntakeFixture, createPersonalIntakeFixture } from '../helpers/personal-intake-fixture.js';
 import { archiveSource as source } from '../helpers/archive-fixture.js';
 import { openPersonalArchive } from '../../src/server/archive/sandbox-native.js';
 import { createIntakeService } from '../../src/server/services/intake-service.js';
@@ -67,4 +70,45 @@ it('archives clipped plugin metadata while retaining the original document in re
   expect(f.port.readRecovery(`${outcome.id}.stage.md`)).toEqual(original);
   expect(readFileSync(join(f.root, outcome.target, '附件/原图.bin'))).toEqual(Buffer.from([0,255,1,13,10]));
   expect(await f.service.commit(preview.token)).toMatchObject({ state: 'archived' });
+});
+
+it('archives a dated current-layout packet with original bytes and resumes its saved receipt', async () => {
+  const f = createCurrentIntakeFixture(); close.push(f.cleanup);
+  const port = openPersonalArchive(f.root, f.recovery, resolve('dist/native/personal-archive.node')); close.push(() => port.close());
+  const now = Date.parse('2026-11-20T12:31:00Z');
+  const service = createIntakeService({ layout: CURRENT_VAULT_LAYOUT, port, now: () => now,
+    ruleFingerprint: 'a'.repeat(64), getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
+  const info = await service.list();
+  expect(info.items.find(row => row.name === '资料包')?.mainCandidates).toContain('原文.md');
+  const preview = await service.preview({ ...request, fields: { platform: '电话录音', collectedAt: '2026-08-27', title: '采访', sourceName: '电话采访' } });
+  expect(preview.target).toBe('01图书馆/02个人资料/电话录音/2026/2026-08/20260827｜电话录音｜采访');
+  expect(port.listRecovery()).toEqual([]);
+  const receipt = await service.commit(preview.token);
+  expect(receipt.state).toBe('archived');
+  const note = parseFrontmatter(readFileSync(join(f.root, receipt.target, preview.mainName)));
+  expect(note.data).toMatchObject({ 标题: '采访', 资料来源: '电话采访', 入馆时间: '2026-11-20-20:31', 发生日期: '2026-08-27', 关联日记: [], 探讨状态: '未探讨' });
+  expect(note.data).not.toHaveProperty('生成知识');
+  expect(note.bodyBytes).toEqual(parseFrontmatter(f.original).bodyBytes);
+  expect(readFileSync(join(f.root, receipt.target, '附件/原图.bin'))).toEqual(Buffer.from([0, 255, 1, 13, 10]));
+  expect(await service.resume(receipt.id)).toEqual(receipt);
+});
+it('prefills a large browser capture and archives the original text and metadata together', async () => {
+  const f = createCurrentIntakeFixture(); close.push(f.cleanup);
+  const port = openPersonalArchive(f.root, f.recovery, resolve('dist/native/personal-archive.node')); close.push(() => port.close());
+  const service = createIntakeService({ layout: CURRENT_VAULT_LAYOUT, port, ruleFingerprint: 'a'.repeat(64),
+    getRuleFingerprint: async () => 'a'.repeat(64), refreshIndex: async () => true });
+  const payload = { packetId: 'clip-large', title: '网页原文', url: 'https://www.zhihu.com/question/123',
+    clippedAt: '2026-11-20T08:00:00.000Z', content: '原文\n'.repeat(50_000) };
+  const config = { layout: 'current' as const, version: 1 as const, vaultRoot: f.root, extensionId: CLIPPER_EXTENSION_ID, token: 't'.repeat(32) };
+  await handleClipperMessage({ extensionId: CLIPPER_EXTENSION_ID, token: config.token, payload }, config);
+  const fields = (await service.list()).items.find(item => item.name === payload.packetId)?.fields;
+  expect(fields).toMatchObject({ title: payload.title, url: payload.url });
+  expect(fields?.collectedAt).toBeFalsy();
+  const plan = await service.preview({ name: payload.packetId, mainName: 'index.md', fields: {
+    title: payload.title, platform: '知乎', url: payload.url, collectedAt: '' } });
+  expect((await service.commit(plan.token)).state).toBe('archived');
+  const note = parseFrontmatter(readFileSync(join(f.root, plan.target, plan.mainName)));
+  expect(note.data).toMatchObject({ 标题: payload.title, 原始链接: payload.url, 发布时间: null });
+  expect(Buffer.from(note.bodyBytes).toString('utf8')).toContain(payload.content);
+  expect(JSON.parse(readFileSync(join(f.root, plan.target, '附件', 'metadata.json'), 'utf8'))).toMatchObject({ packetId: payload.packetId });
 });

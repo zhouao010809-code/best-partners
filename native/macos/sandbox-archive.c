@@ -176,6 +176,25 @@ static bool valid_platform(const char *part) {
   return false;
 }
 
+static const char *current_platform_group(const char *platform) {
+  static const char *public[] = { "B站", "YouTube", "抖音", "小红书", "公众号", "飞书", "X推特", "Reddit",
+    "小宇宙", "视频号", "知乎", "网站", "书籍" };
+  static const char *personal[] = { "碎片灵感", "线上会议", "电话录音", "其他" };
+  for (size_t i = 0; i < sizeof(public) / sizeof(public[0]); i++) if (!strcmp(platform, public[i])) return "01公域资料";
+  for (size_t i = 0; i < sizeof(personal) / sizeof(personal[0]); i++) if (!strcmp(platform, personal[i])) return "02个人资料";
+  return NULL;
+}
+
+static bool current_archive_parent(const archive_path *path) {
+  if (path->count < 5) return false;
+  const char *category = path->part[2], *prefix = "来自";
+  bool is_public = !strncmp(category, prefix, strlen(prefix));
+  const char *group = current_platform_group(category + (is_public ? strlen(prefix) : 0));
+  return group && !strcmp(group, path->part[1]) && is_public == !strcmp(group, "01公域资料")
+    && strlen(path->part[3]) == 4 && path->part[3][0] != '0' && valid_month(path->part[4])
+    && !strncmp(path->part[4], path->part[3], 4);
+}
+
 // Data access can inspect these two parent layouts, but read/list begin at a package.
 static const char *data_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path, bool allow_parent) {
   const char *error = js_string(env, value, path->bytes, sizeof(path->bytes));
@@ -183,7 +202,8 @@ static const char *data_path(archive_handle *handle, napi_env env, napi_value va
   if (path->count < 2 || strcmp(path->part[0], "01图书馆")) return "PATH_NOT_ALLOWED";
   if (!strcmp(path->part[1], intake_directory(handle))) return path->count >= (allow_parent ? 2 : 3)
     && path->count <= 3 + MAX_PACKAGE_DEPTH ? NULL : "PATH_NOT_ALLOWED";
-  if (handle->diary_layout || path->count < 3 || !valid_platform(path->part[1]) || !valid_month(path->part[2])) return "PATH_NOT_ALLOWED";
+  if (handle->diary_layout) return current_archive_parent(path) && path->count >= (allow_parent ? 5 : 6) ? NULL : "PATH_NOT_ALLOWED";
+  if (path->count < 3 || !valid_platform(path->part[1]) || !valid_month(path->part[2])) return "PATH_NOT_ALLOWED";
   return path->count >= (allow_parent ? 3 : 4) ? NULL : "PATH_NOT_ALLOWED";
 }
 
@@ -191,8 +211,9 @@ static const char *move_paths(archive_handle *handle, napi_env env, napi_value s
   const char *error = data_path(handle, env, source, from, false);
   if (!error) error = data_path(handle, env, target, to, false);
   if (error) return error;
-  if (from->count != 3 || strcmp(from->part[1], "小兆clipper") || to->count != 4
-      || !valid_platform(to->part[1])) return "PATH_NOT_ALLOWED";
+  if (from->count != 3 || strcmp(from->part[1], intake_directory(handle))) return "PATH_NOT_ALLOWED";
+  if (handle->diary_layout) return to->count == 6 && current_archive_parent(to) ? NULL : "PATH_NOT_ALLOWED";
+  if (to->count != 4 || !valid_platform(to->part[1])) return "PATH_NOT_ALLOWED";
   return NULL;
 }
 
@@ -459,8 +480,9 @@ static napi_value archive_stat(napi_env env, napi_callback_info info) {
   const char *error = arguments(env, info, 2, args, &handle, true);
   if (!error) error = data_path(handle, env, args[1], &path, true);
   if (!error) error = open_chain(handle, &path, path.count - 1, &chain);
-  bool missing = false;
-  if (!error && fstatat(chain_fd(handle, &chain), path.part[path.count - 1], &st, AT_SYMLINK_NOFOLLOW)) {
+  bool missing = error && !strcmp(error, "NOT_FOUND");
+  if (missing) error = NULL;
+  if (!error && !missing && fstatat(chain_fd(handle, &chain), path.part[path.count - 1], &st, AT_SYMLINK_NOFOLLOW)) {
     if (errno == ENOENT) missing = true; else error = system_error();
   }
   if (!error && !missing) error = safe_node(handle, &st);
@@ -688,13 +710,13 @@ static napi_value archive_move(napi_env env, napi_callback_info info) {
   // below and preserved for review; it cannot be silently described as success.
   if (!error) {
     test_pause("before-rename");
-    if (renameatx_np(from_fd, source.part[2], to_fd, target.part[3], RENAME_EXCL | RENAME_NOFOLLOW_ANY)) error = system_error();
+    if (renameatx_np(from_fd, source.part[2], to_fd, target.part[target.count - 1], RENAME_EXCL | RENAME_NOFOLLOW_ANY)) error = system_error();
     else moved = true;
   }
   if (!error) test_pause("after-rename");
   if (!error) error = check_chain(handle, &from);
   if (!error) error = check_chain(handle, &to);
-  if (!error && (fstatat(to_fd, target.part[3], &current, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(current.st_mode) || !same_identity(&before, &current))) error = "SOURCE_IDENTITY_CHANGED";
+  if (!error && (fstatat(to_fd, target.part[target.count - 1], &current, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(current.st_mode) || !same_identity(&before, &current))) error = "SOURCE_IDENTITY_CHANGED";
   if (!error && (fstatat(from_fd, source.part[2], &current, AT_SYMLINK_NOFOLLOW) == 0 || errno != ENOENT)) error = "SOURCE_IDENTITY_CHANGED";
   count = 0;
   if (!error) error = validate_tree(handle, source_fd, 0, 0, path_length(&source), path_length(&target), &count);
@@ -702,7 +724,7 @@ static napi_value archive_move(napi_env env, napi_callback_info info) {
   if (!error) test_pause("after-sync");
   if (!error) error = check_chain(handle, &from);
   if (!error) error = check_chain(handle, &to);
-  if (!error && (fstatat(to_fd, target.part[3], &current, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(current.st_mode) || !same_identity(&before, &current))) error = "SOURCE_IDENTITY_CHANGED";
+  if (!error && (fstatat(to_fd, target.part[target.count - 1], &current, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(current.st_mode) || !same_identity(&before, &current))) error = "SOURCE_IDENTITY_CHANGED";
   if (!error && (fstatat(from_fd, source.part[2], &current, AT_SYMLINK_NOFOLLOW) == 0 || errno != ENOENT)) error = "SOURCE_IDENTITY_CHANGED";
   if (source_fd >= 0) close(source_fd);
   close_chain(&from); close_chain(&to);
@@ -834,46 +856,58 @@ static napi_value archive_list_intake(napi_env env, napi_callback_info info) {
   close_chain(&chain); return error ? failure(env, error) : result;
 }
 
-static napi_value archive_ensure_month(napi_env env, napi_callback_info info) {
-  napi_value args[3]; archive_handle *handle; archive_path path = {0}; directory_chain chain = {0};
-  char platform[NAME_MAX + 1], month[16], parent[NAME_MAX + 1];
-  const char *error = personal_arguments(env, info, 3, args, &handle);
-  if (!error && handle->diary_layout) error = "PATH_NOT_ALLOWED";
-  if (!error) error = js_string(env, args[1], platform, sizeof(platform));
-  if (!error) error = js_string(env, args[2], month, sizeof(month));
-  if (!error) {
-    int length = snprintf(parent, sizeof(parent), "来自%s", platform);
-    if (length < 0 || (size_t)length >= sizeof(parent) || !valid_platform(parent)
-        || !valid_month(month) || month[0] == '0') error = "PATH_NOT_ALLOWED";
-  }
-  if (!error) {
-    snprintf(path.bytes, sizeof(path.bytes), "01图书馆/%s", parent);
-    error = split_path(&path);
-  }
-  if (!error) error = open_chain(handle, &path, path.count, &chain);
+static const char *ensure_archive_child(archive_handle *handle, archive_path *path, int count, const char *child) {
+  directory_chain chain = {0};
+  const char *error = NULL;
+  if (!error) error = open_chain(handle, path, count, &chain);
   if (!error) error = check_chain(handle, &chain);
-  int parent_fd = -1, month_fd = -1; struct stat before, current;
+  int parent_fd = -1, child_fd = -1; struct stat before, current;
   if (!error) {
     parent_fd = chain_fd(handle, &chain);
-    if (mkdirat(parent_fd, month, 0700) && errno != EEXIST) error = system_error();
+    if (mkdirat(parent_fd, child, 0700) && errno != EEXIST) error = system_error();
   }
   if (!error) {
-    if (fstatat(parent_fd, month, &before, AT_SYMLINK_NOFOLLOW)) error = system_error();
+    if (fstatat(parent_fd, child, &before, AT_SYMLINK_NOFOLLOW)) error = system_error();
     else if (!S_ISDIR(before.st_mode) || before.st_uid != getuid()) error = "PATH_NOT_ALLOWED";
     else if (before.st_dev != handle->root_stat.st_dev) error = "CROSS_DEVICE";
   }
   if (!error) {
-    month_fd = openat(parent_fd, month, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (month_fd < 0) error = system_error();
-    else if (fstat(month_fd, &current) || !same_identity(&before, &current)) error = "PARENT_IDENTITY_CHANGED";
+    child_fd = openat(parent_fd, child, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (child_fd < 0) error = system_error();
+    else if (fstat(child_fd, &current) || !same_identity(&before, &current)) error = "PARENT_IDENTITY_CHANGED";
   }
-  if (!error && (fsync(month_fd) || fsync(parent_fd))) error = "IO_ERROR";
+  if (!error && (fsync(child_fd) || fsync(parent_fd))) error = "IO_ERROR";
   if (!error) error = check_chain(handle, &chain);
-  if (!error && (fstatat(parent_fd, month, &current, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(current.st_mode)
+  if (!error && (fstatat(parent_fd, child, &current, AT_SYMLINK_NOFOLLOW) || !S_ISDIR(current.st_mode)
       || !same_identity(&before, &current))) error = "PARENT_IDENTITY_CHANGED";
-  if (month_fd >= 0) close(month_fd);
+  if (child_fd >= 0) close(child_fd);
   close_chain(&chain);
-  // An empty month created before a failure remains for inspection; never remove it.
+  return error;
+}
+
+static napi_value archive_ensure_month(napi_env env, napi_callback_info info) {
+  napi_value args[3]; archive_handle *handle; archive_path path = {0};
+  char platform[NAME_MAX + 1], month[16];
+  const char *error = personal_arguments(env, info, 3, args, &handle);
+  if (!error) error = js_string(env, args[1], platform, sizeof(platform));
+  if (!error) error = js_string(env, args[2], month, sizeof(month));
+  if (!error && (!valid_month(month) || month[0] == '0')) error = "PATH_NOT_ALLOWED";
+  if (!error && handle->diary_layout) {
+    const char *category = !strcmp(platform, "独立站") ? "网站" : !strcmp(platform, "个人") ? "其他" : platform;
+    const char *group = current_platform_group(category);
+    if (!group) error = "PATH_NOT_ALLOWED";
+    else snprintf(path.bytes, sizeof(path.bytes), "01图书馆/%s/%s%s/%.4s/%s",
+      group, !strcmp(group, "01公域资料") ? "来自" : "", category, month, month);
+  } else if (!error) {
+    char category[NAME_MAX + 1];
+    int length = snprintf(category, sizeof(category), "来自%s", platform);
+    if (length < 0 || (size_t)length >= sizeof(category) || !valid_platform(category)) error = "PATH_NOT_ALLOWED";
+    else snprintf(path.bytes, sizeof(path.bytes), "01图书馆/%s/%s", category, month);
+  }
+  if (!error) error = split_path(&path);
+  // Only category/date directories within the current allowlist may be created.
+  int first = !error && handle->diary_layout ? 1 : 2;
+  for (int i = first; !error && i < path.count; i++) error = ensure_archive_child(handle, &path, i, path.part[i]);
   return error ? failure(env, error) : undefined(env);
 }
 
@@ -896,7 +930,7 @@ static napi_value archive_stat_recovery(napi_env env, napi_callback_info info) {
 static const char *main_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path) {
   const char *error = data_path(handle, env, value, path, false);
   if (error) return error;
-  if (path->count != 4 || strcmp(path->part[1], "小兆clipper")) return "PATH_NOT_ALLOWED";
+  if (path->count != 4 || strcmp(path->part[1], intake_directory(handle))) return "PATH_NOT_ALLOWED";
   size_t length = strlen(path->part[3]);
   return length > 3 && !strcmp(path->part[3] + length - 3, ".md") ? NULL : "PATH_NOT_ALLOWED";
 }
@@ -996,7 +1030,6 @@ static napi_value open_personal_child(napi_env env, napi_callback_info info, int
   napi_value args[2]; archive_handle *owner = NULL;
   const char *error = personal_arguments(env, info, 2, args, &owner);
   if (error) return failure(env, error);
-  if (kind == 1 && owner->diary_layout) return failure(env, "PATH_NOT_ALLOWED");
   archive_handle *handle = calloc(1, sizeof(*handle));
   if (!handle) return failure(env, "IO_ERROR");
   handle->root_fd = -1; handle->recovery_fd = -1;
@@ -1062,11 +1095,13 @@ static const char *ingestion_path(napi_env env, napi_value value, archive_path *
   return length > 3 && !strcmp(name + length - 3, ".md") ? NULL : "PATH_NOT_ALLOWED";
 }
 
+static const char *personal_document_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path);
+
 static napi_value ingestion_read(napi_env env, napi_callback_info info) {
   napi_value args[2]; archive_handle *handle; archive_path path; directory_chain chain = {0};
   unsigned char *bytes = NULL; size_t length = 0; bool missing = false;
   const char *error = personal_arguments(env, info, 2, args, &handle);
-  if (!error) error = ingestion_path(env, args[1], &path);
+  if (!error) error = personal_document_path(handle, env, args[1], &path);
   if (!error) error = open_chain(handle, &path, path.count - 1, &chain);
   if (!error) error = read_bytes(handle, chain_fd(handle, &chain), path.part[path.count - 1], MAX_FILE_BYTES, 2, &bytes, &length);
   if (error && !strcmp(error, "NOT_FOUND")) { error = NULL; missing = true; }
@@ -1127,15 +1162,25 @@ static napi_value ingestion_apply(napi_env env, napi_callback_info info) {
   int parent = -1, source_fd = -1, stage_fd = -1; struct stat source_stat, stage_stat, current;
   bool create = false, moved = false; const char *name = NULL;
   const char *error = personal_arguments(env, info, 5, args, &handle);
-  if (!error) error = ingestion_path(env, args[1], &path);
+  if (!error) error = personal_document_path(handle, env, args[1], &path);
   if (!error) error = recovery_argument(env, args[2], stage);
   if (!error && !stage_name(stage)) error = "PATH_NOT_ALLOWED";
   napi_valuetype before_type;
   if (!error && napi_typeof(env, args[3], &before_type) != napi_ok) error = "INVALID_ARGUMENT";
   if (!error) create = before_type == napi_null;
-  if (!error && create && strcmp(path.part[0], "02知识库")) error = "PATH_NOT_ALLOWED";
+  if (!error && (handle->diary_layout || create) && strcmp(path.part[0], handle->diary_layout ? "03知识库" : "02知识库")) error = "PATH_NOT_ALLOWED";
   if (!error && !create) error = copy_buffer(env, args[3], &before, &before_length);
   if (!error) error = copy_buffer(env, args[4], &after, &after_length);
+  // Dated knowledge categories use existing category/YYYY/YYYY-MM/note.md.
+  // Only a confirmed new-note apply can create the final two date folders.
+  if (!error && create && handle->diary_layout && path.count >= 5) {
+    int year = path.count - 3, month = path.count - 2;
+    if (strlen(path.part[year]) == 4 && valid_month(path.part[month])
+        && !strncmp(path.part[year], path.part[month], 4)) {
+      error = ensure_archive_child(handle, &path, year, path.part[year]);
+      if (!error) error = ensure_archive_child(handle, &path, month, path.part[month]);
+    }
+  }
   if (!error) error = open_chain(handle, &path, path.count - 1, &chain);
   if (!error) {
     parent = chain_fd(handle, &chain); name = path.part[path.count - 1];
@@ -1181,7 +1226,7 @@ static napi_value ingestion_apply(napi_env env, napi_callback_info info) {
   return error ? failure(env, moved ? "INGESTION_NEEDS_REVIEW" : error) : undefined(env);
 }
 
-static const char *trash_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path) {
+static const char *personal_document_path(archive_handle *handle, napi_env env, napi_value value, archive_path *path) {
   if (!handle->diary_layout) return ingestion_path(env, value, path);
   const char *error = js_string(env, value, path->bytes, sizeof(path->bytes));
   if (error || (error = split_path(path))) return error;
@@ -1218,7 +1263,7 @@ static napi_value trash_access(napi_env env, napi_callback_info info, bool item,
   char item_name[64]; const char *name = NULL; int parent = -1, held = -1;
   struct stat before, current; unsigned char *bytes = NULL; size_t length = 0; bool missing = false;
   const char *error = personal_arguments(env, info, 2, args, &handle);
-  if (!error) error = item ? trash_item_argument(env, args[1], item_name) : trash_path(handle, env, args[1], &path);
+  if (!error) error = item ? trash_item_argument(env, args[1], item_name) : personal_document_path(handle, env, args[1], &path);
   if (!error && !item) error = open_chain(handle, &path, path.count - 1, &chain);
   if (!error) {
     parent = item ? handle->recovery_fd : chain_fd(handle, &chain);
@@ -1247,7 +1292,7 @@ static napi_value trash_transfer(napi_env env, napi_callback_info info, bool res
   char item[64]; int parent = -1, from = -1, to = -1, held = -1; const char *source = NULL, *target = NULL;
   struct stat before, current; unsigned char *bytes = NULL; size_t length = 0; bool moved = false;
   const char *error = personal_arguments(env, info, 4, args, &handle);
-  if (!error) error = trash_path(handle, env, args[restore ? 2 : 1], &path);
+  if (!error) error = personal_document_path(handle, env, args[restore ? 2 : 1], &path);
   if (!error) error = trash_item_argument(env, args[restore ? 1 : 2], item);
   if (!error) error = open_chain(handle, &path, path.count - 1, &chain);
   if (!error) {

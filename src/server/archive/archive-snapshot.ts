@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { currentArchiveCategory, currentIntakePlatforms } from '../../shared/api/intake.js';
 import { sha256Bytes } from '../vault/raw-bytes.js';
 
 const MAX_BYTES = 16 * 1024 * 1024;
@@ -36,6 +37,13 @@ function validName(name: string): boolean {
 
 export function validateArchivePaths(source: string, target: string): void {
   const a = source.split('/'); const b = target.split('/');
+  if (a[1] === '00信息入口') {
+    if (a.length !== 3 || a[0] !== '01图书馆' || b.length !== 6 || b[0] !== '01图书馆'
+      || !currentIntakePlatforms.some(platform => currentArchiveCategory(platform) === `${b[1]}/${b[2]}`)
+      || !/^[1-9]\d{3}$/u.test(b[3]!) || !/^[1-9]\d{3}-(0[1-9]|1[0-2])$/u.test(b[4]!)
+      || b[3] !== b[4]!.slice(0, 4) || ![...a, ...b].every(validName)) throw new Error('ARCHIVE_PATH_INVALID');
+    return;
+  }
   if (a.length !== 3 || a[0] !== '01图书馆' || a[1] !== '小兆clipper'
     || b.length !== 4 || b[0] !== '01图书馆'
     || !/^来自(B站|YouTube|抖音|小红书|公众号|飞书|X推特|Reddit|小宇宙|独立站|个人|其他)$/u.test(b[1]!)
