@@ -2,6 +2,10 @@ import { CURRENT_VAULT_LAYOUT, LEGACY_VAULT_LAYOUT } from '../../shared/domain/v
 import type { HealthSnapshot } from '../api/client.js';
 import type { Resource } from './ConsoleRuntime.js';
 
+export function discussionHref(materialPath?: string) {
+  return materialPath ? `/discussion?${new URLSearchParams({ materialPath })}` : '/discussion';
+}
+
 export function vaultLayoutForHealth(health?: Resource<HealthSnapshot>) {
   const source = health && 'data' in health ? health.data?.vaultSource : undefined;
   return source?.status === 'ready' && source.layout === 'current' ? CURRENT_VAULT_LAYOUT : LEGACY_VAULT_LAYOUT;

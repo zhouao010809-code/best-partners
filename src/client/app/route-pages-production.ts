@@ -10,6 +10,7 @@ const page = (path: string, exportName: string, loader: () => Promise<Record<str
 
 export const routePages = {
   DashboardPage: page('../pages/DashboardPage.js', 'DashboardPage', async () => import('../pages/DashboardPage.js')),
+  DiscussionPage: page('../pages/DiscussionPage.js', 'DiscussionPage', async () => import('../pages/DiscussionPage.js')),
   QueuePage: page('../pages/QueuePage.js', 'QueuePage', async () => import('../pages/QueuePage.js')),
   IntakePage: page('../pages/IntakePage.js', 'IntakePage', async () => import('../pages/IntakePage.js')),
   LibraryPage: page('../pages/LibraryPage.js', 'LibraryPage', async () => import('../pages/LibraryPage.js')),

@@ -6,6 +6,7 @@ import { ArchiveRestore, CheckCircle2, RefreshCw, Trash2, X } from 'lucide-react
 import { z } from 'zod';
 import { trashIdSchema, trashPathRequestSchema, type TrashEntry, type TrashPreview, type TrashDeletePreview } from '../../shared/api/trash.js';
 import type { ApiClientResult } from '../api/client.js';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import '../styles/material-trash.css';
 
@@ -34,7 +35,9 @@ function References({ preview, permanent = false }: { preview: TrashPreview; per
 }
 
 export function MaterialTrashProvider({ children, onChanged, allowPermanentDelete = false }: { children: ReactNode; onChanged: (entry: TrashEntry) => void; allowPermanentDelete?: boolean }) {
-  const { api } = useConsoleRuntime(); const service = api.trash;
+  const { api, health } = useConsoleRuntime();
+  const materialHistory = vaultLayoutForHealth(health).id === 'current' ? '探讨记录' : '提炼历史';
+  const service = api.trash;
   const trashRoute = useMatch('/trash');
   const canPermanentlyDelete = allowPermanentDelete && Boolean(trashRoute);
   const permanentDeleteAllowed = useRef(canPermanentlyDelete); permanentDeleteAllowed.current = canPermanentlyDelete;
@@ -151,7 +154,7 @@ export function MaterialTrashProvider({ children, onChanged, allowPermanentDelet
       {busy && <p role="status">{mutation.current ? '正在处理，请保留本次操作编号…' : '正在核对资料…'}</p>}
       {error && <p className="material-trash-error" role="alert">{error}</p>}
       {preview && !pending && <>
-        <p>{knowledge ? `只移动选中的这一篇知识 Markdown（${preview.bytes.toLocaleString()} 字节）；原始资料、附件、其他知识和入库历史保持不变。` : `只移动这份 Markdown（${preview.bytes.toLocaleString()} 字节）；附件、目录、知识和提炼历史保持不变。`}</p>
+        <p>{knowledge ? `只移动选中的这一篇知识 Markdown（${preview.bytes.toLocaleString()} 字节）；原始资料、附件、其他知识和入库历史保持不变。` : `只移动这份 Markdown（${preview.bytes.toLocaleString()} 字节）；附件、目录、知识和${materialHistory}保持不变。`}</p>
         {knowledge ? <p>指向这篇知识的原路径链接暂时失效，恢复后可继续访问。</p> : <References preview={preview} />}
         {Date.parse(preview.expiresAt) <= Date.now() && <p role="status">预览已过期，请取消后重新预览。</p>}
         <div className="material-trash-actions"><button type="button" className="material-trash-confirm" disabled={busy || Date.parse(preview.expiresAt) <= Date.now()} onClick={() => {
@@ -161,7 +164,7 @@ export function MaterialTrashProvider({ children, onChanged, allowPermanentDelet
       </>}
       {canPermanentlyDelete && deleteMode && deletePreview && <>
         <p className="material-trash-irreversible">这份 Markdown 将被彻底删除，无法从 App 恢复。</p>
-        <p>{knowledge ? `只删除选中的这一篇知识 Markdown（${deletePreview.bytes.toLocaleString()} 字节）；原始资料、附件、其他知识和入库历史保持不变。` : `只删除回收站中的这份 Markdown（${deletePreview.bytes.toLocaleString()} 字节）；附件、目录、知识和提炼历史保持不变。`}</p>
+        <p>{knowledge ? `只删除选中的这一篇知识 Markdown（${deletePreview.bytes.toLocaleString()} 字节）；原始资料、附件、其他知识和入库历史保持不变。` : `只删除回收站中的这份 Markdown（${deletePreview.bytes.toLocaleString()} 字节）；附件、目录、知识和${materialHistory}保持不变。`}</p>
         {knowledge ? <p>指向这篇知识的链接将失效。</p> : <References preview={deletePreview} permanent />}
         {Date.parse(deletePreview.expiresAt) <= Date.now() && <p role="status">删除预览已过期，请取消后重新预览。</p>}
         <div className="material-trash-actions"><button type="button" className="material-trash-danger" disabled={busy || Date.parse(deletePreview.expiresAt) <= Date.now()} onClick={() => {
@@ -175,7 +178,7 @@ export function MaterialTrashProvider({ children, onChanged, allowPermanentDelet
         {entry.problem && <p role="status">{entry.problem}</p>}
         {entry.status === 'trashed' && <p>{knowledge ? '这篇知识已移入本机回收站，原始资料与其他知识均保留。' : '原资料已移入本机回收站，附件和已有知识均保留。'}</p>}
         {entry.status === 'restored' && <p>Markdown 已恢复，原路径链接可继续追溯。</p>}
-        {entry.status === 'deleted' && <p>{knowledge ? '这篇知识 Markdown 已彻底删除，无法从 App 恢复。原始资料、其他知识和入库历史仍保留。' : '这份原始 Markdown 已彻底删除，无法从 App 恢复。附件、知识和提炼历史仍保留。'}</p>}
+        {entry.status === 'deleted' && <p>{knowledge ? '这篇知识 Markdown 已彻底删除，无法从 App 恢复。原始资料、其他知识和入库历史仍保留。' : `这份原始 Markdown 已彻底删除，无法从 App 恢复。附件、知识和${materialHistory}仍保留。`}</p>}
         {entry.status === 'deleting' && <p>本次删除已登记。继续核验只检查状态；如需继续删除，请再次明确确认。</p>}
         {!entry.indexed && <p role="status">文件操作状态已保留，检索尚未更新。请继续核验，无需重新移入回收站。</p>}
         <div className="material-trash-actions">

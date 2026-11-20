@@ -1,3 +1,4 @@
+import { registerDiscussionRoutes } from './routes/discussions.js';
 import { registerProjectCreationRoutes } from './routes/project-creations.js';
 import { createCreationAssistant } from '../projects/creation-assistant.js';
 import { PublicApiError } from '../../shared/api/errors.js';
@@ -60,8 +61,10 @@ export function registerApplicationRoutes(input: ApplicationRouteRegistryInput):
   registerDocumentRoutes(app, readService);
   registerIntakeRoutes(app, options.intakeService);
   registerIntakeTrashRoutes(app, options.intakeTrashService);
-  registerExtractionRoutes(app, options.extractionService, () => options.readApi?.indexScheduler.snapshot().state);
-  registerIngestionRoutes(app, options.ingestionService);
+  const discussionLayout = options.readApi?.gateway.layout?.id === 'current';
+  registerDiscussionRoutes(app, options.discussionService);
+  registerExtractionRoutes(app, options.extractionService, () => options.readApi?.indexScheduler.snapshot().state, discussionLayout);
+  if (!discussionLayout) registerIngestionRoutes(app, options.ingestionService);
   registerTrashRoutes(app, options.trashService);
   registerKnowledgeRoutes(app, {
     ...(readService === undefined ? {} : { service: readService }),

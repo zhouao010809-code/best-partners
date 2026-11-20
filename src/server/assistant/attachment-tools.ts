@@ -140,7 +140,7 @@ export function createAttachmentTools(input: {
   return [...brainTools,
     tool('list_attachments', '列出本轮用户选中的文件和可读取页码，元数据不等于已读取正文。仅本轮选择可见。', z.strictObject({}), async () => ({
       attachments: input.attachments.map(({ id }) => { const item = chosen(id); return { id, name: item.attachment.name, totalPages: item.attachment.pageCount, startPage: item.startPage, endPage: item.endPage, archivedPath: item.attachment.archive?.materialPath }; }),
-      canArchive: intent.archive, canExtract: intent.extract
+      canArchive: intent.archive, canExtract: intent.extract && input.readService.layout?.id !== 'current'
     })),
     tool('read_attachment', '读取选中文件的一页文字，引用返回的 sourceId，说明页码。每次最多12000字符，长页通过nextOffset继续；不能把部分页内容说成全文。', readInput, async ({ id, page, offset, length }) => {
       const item = chosen(id);
@@ -163,7 +163,7 @@ export function createAttachmentTools(input: {
         ...(offset + text.length < fullText.length ? { nextOffset: offset + text.length } : {}) };
     }),
     tool('archive_attachment', '仅当本轮用户明确要求归档所选文件时可用。先生成归档计划，等待用户确认；不会在本轮直接写入。仅总结/问答不归档。', attachmentArchiveRequestSchema, archive, 'propose-write'),
-    tool('prepare_attachment_extraction', '仅在用户明确要求提炼附件时调用。先保留原件，再为用户选中页码准备提炼证据与规则；依据返回内容生成结构化候选后调用submit_candidates。不会自动正式入库。', prepareInput, async ({ id, readingState }) => {
+    ...(input.readService.layout?.id === 'current' ? [] : [tool('prepare_attachment_extraction', '仅在用户明确要求提炼附件时调用。先保留原件，再为用户选中页码准备提炼证据与规则；依据返回内容生成结构化候选后调用submit_candidates。不会自动正式入库。', prepareInput, async ({ id, readingState }) => {
       chosen(id);
       if (!intent.extract) throw new PublicApiError('ASSISTANT_INTENT_REQUIRED', '本轮尚未明确要求提炼文件，请先按当前问题回答。', 403);
       await requireSelectedText(id);
@@ -174,7 +174,7 @@ export function createAttachmentTools(input: {
       }
       const materialPath = (result as { materialPath: string }).materialPath;
       return brainTools.find(candidate => candidate.name === 'prepare_extraction')!.execute({ path: materialPath, readingState });
-    })
+    })])
   ];
 }
 

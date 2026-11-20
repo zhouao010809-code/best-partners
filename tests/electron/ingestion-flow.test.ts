@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { LEGACY_VAULT_LAYOUT, CURRENT_VAULT_LAYOUT } from '../../src/shared/domain/vault-layout.js';
-import { parseCurrentKnowledge } from '../../src/server/rules/current-vault-notes.js';
 import { parseFrontmatter } from '../../src/server/rules/frontmatter.js';
 import { parseLibraryNote } from '../../src/server/rules/library-schema.js';
 import { parseKnowledgeNote } from '../../src/server/rules/knowledge-schema.js';
@@ -50,7 +49,8 @@ for (const [mode, layout] of [
   const current = layout.id === 'current';
   const knowledgeDirectory = current ? '03知识库/教学/学习方法' : legacyDirectory;
   const sourceDirectory = current ? '01图书馆/01公域资料/来自X推特' : '01图书馆/来自个人';
-  test(`${mode}/${layout.id}: clipper archive to reviewed knowledge survives restart and finishes partial ingestion without duplicate writes`, async ({}, info) => {
+  const scenario = current ? 'archived clipper source can start a discussion' : 'clipper archive to reviewed knowledge survives restart and finishes partial ingestion without duplicate writes';
+  test(`${mode}/${layout.id}: ${scenario}`, async ({}, info) => {
     test.setTimeout(120_000);
     const base = await realpath(tmpdir());
     const vault = await mkdtemp(join(base, 'xiaozhao-vault-')); const userData = await mkdtemp(join(base, 'xiaozhao-user-data-'));
@@ -109,6 +109,15 @@ for (const [mode, layout] of [
       expect(await readdir(join(vault, knowledgeDirectory))).toEqual([]);
 
       await window.getByRole('link', { name: '大脑总览', exact: true }).click();
+      if (current) {
+        const deck = window.getByRole('region', { name: '探讨资料牌堆' });
+        await deck.getByRole('button', { name: new RegExp(sourceTitle, 'u') }).click();
+        await window.getByRole('button', { name: '探讨这份资料' }).click();
+        await expect(window.getByRole('checkbox', { name: new RegExp(sourceTitle, 'u') })).toBeChecked();
+        expect(new URL(window.url()).searchParams.get('materialPath')).toBe(sourcePath);
+        expect(await readFile(join(vault, sourcePath))).toEqual(archivedBytes);
+        return;
+      }
       const deck = window.getByRole('region', { name: '待提炼材料牌堆' });
       await expect(deck.getByRole('button', { name: new RegExp(sourceTitle, 'u') })).toBeVisible();
       await expect(window.getByTestId('metric-materials')).toContainText('1');
@@ -177,18 +186,14 @@ for (const [mode, layout] of [
       expect(firstBatch).toMatchObject({ status: 'committed', indexed: true, sourceStatus: '部分入库', pendingCount: 1 });
       const knowledgePath = `${knowledgeDirectory}/${editedTitle}.md`; expect(firstBatch.knowledgePaths).toEqual([knowledgePath]);
       await expect(window.getByRole('link', { name: `打开知识：${editedTitle}` })).toBeVisible({ timeout: 20_000 });
-      const knowledgeBytes = await readFile(join(vault, knowledgePath)); const knowledgeRecord = (current ? parseCurrentKnowledge : parseKnowledgeNote)(knowledgeBytes, knowledgePath);
-      expect(knowledgeRecord.issues).toEqual([]); expect(knowledgeRecord.record).toMatchObject({ title: editedTitle, usageStatus: current ? '现行' : 'AI总结', sourceMaterials: [sourcePath.replace(/\.md$/u, '')] });
-      if (!current) expect(knowledgeBytes.toString('utf8')).toContain('## 可复用表达');
+      const knowledgeBytes = await readFile(join(vault, knowledgePath)); const knowledgeRecord = parseKnowledgeNote(knowledgeBytes, knowledgePath);
+      expect(knowledgeRecord.issues).toEqual([]); expect(knowledgeRecord.record).toMatchObject({ title: editedTitle, usageStatus: 'AI总结', sourceMaterials: [sourcePath.replace(/\.md$/u, '')] });
+      expect(knowledgeBytes.toString('utf8')).toContain('## 可复用表达');
       expect(knowledgeBytes.toString('utf8')).toContain('先写下学习目标');
       const firstSourceBytes = await readFile(join(vault, sourcePath));
-      if (current) {
-        expect(firstSourceBytes).toEqual(archivedBytes);
-      } else {
-        const original = parseLibraryNote(firstSourceBytes, sourcePath);
-        expect(original.record).toMatchObject({ knowledgeStatus: '部分入库', generatedKnowledge: [knowledgePath.replace(/\.md$/u, '')] });
-        expect(Buffer.from(original.bodyBytes)).toEqual(archivedBody);
-      }
+      const partial = parseLibraryNote(firstSourceBytes, sourcePath);
+      expect(partial.record).toMatchObject({ knowledgeStatus: '部分入库', generatedKnowledge: [knowledgePath.replace(/\.md$/u, '')] });
+      expect(Buffer.from(partial.bodyBytes)).toEqual(archivedBody);
       expect(await readFile(join(vault, sourceFolder, '附件/证据.bin'))).toEqual(attachment);
       expect(await readdir(join(vault, knowledgeDirectory))).toEqual([`${editedTitle}.md`]);
 
@@ -211,7 +216,7 @@ for (const [mode, layout] of [
       await knowledgeReader.getByText('来源与关联知识', { exact: true }).click();
       await window.getByRole('link', { name: /^查看原文 ·/u }).click();
       await expect(window.getByLabel('原始文件内容')).toContainText('学习实践原文');
-      await expect(window.getByLabel('原始 Markdown 与 YAML')).toContainText(current ? '未探讨' : '部分入库');
+      await expect(window.getByLabel('原始 Markdown 与 YAML')).toContainText('部分入库');
       await expectNoOverflow(window); await window.screenshot({ path: info.outputPath('original-source-compact.png') });
       await window.getByRole('link', { name: '返回这份资料的提炼工作台' }).click();
       await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1440, 1000));
@@ -229,13 +234,9 @@ for (const [mode, layout] of [
       await expect(window.getByText('本轮候选均已完成取舍。')).toBeVisible();
       await expect(window.getByRole('textbox', { name: '知识标题' })).toHaveCount(0);
       const finalSourceBytes = await readFile(join(vault, sourcePath));
-      if (current) {
-        expect(finalSourceBytes).toEqual(archivedBytes);
-      } else {
-        const original = parseLibraryNote(finalSourceBytes, sourcePath);
-        expect(original.record).toMatchObject({ knowledgeStatus: '已入库', generatedKnowledge: [knowledgePath.replace(/\.md$/u, '')] });
-        expect(Buffer.from(original.bodyBytes)).toEqual(archivedBody);
-      }
+      const original = parseLibraryNote(finalSourceBytes, sourcePath);
+      expect(original.record).toMatchObject({ knowledgeStatus: '已入库', generatedKnowledge: [knowledgePath.replace(/\.md$/u, '')] });
+      expect(Buffer.from(original.bodyBytes)).toEqual(archivedBody);
       expect(await readFile(join(vault, sourceFolder, '附件/证据.bin'))).toEqual(attachment);
       expect(await readFile(join(vault, knowledgePath))).toEqual(knowledgeBytes); expect(await readdir(join(vault, knowledgeDirectory))).toEqual([`${editedTitle}.md`]);
       await window.getByRole('region', { name: '入库结果', exact: true }).scrollIntoViewIfNeeded();

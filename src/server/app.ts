@@ -1,3 +1,4 @@
+import type { DiscussionService } from '../shared/api/discussion.js';
 import type { ProjectCreationService } from '../shared/api/project-creations.js';
 import Fastify from 'fastify';
 import type Database from 'better-sqlite3';
@@ -140,6 +141,7 @@ export interface BuildServerOptions {
   readonly attachmentService?: AttachmentService;
   readonly trashService?: TrashService;
   readonly ingestionService?: IngestionService;
+  readonly discussionService?: DiscussionService;
   readonly extractionService?: ExtractionService;
   readonly intakeService?: IntakeService;
   readonly intakeTrashService?: IntakeTrashService;
@@ -223,7 +225,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   // is idempotent and never writes files.
   actionPlans?.recover();
   const assistant = options.assistantAdapters && options.readApi && readService
-    ? createAssistantService({ database: options.readApi.database, adapters: options.assistantAdapters,
+    ? createAssistantService({ discussionLayout: readService.layout?.id === 'current', database: options.readApi.database, adapters: options.assistantAdapters,
       projectExists: projectId => options.readApi!.database.prepare('SELECT 1 AS present FROM personal_projects WHERE id = ?').get(projectId) !== undefined,
       ...(options.projectService ? { projectService: options.projectService } : {}),
       ...(options.projectWritePlans ? { projectWritePlans: options.projectWritePlans } : {}),

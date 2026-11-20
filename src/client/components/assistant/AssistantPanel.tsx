@@ -38,6 +38,7 @@ export function AssistantToggle({ open, running, onClick }: { open: boolean; run
 }
 
 export interface AssistantPanelProps {
+  currentLayout?: boolean;
   api: ReadConsoleApi;
   open: boolean;
   onClose: () => void;
@@ -48,7 +49,7 @@ export interface AssistantPanelProps {
   projectId?: string;
 }
 
-export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRunningChange, dataRevision = 0, projectId: projectIdProp }: AssistantPanelProps) {
+export function AssistantPanel({ api, currentLayout = false, open, onClose, width, onWidthChange, onRunningChange, dataRevision = 0, projectId: projectIdProp }: AssistantPanelProps) {
   const service = api.assistant;
   const location = useLocation();
   const projectId = projectIdProp ?? (() => {
@@ -696,7 +697,7 @@ export function AssistantPanel({ api, open, onClose, width, onWidthChange, onRun
         : project?.availability === 'scanning' ? '正在扫描项目资料…'
           : project?.availability === 'reconnect-required' ? '项目资料需要重新连接' : '项目资料暂不可用';
   const suggestions = projectId ? ['梳理项目重点', '找资料回答问题', '起草下一步计划']
-    : contextPath ? ['解释这份资料的核心观点', isKnowledgePath(contextPath) ? '用这篇知识拟一个文章提纲' : '把这份资料提炼成知识候选', '举一个具体的应用例子']
+    : contextPath ? ['解释这份资料的核心观点', isKnowledgePath(contextPath) ? '用这篇知识拟一个文章提纲' : currentLayout ? '这份资料有哪些值得探讨的问题' : '把这份资料提炼成知识候选', '举一个具体的应用例子']
       : ['找出大脑里关于创作的方法', '搜索关于学习方法的知识', '整理资料时，你能帮我做什么？'];
   return <aside id="assistant-panel" className={`assistant-panel assistant-panel--width-${width}${expanded ? ' assistant-panel--expanded' : ''}`} data-ai-active={isRunning || sending || undefined} aria-label="问问 AI">
     <div className="assistant-panel__resize" role="separator" aria-label="调整问问面板宽度" aria-orientation="vertical" aria-valuemin={360} aria-valuemax={600} aria-valuenow={width} tabIndex={0} onPointerDown={resize} onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) onWidthChange(Math.min(600, Math.max(360, window.innerWidth - event.clientX))); }} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); onWidthChange(Math.min(600, Math.max(360, width + (event.key === 'ArrowLeft' ? 80 : -80)))); } }} />

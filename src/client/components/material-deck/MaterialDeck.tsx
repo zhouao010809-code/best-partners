@@ -27,6 +27,7 @@ export const PRESS_MOVE_TOLERANCE_PX = 12;
 export interface MaterialDeckProps {
   cards: readonly MaterialDeckCard[];
   appearance?: MaterialDeckAppearance;
+  discussion?: boolean;
   primaryActionDisabledReason?: string;
   onPrimaryAction(card: MaterialDeckCard): void;
 }
@@ -49,6 +50,7 @@ type ClickSuppression = {
 export function MaterialDeck({
   cards,
   appearance = 'default',
+  discussion = false,
   primaryActionDisabledReason,
   onPrimaryAction
 }: MaterialDeckProps) {
@@ -346,7 +348,7 @@ export function MaterialDeck({
     <section
       ref={deckRef}
       className="material-deck"
-      aria-label="待提炼材料牌堆"
+      aria-label={discussion ? '探讨资料牌堆' : '待提炼材料牌堆'}
       data-deck-instance={instanceId}
       data-deck-appearance={appearance}
       data-deck-density={cards.length === 0 ? 'empty' : cards.length <= 3 ? 'sparse' : 'full'}
@@ -356,7 +358,7 @@ export function MaterialDeck({
       <header className="material-deck__header">
         <div>
           <span>MATERIAL DECK</span>
-          <h2>待提炼材料</h2>
+          <h2>{discussion ? '探讨资料' : '待提炼材料'}</h2>
         </div>
         <strong>{String(cards.length).padStart(2, '0')} 张</strong>
       </header>
@@ -442,7 +444,7 @@ export function MaterialDeck({
               );
             })}
             {cards.length === 0 && (
-              <p className="material-deck__empty">暂无待提炼材料</p>
+              <p className="material-deck__empty">{discussion ? '暂无可探讨的资料' : '暂无待提炼材料'}</p>
             )}
           </div>
         </div>
@@ -450,7 +452,7 @@ export function MaterialDeck({
       {appearance === 'showcase' && (
         <div className="material-deck__caption" role="region" aria-label="当前资料">
           <div>
-            <strong>{captionCard?.title ?? '暂无待提炼资料'}</strong>
+            <strong>{captionCard?.title ?? (discussion ? '暂无可探讨的资料' : '暂无待提炼资料')}</strong>
             <p>{captionCard ? `${captionCard.sourcePlatform} · ${captionCard.collectedAt || '日期未记录'}` : '新资料归档后会出现在这里'}</p>
           </div>
           <span>{captionCard ? '点击翻阅 · 左右键切换' : '等待下一份收藏'}</span>

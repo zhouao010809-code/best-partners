@@ -11,7 +11,7 @@ import '../styles/unified-trash.css';
 
 const statusText = { moving: '正在移入', trashed: '可恢复', restoring: '正在恢复', restored: '已恢复', 'needs-review': '需要核验', deleting: '删除待核验', deleted: '已彻底删除' };
 const dateText = (value: string) => new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-const sourceLabel = (paper: TrashPaper) => trashOrigins.find(origin => origin.id === paper.origin)!.label;
+
 
 export function TrashPage() {
   const { refreshHealth } = useConsoleRuntime();
@@ -28,7 +28,11 @@ function TrashWorkspace({ onChanged }: { onChanged: () => void }) {
   const intake = useIntakeTrash(onChanged, { autoOpenPending: autoOpenPacketPending, allowPermanentDelete: true });
   const inventory = useTrashInventory(api, dataRevision);
   const [params, setParams] = useSearchParams();
-  const origin = trashOrigins.find(value => value.id === params.get('origin'))?.id ?? 'all';
+  const currentLayout = vaultLayoutForHealth(health).id === 'current';
+  const origins = currentLayout ? trashOrigins.filter(item => item.id !== 'queue' || inventory.papers.some(paper => paper.origin === 'queue'))
+    .map(item => item.id === 'queue' ? { ...item, label: '旧版记录' } : item) : trashOrigins;
+  const sourceLabel = (paper: TrashPaper) => origins.find(origin => origin.id === paper.origin)?.label ?? '旧版记录';
+  const origin = origins.find(value => value.id === params.get('origin'))?.id ?? 'all';
   const [search, setSearch] = useState('');
   const [selectedKey, setSelectedKey] = useState<string>();
   const detailRef = useRef<HTMLElement>(null);
@@ -62,12 +66,12 @@ function TrashWorkspace({ onChanged }: { onChanged: () => void }) {
       <div className="recycle-rim" aria-hidden="true"><span /><i /><span /></div>
       <div className="recycle-bin-body">
         <div className="recycle-dividers" role="tablist" aria-label="回收来源">
-          {[{ id: 'all', label: '全部' }, ...trashOrigins].map(tab => { const count = tab.id === 'all' ? inventory.complete ? inventory.active.length : undefined : inventory.counts[tab.id as keyof typeof inventory.counts]; return <button key={tab.id} type="button" role="tab" id={`trash-tab-${tab.id}`} aria-label={`${tab.label} ${count ?? '—'}`} aria-controls="trash-papers" aria-selected={origin === tab.id} onClick={() => selectOrigin(tab.id)}><span>{tab.label}</span><span className="recycle-count">{count ?? '—'}</span></button>; })}
+          {[{ id: 'all', label: '全部' }, ...origins].map(tab => { const count = tab.id === 'all' ? inventory.complete ? inventory.active.length : undefined : inventory.counts[tab.id as keyof typeof inventory.counts]; return <button key={tab.id} type="button" role="tab" id={`trash-tab-${tab.id}`} aria-label={`${tab.label} ${count ?? '—'}`} aria-controls="trash-papers" aria-selected={origin === tab.id} onClick={() => selectOrigin(tab.id)}><span>{tab.label}</span><span className="recycle-count">{count ?? '—'}</span></button>; })}
         </div>
         <div className={`recycle-interior${selected ? ' recycle-interior--selected' : ''}`}>
           <section className="recycle-paper-surface" role="tabpanel" id="trash-papers" aria-labelledby={`trash-tab-${origin}`} aria-busy={loading}>
             {inventory.packets.error && (origin === 'all' || origin === 'intake') && <p className="recycle-source-error" role="alert">收件箱：{inventory.packets.error}</p>}
-            {inventory.documents.error && origin !== 'intake' && <p className="recycle-source-error" role="alert">档案库、提炼队列、知识库：{inventory.documents.error}</p>}
+            {inventory.documents.error && origin !== 'intake' && <p className="recycle-source-error" role="alert">{currentLayout ? '档案库、知识库' : '档案库、提炼队列、知识库'}：{inventory.documents.error}</p>}
             {loading && <p className="recycle-feedback" role="status">正在读取回收站…</p>}
             {!loading && !failed && visible.length === 0 && <div className="recycle-empty"><Check aria-hidden="true" /><p>{needle ? '没有匹配的资料' : origin === 'all' ? '回收站为空' : '这个分类暂时为空'}</p><small>{needle ? '试试其他标题或路径' : '手动删除的资料会保留在这里'}</small></div>}
             {visible.length > 0 && <ul className="recycle-papers" aria-label="回收站资料">{visible.map(paper => <li key={paper.key}>

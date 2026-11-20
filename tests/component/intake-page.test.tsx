@@ -103,7 +103,7 @@ it('previews literal content, then commits only after explicit confirmation', as
   expect(screen.queryByRole('link', { name: '提炼这份' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '整理 测试资料包' })).toBeVisible();
 });
-it('archives a current-layout packet without requiring a source date and links to its extraction', async () => {
+it('archives a current-layout packet without requiring a source date and links to discussion', async () => {
   layout = 'current';
   const user = userEvent.setup();
   const target = '01图书馆/02个人资料/线上会议/测试资料';
@@ -120,8 +120,8 @@ it('archives a current-layout packet without requiring a source date and links t
     title: item.fields.title, platform: '线上会议', collectedAt: ''
   } });
   await user.click(await screen.findByRole('button', { name: '确认归档' }));
-  const link = await screen.findByRole('link', { name: '提炼这份' });
-  expect(link).toHaveAttribute('href', `/extractions/new?materialPath=${encodeURIComponent(`${target}/${preview.mainName}`)}`);
+  const link = await screen.findByRole('link', { name: '探讨这份资料' });
+  expect(link).toHaveAttribute('href', `/discussion?materialPath=${encodeURIComponent(`${target}/${preview.mainName}`)}`);
 });
 it('invalidates a preview if the user changes fields', async () => {
   const user = userEvent.setup(); api.list.mockResolvedValue(ok(data)); api.preview.mockResolvedValue(ok(preview)); render(<IntakePage />);

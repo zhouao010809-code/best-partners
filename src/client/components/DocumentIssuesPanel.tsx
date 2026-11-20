@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DocumentIssuePage, LiveDocumentDetail } from '../api/client.js';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { dataFromResource, indexCanServe } from '../pages/pageSupport.js';
 
@@ -128,7 +129,7 @@ export function DocumentIssuesPanel() {
   return (
     <section className="document-issues" aria-label="待确认资料">
       <header className="document-issues__header">
-        <div><h2>待确认资料</h2><p>这些文件仍保存在大脑中。缺少或不明确的信息不会被自动猜测，也不会计入未提炼牌堆。</p></div>
+        <div><h2>待确认资料</h2><p>{vaultLayoutForHealth(runtime.health).id === 'current' ? '文件仍保存在大脑中，补齐信息后可重新读取。' : '这些文件仍保存在大脑中。缺少或不明确的信息不会被自动猜测，也不会计入未提炼牌堆。'}</p></div>
         <button type="button" className="quiet-button" disabled={!available || loading} onClick={() => setRevision((value) => value + 1)}>重新读取资料列表</button>
       </header>
       {!available ? <p role="status">连接大脑并完成扫描后，即可查看具体资料。</p> : <>

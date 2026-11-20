@@ -12,6 +12,7 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { PageState } from '../components/PageState.js';
 import { DocumentIssuesPanel } from '../components/DocumentIssuesPanel.js';
@@ -104,7 +105,7 @@ function writeGateDiagnostic(snapshot: HealthSnapshot): Diagnostic {
     ...(unknownCount === 0 ? [] : [`其他阻断项 ${unknownCount} 项`]),
     snapshot.writeGate.fingerprintMatches ? '契约指纹一致' : '契约指纹不一致',
     ...(snapshot.writeGate.reasonCode === 'RULE_BUNDLE_UNAPPROVED' ? ['当前规则未批准旧通用接口写入'] : []),
-    '此项仅诊断旧版通用接口；个人 App 的确认归档和候选入库使用独立入口，请在收件箱或提炼队列核对结果。'
+    snapshot.vaultSource.status === 'ready' && snapshot.vaultSource.layout === 'current' ? '资料归档和探讨使用各自的入口。' : '此项仅诊断旧版通用接口；个人 App 的确认归档和候选入库使用独立入口，请在收件箱或提炼队列核对结果。'
   ];
   return {
     title: '旧版通用写入门',
@@ -249,7 +250,7 @@ export function SettingsPage() {
                   {choosing ? '正在选择…' : '更换大脑文件夹'}
                 </button>
               </div>
-              <p className="settings-vault__hint">{desktop === undefined ? '请在桌面 App 中更换大脑文件夹' : '切换会重新打开应用，正在进行的提炼会中断。原大脑的资料保留在原位置。'}</p>
+              <p className="settings-vault__hint">{desktop === undefined ? '请在桌面 App 中更换大脑文件夹' : vaultLayoutForHealth(runtime.health).id === 'current' ? '切换会重新打开应用。返回此库后可继续已保存的探讨。' : '切换会重新打开应用，正在进行的提炼会中断。原大脑的资料保留在原位置。'}</p>
               {openError && <p className="settings-feedback settings-feedback--error" role="alert">未能打开文件夹，请重试；也可按上方路径手动打开。</p>}
               {selectionMessage !== '' && <p className="settings-feedback" role="status">{selectionMessage}</p>}
             </div>

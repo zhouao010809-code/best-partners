@@ -6,6 +6,7 @@ import { LibraryPage } from '../pages/LibraryPage.js';
 import { OperationsPage } from '../pages/OperationsPage.js';
 import { ProjectWorkspacePage } from '../pages/ProjectWorkspacePage.js';
 import { ProjectsPage } from '../pages/ProjectsPage.js';
+import { DiscussionPage } from '../pages/DiscussionPage.js';
 import { QueuePage } from '../pages/QueuePage.js';
 import { SettingsPage } from '../pages/SettingsPage.js';
 import { SkillsPage } from '../pages/SkillsPage.js';
@@ -14,6 +15,7 @@ import { CompanyRouter } from '../company/company-router.js';
 
 export const routePages = {
   DashboardPage,
+  DiscussionPage,
   QueuePage,
   IntakePage,
   LibraryPage,

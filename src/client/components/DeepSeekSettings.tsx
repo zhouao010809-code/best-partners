@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Eye, EyeOff, LockKeyhole } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import { MODEL_SETTINGS_UPDATED_EVENT } from '../modelSettingsEvents.js';
 import type { DeepSeekSettings as Settings } from '../../shared/api/extraction.js';
 
 export function DeepSeekSettings() {
-  const { api, refreshHealth } = useConsoleRuntime();
+  const { api, refreshHealth, health } = useConsoleRuntime();
+  const currentLayout = vaultLayoutForHealth(health).id === 'current';
   const { hash } = useLocation();
   const service = api.deepSeek;
   const section = useRef<HTMLElement>(null);
@@ -80,7 +82,7 @@ export function DeepSeekSettings() {
         setKey('');
         setConfirmClear(false);
         setFeedback({ tone: 'success', message: clear
-          ? '密钥已从本机移除。已保存的候选不会删除。'
+          ? (currentLayout ? '密钥已从本机移除。' : '密钥已从本机移除。已保存的候选不会删除。')
           : '密钥已保存在本机，尚未验证连接。点击“验证连接”确认是否可用。' });
         void Promise.resolve(refreshHealth()).catch(() => {});
       } else {
@@ -141,7 +143,7 @@ export function DeepSeekSettings() {
   return (
     <section ref={section} id="ai-model-settings" className="deepseek-settings settings-section settings-card" aria-label="DeepSeek 设置">
       <header className="settings-section__heading">
-        <div><h2>AI 模型</h2><p>用于问问、资料提炼与知识候选生成</p></div>
+        <div><h2>AI 模型</h2><p>{currentLayout ? '用于探讨交流、整理日记和知识' : '用于问问、资料提炼与知识候选生成'}</p></div>
         <span className={`settings-chip settings-chip--${statusColor}`}>{status}</span>
       </header>
       <div className="settings-section__body">
@@ -181,9 +183,9 @@ export function DeepSeekSettings() {
                   <button className="settings-button settings-button--primary" type="submit" disabled={busy !== null || key.trim() === ''}>{busy === 'saving' ? '正在保存…' : '保存密钥'}</button>
                 </div>
               </form>
-              <p className="settings-key-note"><LockKeyhole aria-hidden="true" /><span>密钥加密保存在本机。保存密钥不会发送测试消息或提炼资料。</span></p>
+              <p className="settings-key-note"><LockKeyhole aria-hidden="true" /><span>{currentLayout ? '密钥加密保存在本机。' : '密钥加密保存在本机。保存密钥不会发送测试消息或提炼资料。'}</span></p>
               {confirmClear && <div className="settings-key-confirm">
-                <p>移除后将暂停新的问问与提炼，已有候选仍保留。</p>
+                <p>{currentLayout ? '移除后，使用此密钥的探讨和日记整理将暂停。' : '移除后将暂停新的问问与提炼，已有候选仍保留。'}</p>
                 <div className="settings-key-actions">
                   <button className="settings-button" type="button" disabled={busy !== null} onClick={() => void update(true)}>{busy === 'clearing' ? '正在移除…' : '确认移除密钥'}</button>
                   <button className="settings-button" type="button" disabled={busy !== null} onClick={() => setConfirmClear(false)}>保留密钥</button>

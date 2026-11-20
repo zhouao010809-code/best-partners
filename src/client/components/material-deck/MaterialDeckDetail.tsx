@@ -11,6 +11,8 @@ import type { MaterialDeckCard } from './materialDeckLayout.js';
 
 const actionLabels = {
   start: '开始提炼',
+  discuss: '探讨这份资料',
+  archive: '前往收件箱归档',
   resume: '继续审阅',
   progress: '查看进度',
   recover: '恢复提炼'

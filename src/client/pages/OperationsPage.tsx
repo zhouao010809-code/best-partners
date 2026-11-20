@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Check, ChevronRight, Clock3, FileText, History, RefreshCw, ShieldCheck, Target, X } from 'lucide-react';
+import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import type { OperationPage } from '../api/client.js';
 import type { OperationQuery, OperationRecord } from '../../shared/api/schemas.js';
@@ -107,7 +108,7 @@ export function OperationsPage() {
     <div className={`operation-layout${selected ? ' has-selection' : ''}`}>
       <div className="operation-records" id="operation-records" role="tabpanel" aria-labelledby={`operation-tab-${view || 'all'}`} aria-busy={loading}>
         {loading && !data && <div className="operation-empty" role="status"><RefreshCw className="operation-spinning" /><h2>正在读取操作记录</h2><p>整理本机保存的操作进展。</p></div>}
-        {!loading && data && !data.items.length && <div className="operation-empty"><span className="operation-empty-mark">{view === 'attention' ? <Check /> : <History />}</span><h2>{view === 'attention' ? '当前没有需要处理的操作' : view === 'running' ? '当前没有进行中的操作' : '还没有操作记录'}</h2><p>{data.issues?.length ? '部分来源尚未读取，当前结果不代表全部记录。' : view === 'attention' ? '已完成的操作都保留在全部记录中。' : view === 'running' ? '有操作开始后，进展会显示在这里。' : '归档、提炼、入库与回收的记录会汇集在这里。'}</p></div>}
+        {!loading && data && !data.items.length && <div className="operation-empty"><span className="operation-empty-mark">{view === 'attention' ? <Check /> : <History />}</span><h2>{view === 'attention' ? '当前没有需要处理的操作' : view === 'running' ? '当前没有进行中的操作' : '还没有操作记录'}</h2><p>{data.issues?.length ? '部分来源尚未读取，当前结果不代表全部记录。' : view === 'attention' ? '已完成的操作都保留在全部记录中。' : view === 'running' ? '有操作开始后，进展会显示在这里。' : vaultLayoutForHealth(health).id === 'current' ? '可在此查看归档和回收记录。' : '归档、提炼、入库与回收的记录会汇集在这里。'}</p></div>}
         {[...groups].map(([day, items]) => <section className="operation-day" key={day}><h2>{day}</h2><div className="operation-timeline">{items.map(record => <button type="button" key={record.id} disabled={busy} className={`operation-row is-${record.bucket}${selectedId === record.id ? ' is-selected' : ''}`} aria-expanded={selectedId === record.id} aria-controls={selectedId === record.id ? 'operation-work-slip' : undefined} onClick={event => { selectedButton.current = event.currentTarget; setSelectedId(record.id); setError(''); }}>
           <span className="operation-event-icon"><FileText size={21} strokeWidth={1.4} /></span><span className="operation-row-copy"><small>{kinds[record.kind]}</small><strong>{record.title}</strong><span>{record.summary}</span></span>
           <span className="operation-row-meta"><span className="operation-status">{record.bucket === 'attention' ? <Clock3 size={13} /> : record.bucket === 'running' ? <RefreshCw size={13} /> : <Check size={13} />}{record.statusLabel}</span><time title={record.timeLabel}>{timeLabel(record)}</time></span><ChevronRight size={18} className="operation-row-arrow" />

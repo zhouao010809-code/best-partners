@@ -4,7 +4,7 @@ import { Archive, ArrowRight, ChevronDown, FileText, FolderOpen, RefreshCw, Shie
 import { currentIntakePlatforms, intakePlatforms, type IntakeList, type IntakePreview, type IntakePreviewRequest, type IntakeOutcome } from '../../shared/api/intake.js';
 import type { ApiClientResult } from '../api/client.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
-import { vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
+import { discussionHref, vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { IntakeTray } from './intake/IntakeTray.js';
 import { IntakeMailbox } from './intake/IntakeMailbox.js';
 import { useIntakeTrash } from './intake/useIntakeTrash.js';
@@ -162,13 +162,13 @@ export function IntakePage() {
         <RefreshCw className={refreshing ? 'intake-spin' : undefined} aria-hidden="true" />
       </button>
     </div>
-    <IntakeFileImport api={api} onArchived={() => { void load(); void refreshHealth(); }} />
+    <IntakeFileImport currentLayout={currentLayout} api={api} onArchived={() => { void load(); void refreshHealth(); }} />
     {(error || listError) && <div role="alert" className="intake-notice intake-notice--warning">{error || listError}</div>}
     {outcome && <div role="status" className={`intake-notice${outcome.state === 'archived' ? '' : ' intake-notice--warning'}`}>
-      {outcome.state === 'archived' ? (outcome.indexed ? '归档完成，已更新资料列表。知识状态：未提炼。' : '文件已归档，资料列表刷新尚未完成。请刷新列表，不要重复导入。') : '归档需要继续核验。原文件与恢复记录都已保留；下方可以继续处理。'}
+      {outcome.state === 'archived' ? (outcome.indexed ? (currentLayout ? '归档完成，可以开始探讨。' : '归档完成，已更新资料列表。知识状态：未提炼。') : '文件已归档，资料列表刷新尚未完成。请刷新列表，不要重复导入。') : '归档需要继续核验。原文件与恢复记录都已保留；下方可以继续处理。'}
       {outcome.target && <small>{outcome.target}</small>}
       {outcome.state === 'archived' && <div className="intake-next-actions">
-        {archivedPath ? <Link to={extractionHref(archivedPath)}>提炼这份<ArrowRight aria-hidden="true" /></Link>
+        {archivedPath ? <Link to={currentLayout ? discussionHref(archivedPath) : extractionHref(archivedPath)}>{currentLayout ? '探讨这份资料' : '提炼这份'}<ArrowRight aria-hidden="true" /></Link>
           : <Link to={`/library?${new URLSearchParams({ mode: 'source', folder: outcome.target.replace(/^01图书馆\//u, '') })}`}>查看已归档资料<ArrowRight aria-hidden="true" /></Link>}
         <button type="button" disabled={interactionBusy} onClick={() => { continueFocus.current = true; setOutcome(undefined); setArchivedPath(undefined); setMailboxOpen(true); }}>继续整理</button>
       </div>}
@@ -223,7 +223,7 @@ export function IntakePage() {
         </li>)}</ul> : <p className="intake-history__empty">完成归档后，记录会留在这里。</p>}
       </section>
       </>
-      <p className="intake-boundary"><ShieldCheck aria-hidden="true" />只整理文件名和资料信息，保留原文与附件。归档不等于提炼，也不会写入知识库。</p>
+      <p className="intake-boundary"><ShieldCheck aria-hidden="true" />只整理文件名和资料信息，保留原文与附件。{currentLayout ? '归档后可选择资料开始探讨。' : '归档不等于提炼，也不会写入知识库。'}</p>
     </>}
     {trash.dialog}
   </div>;

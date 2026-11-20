@@ -4,8 +4,8 @@ export type MaterialDeckCard = {
   title: string;
   sourcePlatform: string;
   collectedAt?: string;
-  knowledgeStatus: '未提炼' | '部分入库';
-  nextAction: 'start' | 'resume' | 'recover' | 'progress';
+  knowledgeStatus: import('../../../shared/domain/records.js').KnowledgeStatus;
+  nextAction: 'start' | 'resume' | 'recover' | 'progress' | 'discuss' | 'archive';
   primaryActionDisabledReason?: string;
 };
 

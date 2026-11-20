@@ -1,3 +1,4 @@
+import { discussionHistoryResponseSchema, discussionHistoryDetailResponseSchema, type DiscussionHistoryItem, type DiscussionHistoryDetail, discussionListResponseSchema, discussionResponseSchema, type DiscussionAction, type DiscussionSummary, type DiscussionSession } from '../../shared/api/discussion.js';
 import { z } from 'zod';
 import { creativeProfileResponseSchema, type ProjectCreativeProfile, type CreativeProfileSave } from '../../shared/api/creative-profile.js';
 import { creationListResponseSchema, creationDetailResponseSchema, creationSuggestionResponseSchema, creationExportResponseSchema,
@@ -145,6 +146,12 @@ export interface KnowledgeQuery {
 }
 
 export interface ReadConsoleApi {
+  readonly discussion?: {
+    list(signal?: AbortSignal): Promise<DiscussionSummary[]>;
+    history(signal?: AbortSignal): Promise<DiscussionHistoryItem[]>;
+    readHistory(path: string, signal?: AbortSignal): Promise<DiscussionHistoryDetail>;
+    act(action: DiscussionAction, signal?: AbortSignal): Promise<DiscussionSession>;
+  };
   readonly creations?: {
     getProfile?(projectId: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectCreativeProfile>>;
     saveProfile?(projectId: string, input: CreativeProfileSave): Promise<ApiClientResult<ProjectCreativeProfile>>;
@@ -485,8 +492,21 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
     return result;
   }
 
+  async function discussionData<T>(response: Promise<ApiClientResult<T>>): Promise<T> {
+    const result = await response;
+    if (result.ok) return result.value;
+    if ('cancelled' in result) throw new DOMException('探讨操作已取消。', 'AbortError');
+    throw new Error(result.state.message ?? '探讨操作未完成，请刷新后重试。');
+  }
+
   const creationsPath = (projectId: string, id?: string) => `/api/v1/projects/${encodeURIComponent(projectId)}/creations${id ? `/${encodeURIComponent(id)}` : ''}`;
   return {
+    discussion: {
+      history: signal => discussionData(requestData(fetcher, '/api/v1/discussions/history', discussionHistoryResponseSchema, getInit(signal))),
+      readHistory: (path, signal) => discussionData(requestData(fetcher, withQuery('/api/v1/discussions/history/note', params => params.set('path', path)), discussionHistoryDetailResponseSchema, getInit(signal))),
+      list: signal => discussionData(requestData(fetcher, '/api/v1/discussions', discussionListResponseSchema, getInit(signal))),
+      act: (action, signal) => discussionData(postWithCsrf('/api/v1/discussions/actions', discussionResponseSchema, action, undefined, signal))
+    },
     creations: {
       getProfile: (p, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(p)}/creative-profile`, creativeProfileResponseSchema, getInit(signal)),
       saveProfile: (p, input) => writeWithCsrf(`/api/v1/projects/${encodeURIComponent(p)}/creative-profile`, creativeProfileResponseSchema, 'PUT', JSON.stringify(input)),

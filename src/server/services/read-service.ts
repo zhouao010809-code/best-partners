@@ -18,7 +18,6 @@ import type { z } from 'zod';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { extractWikiLinks } from '../rules/wikilinks.js';
 import type Database from 'better-sqlite3';
-import { currentMaterialIngestionProgress } from './material-ingestion-progress.js';
 import { readDeletedSourceCutoffs, readMaterialVisibility } from './material-visibility.js';
 import type { LibraryPage, libraryQuerySchema } from '../../shared/api/library.js';
 import { type VaultLayout, isKnowledgePath } from '../../shared/domain/vault-layout.js';
@@ -436,18 +435,8 @@ export function createReadService(input: {
 }): ReadService {
   const cursorSecret = Buffer.from(input.cursorSecret);
   if (cursorSecret.length < 16) throw new Error('CURSOR_SECRET_TOO_SHORT');
-  // Current vaults keep discussion status in the note and extraction progress in the app.
-  function ingestionProgress(status?: MaterialRecord['knowledgeStatus']) {
-    if (input.gateway.layout?.id !== 'current') return undefined;
-    if (status && status !== '未提炼' && status !== '部分入库' && status !== '已入库') return undefined;
-    return currentMaterialIngestionProgress(input.database);
-  }
-  function withIngestionProgress(records: MaterialRecord[], progress: ReturnType<typeof ingestionProgress>): MaterialRecord[] {
-    if (!progress) return records;
-    return records.map(record => ({ ...record, knowledgeStatus: progress.get(record.path) ?? '未提炼' }));
-  }
-  function materialSnapshot(trashed: Set<string>, progress: ReturnType<typeof ingestionProgress>): string {
-    return createHash('sha256').update(JSON.stringify([[...trashed].sort(), progress && [...progress].sort()])).digest('hex');
+  function materialSnapshot(trashed: Set<string>): string {
+    return createHash('sha256').update(JSON.stringify([...trashed].sort())).digest('hex');
   }
   function assertKnowledgeAvailable(path: string): void {
     if (readMaterialVisibility(input.database).trashed.has(path)) {
@@ -491,8 +480,7 @@ export function createReadService(input: {
     },
     listLibrary: (query) => {
       const { trashed } = readMaterialVisibility(input.database);
-      const progress = ingestionProgress(query.status);
-      const snapshotSha256 = materialSnapshot(trashed, progress);
+      const snapshotSha256 = materialSnapshot(trashed);
       const filters = { mode: query.mode, path: query.path,
         ...(query.status === undefined ? {} : { status: query.status }),
         ...(query.title === undefined ? {} : { title: query.title }) };
@@ -503,11 +491,11 @@ export function createReadService(input: {
         snapshotSha256,
         cursorSecret
       });
-      const materials = withIngestionProgress(collectMaterials(input.repository, {}), progress);
+      const materials = collectMaterials(input.repository, {});
       const knowledge = collectKnowledge(input.repository, { includeObsolete: true });
       assertIndexVersionUnchanged(context.indexVersion, input.currentIndexVersion);
       const currentVisibility = readMaterialVisibility(input.database).trashed;
-      if (materialSnapshot(currentVisibility, ingestionProgress(query.status)) !== snapshotSha256) {
+      if (materialSnapshot(currentVisibility) !== snapshotSha256) {
         throw cursorVersionConflict();
       }
       const catalog = buildLibraryCatalog({ materials, knowledge, trashed, query });
@@ -570,7 +558,6 @@ export function createReadService(input: {
     },
 
     listMaterials: (query) => {
-      const progress = ingestionProgress(query.status);
       const { trashed } = readMaterialVisibility(input.database);
       const filters = {
         ...(query.status === undefined ? {} : { knowledgeStatus: query.status }),
@@ -584,14 +571,12 @@ export function createReadService(input: {
         filters,
         ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
         currentIndexVersion: input.currentIndexVersion,
-        snapshotSha256: materialSnapshot(trashed, progress),
+        snapshotSha256: materialSnapshot(trashed),
         cursorSecret
       });
-      const { knowledgeStatus, ...search } = filters;
-      const indexed = collectMaterials(input.repository, progress ? search : filters);
-      const records = withIngestionProgress(indexed, progress).filter(record => {
+      const records = collectMaterials(input.repository, filters).filter(record => {
         if (trashed.has(record.path)) return false;
-        if (knowledgeStatus) return !progress || record.knowledgeStatus === knowledgeStatus;
+        if (query.status || input.gateway.layout?.id === 'current') return true;
         return record.knowledgeStatus === '未提炼' || record.knowledgeStatus === '部分入库';
       });
       assertIndexVersionUnchanged(context.indexVersion, input.currentIndexVersion);

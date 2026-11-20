@@ -1,3 +1,4 @@
+import type { DiscussionService } from '../../shared/api/discussion.js';
 import type { ProjectCreationService } from '../../shared/api/project-creations.js';
 import type Database from 'better-sqlite3';
 import type { AssistantAdapter } from '../assistant/types.js';
@@ -29,6 +30,7 @@ export interface RuntimeReadCapabilities {
 
 export interface RuntimePersonalCapabilities {
   readonly attachmentService?: AttachmentService;
+  readonly discussionService?: DiscussionService;
   readonly extractionService?: ExtractionService;
   readonly ingestionService?: IngestionService;
   readonly intakeService?: IntakeService;
@@ -66,6 +68,7 @@ export interface RuntimeCapabilityHost {
   readonly attachmentService?: AttachmentService;
   readonly trashService?: TrashService;
   readonly ingestionService?: IngestionService;
+  readonly discussionService?: DiscussionService;
   readonly extractionService?: ExtractionService;
   readonly intakeService?: IntakeService;
   readonly intakeTrashService?: IntakeTrashService;
@@ -96,6 +99,7 @@ export function applyRuntimeCapabilities<T extends RuntimeCapabilityHost>(option
     healthService: capabilities.health,
     readApi: capabilities.read,
     assistantAdapters: capabilities.assistant?.adapters,
+    discussionService: personal?.discussionService,
     attachmentService: personal?.attachmentService,
     extractionService: personal?.extractionService,
     ingestionService: personal?.ingestionService,

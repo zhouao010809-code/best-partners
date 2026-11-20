@@ -1,3 +1,4 @@
+import { createDiscussionService } from '../discussion/service.js';
 import { selectPersonalRecoveryRoot } from '../archive/personal-recovery-root.js';
 import { createProjectCreationService } from '../projects/project-creations.js';
 import type { ProjectCreationService } from '../../shared/api/project-creations.js';
@@ -164,6 +165,11 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
     const assistantAdapters = config.adapter === 'filesystem' && kernel.mode === 'normal'
       ? (config.modelCredentials ? [createDeepSeekAssistantAdapter({ credentials: config.modelCredentials })] : [])
       : undefined;
+    const discussionService = kernel.mode === 'normal' && config.adapter === 'filesystem' && config.gateway.layout?.id === 'current'
+      ? createDiscussionService({ database: kernel.db, gateway: config.gateway, vaultRoot: config.vaultRealRoot,
+        stateRoot: config.appDataDir, adapter: assistantAdapters?.[0], refreshIndex })
+      : undefined;
+    if (discussionService) serviceResources.add(() => discussionService.close());
     const capabilities: RuntimeCapabilities = {
       health: healthService,
       ...(kernel.mode !== 'normal' || repository === undefined || scheduler === undefined || indexer === undefined
@@ -172,6 +178,7 @@ export async function createPersonalRuntimeComposition(config: PersonalRuntimeCo
           indexScheduler: scheduler, currentIndexVersion: () => indexer.version
         } }),
       personal: {
+        ...(discussionService ? { discussionService } : {}),
         ...(attachmentService ? { attachmentService } : {}),
         ...(extractionService ? { extractionService } : {}),
         ...(ingestionService ? { ingestionService } : {}),

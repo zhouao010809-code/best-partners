@@ -220,5 +220,5 @@ export function createBrainTools(input: {
         message: candidateCount ? '候选已保存，正式入库需由用户在审阅界面确认。原文与正式知识未修改。' : '提炼已完成，本轮没有知识候选，可查看导读。原文与正式知识未修改。' };
     })
   ];
-  return [...(input.allowCandidateWrites === false ? baseTools.slice(0, 3) : baseTools), ...(input.companyTools ?? [])];
+  return [...(input.allowCandidateWrites === false || input.readService.layout?.id === 'current' ? baseTools.slice(0, 3) : baseTools), ...(input.companyTools ?? [])];
 }

@@ -7,7 +7,9 @@ import { AttachmentPicker } from '../../components/assistant/AttachmentPicker.js
 import { askAssistant } from '../../components/assistant/assistantIntent.js';
 import '../../styles/intake-file-import.css';
 
-export function IntakeFileImport({ api, onArchived }: { api: ReadConsoleApi; onArchived: () => void }) {
+import { discussionHref } from '../../app/vaultLayoutForHealth.js';
+
+export function IntakeFileImport({ api, currentLayout = false, onArchived }: { currentLayout?: boolean; api: ReadConsoleApi; onArchived: () => void }) {
   const service = api.attachments;
   const [selection, setSelection] = useState<AttachmentSelection[]>([]);
   const [groupId] = useState(() => crypto.randomUUID());
@@ -72,7 +74,7 @@ export function IntakeFileImport({ api, onArchived }: { api: ReadConsoleApi; onA
   }
   const actions = (record: Attachment) => <>
     {record.status === 'ready' && <button type="button" disabled={Boolean(busy)} onClick={() => askAssistant({ prompt: '请帮我理解这份文件的核心内容。', scope: 'brain', attachments: [selectedFile(record.id)] })}><MessageCircle />问问这份</button>}
-    {record.archive?.state === 'archived' && record.archive.materialPath ? <><Link to={`/library?${new URLSearchParams({ path: record.archive.materialPath })}`}>打开归档<ArrowRight /></Link>{record.status === 'ready' && <button type="button" disabled={Boolean(busy)} onClick={() => askAssistant({ prompt: '请提炼这份文件所选范围的知识候选，保留原文引用。', scope: 'brain', attachments: [selectedFile(record.id)] })}>提炼这份<ArrowRight /></button>}</>
+    {record.archive?.state === 'archived' && record.archive.materialPath ? <><Link to={`/library?${new URLSearchParams({ path: record.archive.materialPath })}`}>打开归档<ArrowRight /></Link>{currentLayout ? <Link to={discussionHref(record.archive.materialPath)}>探讨这份资料<ArrowRight /></Link> : record.status === 'ready' && <button type="button" disabled={Boolean(busy)} onClick={() => askAssistant({ prompt: '请提炼这份文件所选范围的知识候选，保留原文引用。', scope: 'brain', attachments: [selectedFile(record.id)] })}>提炼这份<ArrowRight /></button>}</>
       : <button type="button" disabled={Boolean(busy) || record.status === 'processing'} onClick={() => void archive(record)}><Archive />{busy === record.id ? '正在归档…' : record.archive?.state === 'needs-review' ? '继续核验归档' : '归档原件'}</button>}
   </>;
   const history = records.filter(record => !selection.some(item => item.id === record.id));

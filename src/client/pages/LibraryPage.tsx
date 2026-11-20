@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ArrowLeft, ArrowRight, ChevronRight, FileText, Folders, History, Inbox, LibraryBig, ListFilter, RefreshCw, Search, X } from 'lucide-react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
+import { discussionHref, vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
+import { discussionStatusSchema } from '../../shared/api/discussion.js';
 import type { KnowledgeStatus } from '../../shared/domain/records.js';
 import type { TrashEntry } from '../../shared/api/trash.js';
 import type { LiveDocumentDetail, MaterialPage } from '../api/client.js';
@@ -20,7 +22,8 @@ type Material = MaterialPage['items'][number];
 const STATUSES: readonly KnowledgeStatus[] = ['未提炼', '部分入库', '已入库'];
 
 function OriginalDetail({ record, revision, onClose, onLoaded }: { record: Pick<Material, 'path' | 'title'> & Partial<Pick<Material, 'rawSha256' | 'upstreamVersion'>>; revision: string; onClose: () => void; onLoaded: (value: LiveDocumentDetail) => void }) {
-  const { api } = useConsoleRuntime();
+  const { api, health } = useConsoleRuntime();
+  const layout = vaultLayoutForHealth(health);
   const [view, setView] = useState<{ key: string; resource: PageResource<LiveDocumentDetail> }>();
   const [retry, setRetry] = useState(0);
   const key = JSON.stringify([record.path, record.rawSha256, record.upstreamVersion, revision, retry]);
@@ -78,7 +81,7 @@ function OriginalDetail({ record, revision, onClose, onLoaded }: { record: Pick<
       <section className="library-original__reading" aria-label="原始文件内容"><SafeMarkdown>{data.markdown.replace(/^\uFEFF?---[\t ]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[\t ]*(?:\r?\n|$)/u, '')}</SafeMarkdown></section>
       <details className="library-original__source"><summary>查看原始 Markdown 与文件信息</summary><p>{record.path}</p><pre className="library-original__text" aria-label="原始 Markdown 与 YAML">{data.markdown}</pre></details>
     </>}
-    <footer className="knowledge-detail__footer"><Link to={`/queue?${new URLSearchParams({ view: 'ready', materialPath: record.path })}`}>返回这份资料的提炼工作台</Link><MaterialTrashButton record={record} text /></footer>
+    <footer className="knowledge-detail__footer">{layout.id === 'current' ? record.path.startsWith(layout.inboxRoot + '/') ? <Link to="/intake">前往收件箱归档</Link> : <Link to={discussionHref(record.path)}>探讨这份资料</Link> : <Link to={`/queue?${new URLSearchParams({ view: 'ready', materialPath: record.path })}`}>返回这份资料的提炼工作台</Link>}<MaterialTrashButton record={record} text /></footer>
   </aside>;
 }
 
@@ -115,7 +118,10 @@ function LibraryMaterials({ revision, sessionKey }: { revision: number; sessionK
   useEffect(() => { if (folder) vault.open(); }, [folder, vault.open]);
   const urlTitle = params.get('title') ?? '';
   const searchScope = params.get('scope') === 'all' || !folder ? 'all' : 'current';
-  const status = STATUSES.find((value) => value === params.get('status'));
+  const currentLayout = vaultLayoutForHealth(runtime.health).id === 'current';
+  const statusOptions = currentLayout ? discussionStatusSchema.options : STATUSES;
+  const statusLabel = currentLayout ? '探讨进度' : '入库状态';
+  const status = statusOptions.find((value) => value === params.get('status'));
   const [title, setTitle] = useState(urlTitle);
   const applied = useMemo<LibraryQuery>(() => ({ mode, path: searchScope === 'all' ? '' : folder, limit: 200,
     ...(status ? { status } : {}), ...(urlTitle.trim() ? { title: urlTitle.trim() } : {})
@@ -249,10 +255,10 @@ function LibraryMaterials({ revision, sessionKey }: { revision: number; sessionK
             if (mode === value) return;
             setParams((current) => { const next = new URLSearchParams(current); next.set('mode', value); next.delete('folder'); next.delete('path'); return next; });
           }}><Icon aria-hidden="true" />{label}</button>)}</div>
-        <div className="library-toolbar-actions"><label className="library-status-filter"><ListFilter aria-hidden="true" /><select aria-label="入库状态" value={status ?? ''} onChange={(event) => {
+        <div className="library-toolbar-actions"><label className="library-status-filter"><ListFilter aria-hidden="true" /><select aria-label={statusLabel} value={status ?? ''} onChange={(event) => {
           const value = event.target.value;
           setParams((current) => { const next = new URLSearchParams(current); if (value) next.set('status', value); else next.delete('status'); next.delete('path'); return next; });
-        }}><option value="">全部入库状态</option>{STATUSES.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        }}><option value="">全部{statusLabel}</option>{statusOptions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         <button type="button" className="library-refresh" aria-label="刷新资料" title="刷新资料" onClick={() => setRefresh((value) => value + 1)} disabled={busy}><RefreshCw aria-hidden="true" /></button></div>
       </div>
       </ArchiveControls>

@@ -10,7 +10,7 @@ import { extractionHistoryQuerySchema, extractionHistoryResponseSchema, extracti
   extractionQueueResponseSchema, extractionQueueSourceQuerySchema, extractionQueueSourceResponseSchema } from '../../../shared/api/extraction-queue.js';
 import type { IndexState } from '../../index/index-state.js';
 
-export function registerExtractionRoutes(app: FastifyInstance, service?: ExtractionService, indexState?: () => IndexState | undefined): void {
+export function registerExtractionRoutes(app: FastifyInstance, service?: ExtractionService, indexState?: () => IndexState | undefined, discussionLayout = false): void {
   function required(): ExtractionService {
     if (!service) throw new PublicApiError('EXTRACTION_UNAVAILABLE', '请使用个人桌面 App 安全配置模型并提炼资料。', 503);
     return service;
@@ -19,6 +19,26 @@ export function registerExtractionRoutes(app: FastifyInstance, service?: Extract
     const state = indexState?.();
     if (state?.status !== 'ready') throw new PublicApiError(state ? `INDEX_${state.status.toUpperCase()}` : 'READ_API_UNAVAILABLE', '资料索引暂未就绪，请稍后刷新。', 503);
   }
+  app.get('/api/v1/deepseek', async (_request, reply) => {
+    reply.header('cache-control', 'no-store');
+    return parseApiOutput(deepSeekSettingsResponseSchema, { version: API_VERSION, data: service?.settings() ?? {
+      available: false, configured: false, providerHost: 'api.deepseek.com', model: 'deepseek-v4-pro', problem: '请使用个人桌面 App 安全配置模型密钥。'
+    } });
+  });
+  app.post('/api/v1/deepseek/key', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { apiKey } = parseApiInput(deepSeekKeyRequestSchema, request.body);
+    return parseApiOutput(deepSeekSettingsResponseSchema, { version: API_VERSION, data: required().setKey(apiKey) });
+  });
+  app.post('/api/v1/deepseek/clear', async (request, reply) => {
+    reply.header('cache-control', 'no-store'); parseApiInput(extractionEmptyBodySchema, request.body);
+    return parseApiOutput(deepSeekSettingsResponseSchema, { version: API_VERSION, data: required().clearKey() });
+  });
+  app.post('/api/v1/deepseek/verify', async (request, reply) => {
+    reply.header('cache-control', 'no-store'); parseApiInput(extractionEmptyBodySchema, request.body);
+    return parseApiOutput(deepSeekSettingsResponseSchema, { version: API_VERSION, data: await required().verifyConnection() });
+  });
+  if (discussionLayout) return;
   app.get('/api/v1/extraction-queue', async (request, reply) => {
     reply.header('cache-control', 'no-store');
     const extraction = required();
@@ -45,25 +65,6 @@ export function registerExtractionRoutes(app: FastifyInstance, service?: Extract
     const { materialPath, removed } = parseApiInput(extractionQueueVisibilityRequestSchema, request.body);
     requireReadyIndex();
     return parseApiOutput(extractionQueueSourceResponseSchema, { version: API_VERSION, data: extraction.setVisibility(materialPath, removed) });
-  });
-  app.get('/api/v1/deepseek', async (_request, reply) => {
-    reply.header('cache-control', 'no-store');
-    return parseApiOutput(deepSeekSettingsResponseSchema, { version: API_VERSION, data: service?.settings() ?? {
-      available: false, configured: false, providerHost: 'api.deepseek.com', model: 'deepseek-v4-pro', problem: '请使用个人桌面 App 安全配置模型密钥。'
-    } });
-  });
-  app.post('/api/v1/deepseek/key', async (request, reply) => {
-    reply.header('cache-control', 'no-store');
-    const { apiKey } = parseApiInput(deepSeekKeyRequestSchema, request.body);
-    return parseApiOutput(deepSeekSettingsResponseSchema, { version: API_VERSION, data: required().setKey(apiKey) });
-  });
-  app.post('/api/v1/deepseek/clear', async (request, reply) => {
-    reply.header('cache-control', 'no-store'); parseApiInput(extractionEmptyBodySchema, request.body);
-    return parseApiOutput(deepSeekSettingsResponseSchema, { version: API_VERSION, data: required().clearKey() });
-  });
-  app.post('/api/v1/deepseek/verify', async (request, reply) => {
-    reply.header('cache-control', 'no-store'); parseApiInput(extractionEmptyBodySchema, request.body);
-    return parseApiOutput(deepSeekSettingsResponseSchema, { version: API_VERSION, data: await required().verifyConnection() });
   });
   app.get('/api/v1/extractions', async (request, reply) => {
     reply.header('cache-control', 'no-store');

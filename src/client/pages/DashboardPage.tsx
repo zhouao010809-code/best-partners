@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { discussionHref, vaultLayoutForHealth } from '../app/vaultLayoutForHealth.js';
 import { extractionHref } from './ExtractionPage.js';
 import { ArrowUpRight } from 'lucide-react';
 import type {
@@ -180,6 +181,14 @@ function stableVersion(snapshot: HealthSnapshot): number | undefined {
   return indexCanServe(snapshot) ? snapshot.index.version : undefined;
 }
 
+function discussionCards(materials: readonly MaterialItem[]): MaterialDeckCard[] {
+  return materials.map(record => ({
+    key: record.path, path: record.path, title: record.title, sourcePlatform: record.sourcePlatform,
+    ...(record.collectedAt ? { collectedAt: record.collectedAt } : {}),
+    knowledgeStatus: record.knowledgeStatus, nextAction: record.processingStatus === '已归档' ? 'discuss' : 'archive'
+  }));
+}
+
 function deckCards(materials: readonly MaterialItem[], completed: ReadonlySet<string>, queue?: DashboardQueue): readonly MaterialDeckCard[] {
   const tasks = new Map(queue?.items.map(item => [item.materialPath, item]));
   return materials.flatMap((record): MaterialDeckCard[] => (
@@ -242,7 +251,7 @@ export function DashboardPage() {
           return;
         }
 
-        const personalQueue = before.value.vaultSource.status === 'ready' && before.value.vaultSource.adapter === 'filesystem';
+        const personalQueue = before.value.vaultSource.status === 'ready' && before.value.vaultSource.adapter === 'filesystem' && before.value.vaultSource.layout !== 'current';
         const [materials, knowledge, operations, completed, queue] = await Promise.all([
           collectMaterials(runtime.api, controller.signal),
           collectKnowledge(runtime.api, controller.signal),
@@ -297,7 +306,8 @@ export function DashboardPage() {
   const data = resource.status === 'ready' || resource.status === 'refreshing' || resource.status === 'failed'
     ? resource.data
     : undefined;
-  const cards = useMemo(() => deckCards(data?.materials ?? [], data?.completedSources ?? new Set(), data?.queue), [data?.materials, data?.completedSources, data?.queue]);
+  const currentLayout = vaultLayoutForHealth(runtime.health).id === 'current';
+  const cards = useMemo(() => currentLayout ? discussionCards(data?.materials ?? []) : deckCards(data?.materials ?? [], data?.completedSources ?? new Set(), data?.queue), [currentLayout, data?.materials, data?.completedSources, data?.queue]);
 
   if (runtime.health.status === 'failed' && (data === undefined || !indexCanServe(health))) {
     return <PageState state={stableFailure(runtime.health.state.status)} />;
@@ -342,20 +352,23 @@ export function DashboardPage() {
       <div className="dashboard-workspace">
       <section className="dashboard-materials" aria-labelledby="materials-title">
         <header className="dashboard-section-heading">
-          <div><h2 id="materials-title">{data.queue ? '待处理资料' : '待提炼材料'} <span data-testid="metric-materials">{cards.length} 份</span></h2></div>
+          <div><h2 id="materials-title">{currentLayout ? '探讨资料' : data.queue ? '待处理资料' : '待提炼材料'} <span data-testid="metric-materials">{cards.length} 份</span></h2></div>
           <div className="dashboard-heading-links">
-            <Link to="/knowledge" className="dashboard-knowledge-total" data-testid="metric-knowledge" title="包含已标记为过时的知识笔记">已积累 {data.knowledge.length} 篇知识</Link>
-            <Link to="/queue" className="dashboard-text-link">提炼队列 <ArrowUpRight aria-hidden="true" /></Link>
+            <Link to="/knowledge" className="dashboard-knowledge-total" data-testid="metric-knowledge" title={currentLayout ? '打开知识库' : '包含已标记为过时的知识笔记'}>已积累 {data.knowledge.length} 篇知识</Link>
+            <Link to={currentLayout ? '/discussion' : '/queue'} className="dashboard-text-link">{currentLayout ? '进入探讨' : '提炼队列'} <ArrowUpRight aria-hidden="true" /></Link>
           </div>
         </header>
         {health?.model.status === 'unconfigured' && (data.queue?.counts.pending ?? 0) > 0 && (
           <Link className="dashboard-preflight" to="/settings">开始提炼前需要配置 DeepSeek 密钥 · 去设置<ArrowUpRight aria-hidden="true" /></Link>
         )}
         <MaterialDeck
+          discussion={currentLayout}
           appearance="showcase"
           cards={cards}
-          {...(runtime.api.extraction ? {} : { primaryActionDisabledReason: '请打开最新版桌面 App 使用提炼' })}
-          onPrimaryAction={(card) => { const item = data.queue?.items.find(item => item.materialPath === card.path); navigate(item && card.nextAction !== 'start' ? queueItemHref(item) : extractionHref(card.path)); }}
+          {...(currentLayout || runtime.api.extraction ? {} : { primaryActionDisabledReason: '请打开最新版桌面 App 使用提炼' })}
+          onPrimaryAction={(card) => {
+            if (currentLayout) { navigate(card.nextAction === 'archive' ? '/intake' : discussionHref(card.path)); return; }
+            const item = data.queue?.items.find(item => item.materialPath === card.path); navigate(item && card.nextAction !== 'start' ? queueItemHref(item) : extractionHref(card.path)); }}
         />
         {cards.length === 0 && runtime.api.intake && (
           <Link className="dashboard-empty-action" to="/intake">去收件箱整理新收件<ArrowUpRight aria-hidden="true" /></Link>
