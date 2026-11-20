@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { ChevronRight, Pencil, Plus, Save, Trash2 } from 'lucide-react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { ChevronRight, Pencil, PenLine, Plus, Save, Trash2 } from 'lucide-react';
+import { Link, useMatch, useParams, useSearchParams } from 'react-router-dom';
 import type { ProjectBrandProfile } from '../../shared/api/projects.js';
 import type { ApiClientResult } from '../api/client.js';
 import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
@@ -41,7 +41,8 @@ function ProjectBrandWorkspace({ id }: { id: string }) {
   const [saving, setSaving] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const projectUrl = `/projects/${encodeURIComponent(id)}`;
-  const brandUrl = `${projectUrl}/brand`;
+  const inBrandDetail = Boolean(useMatch('/projects/:id/brand'));
+  const tabUrl = inBrandDetail ? `${projectUrl}/brand` : projectUrl;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -119,22 +120,26 @@ function ProjectBrandWorkspace({ id }: { id: string }) {
   return <section className="projects-page project-brand-page" aria-labelledby="brand-page-title">
     <nav className="project-brand-breadcrumbs" aria-label="项目导航">
       <Link to="/projects">我的项目</Link>
-      {loaded && <><ChevronRight size={13} aria-hidden="true" /><Link to={projectUrl}>{loaded.name}</Link></>}
-      <ChevronRight size={13} aria-hidden="true" /><span aria-current="page">品牌定位</span>
+      <ChevronRight size={13} aria-hidden="true" />
+      {inBrandDetail ? <>
+        {loaded && <><Link to={projectUrl}>{loaded.name}</Link><ChevronRight size={13} aria-hidden="true" /></>}
+        <span aria-current="page">品牌定位</span>
+      </> : <span aria-current="page">项目概览</span>}
     </nav>
     <header className="projects-page__heading">
-      <h1 id="brand-page-title">品牌定位</h1>
-      {loaded && <div className="project-brand-actions">
+      <h1 id="brand-page-title">{inBrandDetail ? '品牌定位' : loaded?.name ?? '项目概览'}</h1>
+      <div className="project-brand-actions">
+        {!draft && <Link className="projects-button projects-button--quiet" to={`${projectUrl}/workbench`}><PenLine size={15} aria-hidden="true" />进入创作台</Link>}
         {draft ? <>
           <button type="button" disabled={saving} className="projects-button" onClick={() => {
             if (conflict) { reload(); return; }
             setDraft(undefined); setEditError('');
           }}>{conflict ? '放弃草稿并读取最新版' : '取消'}</button>
           <button type="button" disabled={saving || conflict} className="projects-button projects-button--primary" onClick={() => void save()}><Save size={15} aria-hidden="true" />{saving ? '正在保存…' : '保存'}</button>
-        </> : <button type="button" disabled={!projects?.saveBrand} className="projects-button projects-button--primary" onClick={() => {
+        </> : loaded && <button type="button" disabled={!projects?.saveBrand} className="projects-button projects-button--primary" onClick={() => {
           setDraft(loaded.profile); setNotice('');
         }}><Pencil size={15} aria-hidden="true" />编辑品牌资料</button>}
-      </div>}
+      </div>
     </header>
     {loadError ? <div className="projects-inline-message" role="alert">{loadError}<button type="button" className="projects-button" onClick={reload}>重新读取</button></div> :
       !loaded && <p role="status">正在读取品牌资料…</p>}
@@ -158,8 +163,8 @@ function ProjectBrandWorkspace({ id }: { id: string }) {
       <section className="project-brand-section" aria-label="品牌定位明细">
         <header className="project-brand-section__heading">
           <nav className="project-brand-tabs" aria-label="品牌定位明细">
-            <Link to={brandUrl} aria-current={evidenceView ? 'page' : undefined}>证据链</Link>
-            <Link to={`${brandUrl}?view=claims`} aria-current={evidenceView ? undefined : 'page'}>核心宣传主张</Link>
+            <Link to={tabUrl} aria-current={evidenceView ? 'page' : undefined}>证据链</Link>
+            <Link to={`${tabUrl}?view=claims`} aria-current={evidenceView ? undefined : 'page'}>核心宣传主张</Link>
           </nav>
           {draft && <button type="button" className="projects-button projects-button--quiet" disabled={saving || profile[view].length >= 50} onClick={() => setDraft(evidenceView
             ? { ...draft, evidence: [...draft.evidence, { fact: '', source: '' }] }

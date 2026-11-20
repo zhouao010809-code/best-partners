@@ -31,7 +31,7 @@ const runtime = {
 vi.mock('../../src/client/app/ConsoleRuntime.js', () => ({ useConsoleRuntime: () => runtime }));
 
 function renderPage() {
-  return render(<MemoryRouter initialEntries={['/projects']}><Routes><Route path="/projects" element={<ProjectsPage />} /><Route path="/projects/:id" element={<div>项目工作区已打开</div>} /></Routes></MemoryRouter>);
+  return render(<MemoryRouter initialEntries={['/projects']}><Routes><Route path="/projects" element={<ProjectsPage />} /><Route path="/projects/:id" element={<div>项目品牌表格已打开</div>} /></Routes></MemoryRouter>);
 }
 
 beforeEach(() => {
@@ -57,7 +57,7 @@ describe('ProjectsPage', () => {
     expect(screen.getByRole('textbox', { name: '项目显示名（可选）' })).toHaveValue('A项目');
     await user.click(screen.getByRole('button', { name: '确认添加项目' }));
     expect(bind).toHaveBeenCalledWith({ scanId: preview.scanId, sourceSha256: preview.sourceSha256, displayName: 'A项目' });
-    expect(await screen.findByText('项目工作区已打开')).toBeVisible();
+    expect(await screen.findByText('项目品牌表格已打开')).toBeVisible();
   });
 
   it('allows an empty optional display name and lets the service use its folder default', async () => {

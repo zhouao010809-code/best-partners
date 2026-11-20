@@ -59,6 +59,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '确认添加项目', exact: true }).click();
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
       const projectId = new URL(window.url()).pathname.split('/').at(-1)!;
+      await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       const base = `/api/v1/projects/${projectId}/creations`;
       await window.getByRole('button', { name: '策划选题', exact: true }).click();
       await window.getByRole('textbox', { name: '选题要求', exact: true }).fill('提出两个合成测试选题');
@@ -117,6 +118,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.route(/\/api\/v1\/projects\/[^/]+\/creation-suggestions$/u, route => route.abort('blockedbyclient'));
       await window.getByRole('link', { name: '我的项目', exact: true }).click();
       await window.locator(`a[href="/projects/${projectId}"]`).click();
+      await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       await expect(window.getByRole('region', { name: '待选择的选题', exact: true })).toHaveCount(0);
       await window.getByRole('tab', { name: '回收站', exact: true }).click();
       await expect(window.getByRole('button', { name: '恢复创作：保留的角度', exact: true })).toBeVisible();

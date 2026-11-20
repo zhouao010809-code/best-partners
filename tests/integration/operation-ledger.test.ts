@@ -49,6 +49,16 @@ it('recycle history only links to trash, including permanently deleted entries',
   expect(item.kind).toBe('delete'); expect(item.action).toMatchObject({kind:'navigate', href:'/trash'});
   expect(item.occurredAt).toBe('2026-09-08T00:00:00.000Z'); expect(item.bucket).toBe('history');
 });
+it('opens the creating project workbench from its output receipt', async () => {
+  const projectId = '43295347-f539-4afb-93ea-9cebba0ae81e';
+  const ledger = createOperationLedger({ projectOperations: () => [{
+    id: '95caa490-6019-4417-8165-cad63f30c402', projectId, eventType: 'project-write',
+    targetPath: 'AI工作区/内容草稿/脚本.md', createdAt: '2026-11-21T00:00:00Z', status: 'completed'
+  }] });
+  const { items } = await ledger.list({ view: 'history' });
+  expect(items).toHaveLength(1);
+  expect(items[0]?.action).toEqual({ kind: 'navigate', label: '进入创作台', href: `/projects/${projectId}/workbench` });
+});
 it('does not ask to retry extraction after its source was intentionally trashed', async () => {
   const { database, ledger } = setup(); run(database, 'failed', 'failed');
   database.prepare('INSERT INTO personal_trash_entries (id,material_path,title,created_at,status,manifest_json) VALUES (?,?,?,?,?,?)')

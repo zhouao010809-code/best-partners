@@ -34,6 +34,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '确认添加项目', exact: true }).click();
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
       const projectId = new URL(window.url()).pathname.split('/').at(-1)!, base = `/api/v1/projects/${projectId}/creations`;
+      await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       const before: CreationDetail[] = [];
       // Only fixture setup uses the actual local API. Every lifecycle mutation below is clicked in the app.
       for (const title of titles) {
@@ -73,6 +74,7 @@ for (const mode of ['development', 'packaged'] as const) {
       launched = await launchBulk(mode, fixture, attempts, errors); instance = launched.instance; window = launched.window;
       await window.getByRole('link', { name: '我的项目', exact: true }).click();
       await window.locator(`a[href="/projects/${projectId}"]`).click();
+      await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       await window.getByRole('tab', { name: '回收站', exact: true }).click();
       await window.getByRole('button', { name: '全选当前列表', exact: true }).click();
       for (const title of titles.slice(0, 2)) await expect(window.getByRole('checkbox', { name: `选择回收创作：${title}`, exact: true })).toBeChecked();

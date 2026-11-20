@@ -38,7 +38,7 @@ function ProjectShellProbe() {
 }
 
 function renderPage() {
-  return render(<MemoryRouter initialEntries={[`/projects/${id}`]}><Routes><Route path="/projects/:id" element={<><ProjectWorkspacePage /><ProjectShellProbe /></>} /></Routes></MemoryRouter>);
+  return render(<MemoryRouter initialEntries={[`/projects/${id}/workbench`]}><Routes><Route path="/projects/:id/workbench" element={<><ProjectWorkspacePage /><ProjectShellProbe /></>} /></Routes></MemoryRouter>);
 }
 
 beforeEach(() => {
@@ -73,7 +73,7 @@ describe('ProjectWorkspacePage', () => {
     expect(updates).toHaveLength(1);
     expect((updates[0] as CustomEvent).detail).toEqual({ projectId: id });
     expect(screen.getByText('A项目新位置')).toBeVisible();
-    expect(screen.getByTestId('project-route')).toHaveTextContent(`/projects/${id}`);
+    expect(screen.getByTestId('project-route')).toHaveTextContent(`/projects/${id}/workbench`);
     expect(screen.getByTestId('visible-project-conversation')).toHaveTextContent('已有项目问问会话：上次讨论仍在这里');
     window.removeEventListener('xiaozhao:project-workspace-updated', onUpdate);
   });

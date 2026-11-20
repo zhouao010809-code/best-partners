@@ -68,6 +68,7 @@
 .project-brand-actions,
 .project-brand-breadcrumbs,
 .project-brand-section__heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.project-brand-page .projects-page__heading > .project-brand-actions { min-width: 0; flex: 0 1 auto; }
 .project-brand-breadcrumbs { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .project-brand-breadcrumbs a { color: var(--text-secondary); text-decoration: none; }
 .project-brand-breadcrumbs a:hover { color: var(--accent-primary); }

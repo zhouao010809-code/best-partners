@@ -162,12 +162,12 @@ export function ProjectsPage() {
               <thead><tr>{['项目名', '品类', '品牌定位', '购买理由'].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead>
               <tbody>
                 {projects.map(project => {
-                  const workspace = `/projects/${encodeURIComponent(project.id)}`;
+                  const projectUrl = `/projects/${encodeURIComponent(project.id)}`;
                   const brand = project.brand;
                   return (
                     <tr key={project.id}>
                       <th scope="row">
-                        <Link className="project-register__name" to={workspace}>
+                        <Link className="project-register__name" to={projectUrl}>
                           <FolderKanban size={17} aria-hidden="true" />
                           <span>{project.displayName}</span>
                         </Link>
@@ -175,7 +175,7 @@ export function ProjectsPage() {
                       </th>
                       <td>{brand?.category ? <span className="project-register__category">{brand.category}</span> : <span className="project-register__blank" aria-label="未填写">—</span>}</td>
                       <td>
-                        <Link className="project-register__position" to={`${workspace}/brand`} aria-label={`${project.displayName}的品牌定位`}>
+                        <Link className="project-register__position" to={`${projectUrl}/brand`} aria-label={`${project.displayName}的品牌定位`}>
                           <span>{brand?.positioning || '填写品牌定位'}</span><ChevronRight size={14} aria-hidden="true" />
                         </Link>
                       </td>

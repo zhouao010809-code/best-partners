@@ -89,7 +89,19 @@ test('packaged current vault keeps brand tables project-specific across restart 
       await resizeBulk(app, window, width);
       await window.screenshot({ path: info.outputPath('brand-register-' + width + '.png') });
     }
-    await firstRow.getByRole('link', { name: first + '的品牌定位', exact: true }).click();
+    await firstRow.getByRole('link', { name: first, exact: true }).click();
+    await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
+    const overviewUrl = window.url();
+    const overview = window.getByRole('table', { name: '项目概览', exact: true });
+    await expect(overview).toBeInViewport();
+    await expect(overview).toContainText(positioning);
+    await expect(window.getByRole('tab', { name: '创作台', exact: true })).toHaveCount(0);
+    await window.getByRole('link', { name: '进入创作台', exact: true }).click();
+    await expect(window).toHaveURL(overviewUrl + '/workbench');
+    await expect(window.getByRole('tab', { name: '创作台', exact: true })).toBeVisible();
+    await window.getByRole('link', { name: '返回项目概览', exact: true }).click();
+    await expect(window).toHaveURL(overviewUrl);
+    await expect(overview).toContainText(positioning);
     const evidence = window.getByRole('table', { name: '证据链', exact: true });
     await expect(evidence).toContainText(fact);
     await expect(evidence).toContainText(source);

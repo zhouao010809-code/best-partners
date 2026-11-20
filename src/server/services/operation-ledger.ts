@@ -107,8 +107,8 @@ export function createOperationLedger(sources: Sources) {
           occurredAt: row.createdAt, timeLabel: '操作时间', paths: [row.targetPath],
           summary: done ? '内容已保存到项目 AI 工作区。' : stale ? '项目内容已变化，这次计划没有写入。' : '项目输出没有完成，保留了操作记录。',
           preserved: '项目源文件与全局知识库均未被修改。',
-          nextStep: done ? '打开项目工作区查看输出。' : '打开项目工作区检查状态后重新生成。',
-          action: { kind: 'navigate', label: '打开项目', href: `/projects/${encodeURIComponent(row.projectId)}` }
+          nextStep: done ? '进入创作台查看输出。' : '进入创作台检查状态后重新生成。',
+          action: { kind: 'navigate', label: '进入创作台', href: `/projects/${encodeURIComponent(row.projectId)}/workbench` }
         } satisfies OperationRecord;
       });
     }));

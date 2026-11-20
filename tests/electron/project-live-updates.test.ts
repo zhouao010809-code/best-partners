@@ -121,6 +121,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('textbox', { name: '项目显示名（可选）' }).fill('资料同步测试项目');
       await window.getByRole('button', { name: '确认添加项目', exact: true }).click();
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
+      await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       await window.getByRole('tab', { name: '项目资料', exact: true }).click();
       const files = window.getByRole('region', { name: '项目资料与产出', exact: true });
       const sourceTab = files.getByRole('tab', { name: '项目资料', exact: true });

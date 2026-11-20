@@ -80,6 +80,12 @@ function WorkflowRoute({ legacy, discussion = false }: { legacy?: RouteComponent
   return legacy ? <RouteElement component={legacy} /> : <Navigate replace to="/queue" />;
 }
 
+function ProjectHomeRoute() {
+  const [query] = useSearchParams();
+  if (query.has('file')) return <Navigate replace to={`workbench?${query}`} />;
+  return <RouteElement component={ProjectBrandRoutePage} />;
+}
+
 function RouteElement({ component: Component }: { readonly component: RouteComponent }) {
   return <Suspense fallback={<RouteLoadingPlaceholder />}><Component /></Suspense>;
 }
@@ -106,7 +112,8 @@ export function AppRouter({ api, runtimeMode = 'personal' }: AppRouterProps = {}
         <Route path="knowledge" element={<RouteElement component={KnowledgeRoutePage} />} />
         <Route path="projects" element={<RouteElement component={ProjectsRoutePage} />} />
         <Route path="projects/:id/brand" element={<RouteElement component={ProjectBrandRoutePage} />} />
-        <Route path="projects/:id" element={<RouteElement component={ProjectWorkspaceRoutePage} />} />
+        <Route path="projects/:id" element={<ProjectHomeRoute />} />
+        <Route path="projects/:id/workbench" element={<RouteElement component={ProjectWorkspaceRoutePage} />} />
         <Route path="skills" element={<RouteElement component={SkillsRoutePage} />} />
         <Route path="operations" element={<RouteElement component={OperationsRoutePage} />} />
         <Route path="settings" element={<RouteElement component={SettingsRoutePage} />} />

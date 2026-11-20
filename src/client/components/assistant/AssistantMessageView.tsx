@@ -17,7 +17,7 @@ export function projectSourceHref(path: string): string | undefined {
   const projectId = path.slice('project:'.length, separator);
   const relativePath = path.slice(separator + 1);
   if (!projectId || !relativePath) return undefined;
-  return `/projects/${encodeURIComponent(projectId)}?file=${encodeURIComponent(relativePath)}`;
+  return `/projects/${encodeURIComponent(projectId)}/workbench?file=${encodeURIComponent(relativePath)}`;
 }
 
 function Citation({ source }: { source: AssistantSource }) {

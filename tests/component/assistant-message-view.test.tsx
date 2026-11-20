@@ -83,5 +83,5 @@ it('links project sources to the project workspace and labels global context sep
   fireEvent.click(screen.getByText('相关资料 · 2'));
   expect(screen.getByText('项目资料')).toBeVisible();
   expect(screen.getByText('全局知识')).toBeVisible();
-  expect(screen.getByRole('link', { name: 'P1 项目 brief' })).toHaveAttribute('href', `/projects/${projectId}?file=%E8%B5%84%E6%96%99%2Fbrief.md`);
+  expect(screen.getByRole('link', { name: 'P1 项目 brief' })).toHaveAttribute('href', `/projects/${projectId}/workbench?file=%E8%B5%84%E6%96%99%2Fbrief.md`);
 });

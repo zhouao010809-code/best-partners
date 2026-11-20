@@ -205,7 +205,7 @@ export function ProjectWorkspacePage() {
 
   return (
     <section className={`projects-page project-workspace${editing ? ' project-workspace--editing' : ''}`} aria-labelledby="project-workspace-title">
-      <Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link>
+      <Link className="projects-back-link" to={`/projects/${encodeURIComponent(project.id)}`}><ArrowLeft size={15} aria-hidden="true" />返回项目概览</Link>
       <header className="projects-page__heading project-workspace__heading">
         <div><h1 id="project-workspace-title"><FolderKanban size={editing ? 19 : 24} aria-hidden="true" />{project.displayName}</h1>{!editing && <p>根据项目资料策划选题，写脚本，和问问一起打磨。</p>}</div>
         <div className="project-workspace__actions">

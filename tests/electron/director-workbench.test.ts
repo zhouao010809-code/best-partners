@@ -158,6 +158,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '确认添加项目', exact: true }).click();
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
       const projectId = new URL(window.url()).pathname.split('/').at(-1)!;
+      await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       const collectionPath = `/api/v1/projects/${projectId}/creations`;
       const profilePath = `/api/v1/projects/${projectId}/creative-profile`;
       for (const name of ['创作台', '选题库', '项目资料', '已定稿']) {
@@ -313,6 +314,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await resize(instance, window, 1360);
       await window.getByRole('link', { name: '我的项目', exact: true }).click();
       await window.locator(`a[href="/projects/${projectId}"]`).click();
+      await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       const restartedProfile = window.getByRole('region', { name: '项目创作档案', exact: true });
       await restartedProfile.getByRole('button', { name: /项目创作档案/u }).click();
       await expect(restartedProfile.getByRole('textbox', { name: '受众', exact: true })).toHaveValue(profileAudience);
