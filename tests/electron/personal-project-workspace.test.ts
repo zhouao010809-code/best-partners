@@ -90,7 +90,7 @@ for (const mode of ['development', 'packaged'] as const) {
       await window.getByRole('button', { name: '确认添加项目', exact: true }).click();
 
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+$/u);
-      await expect(window.getByRole('table', { name: '项目概览', exact: true })).toContainText('A项目');
+      await expect(window.getByRole('region', { name: '项目概览', exact: true })).toContainText('A项目');
       await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       await expect(window).toHaveURL(/\/projects\/[0-9a-f-]+\/workbench$/u);
       await expect(window.getByRole('heading', { level: 1 })).toHaveCount(1);

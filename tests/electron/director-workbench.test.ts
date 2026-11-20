@@ -313,7 +313,7 @@ for (const mode of ['development', 'packaged'] as const) {
       observeErrors(window);
       await resize(instance, window, 1360);
       await window.getByRole('link', { name: '我的项目', exact: true }).click();
-      await window.locator(`a[href="/projects/${projectId}"]`).click();
+      await window.getByRole('link', { name: projectName, exact: true }).click();
       await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       const restartedProfile = window.getByRole('region', { name: '项目创作档案', exact: true });
       await restartedProfile.getByRole('button', { name: /项目创作档案/u }).click();

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronRight, Pencil, PenLine, Plus, Save, Trash2 } from 'lucide-react';
+import { ArrowUpRight, ChevronRight, Link2, Megaphone, Pencil, PenLine, Plus, Save, Trash2 } from 'lucide-react';
 import { Link, useMatch, useParams, useSearchParams } from 'react-router-dom';
 import type { ProjectBrandProfile } from '../../shared/api/projects.js';
 import type { ApiClientResult } from '../api/client.js';
@@ -7,11 +7,6 @@ import { useConsoleRuntime } from '../app/ConsoleRuntime.js';
 import '../styles/projects.css';
 
 type BrandView = 'evidence' | 'claims';
-const fields = [
-  { key: 'category', label: '品类', limit: 200 },
-  { key: 'positioning', label: '品牌定位', limit: 4000 },
-  { key: 'purchaseReason', label: '购买理由', limit: 4000 }
-] as const;
 
 function readResult<T>(result: ApiClientResult<T>, fallback: string): T {
   if (result.ok) return result.value;
@@ -78,7 +73,7 @@ function ProjectBrandWorkspace({ id }: { id: string }) {
       .filter(row => row.fact || row.source);
     if (evidence.some(row => !row.fact)) {
       setParams({});
-      setEditError('请为已填写出处的证据补充依据，或移除该行。');
+      setEditError('请为已填写出处的证据补充依据，或移除这条证据。');
       return;
     }
     const claims = draft.claims.map(row => ({ claim: row.claim.trim() })).filter(row => row.claim);
@@ -91,7 +86,7 @@ function ProjectBrandWorkspace({ id }: { id: string }) {
       });
       if (!result.ok && 'state' in result && (result.code === 'PROJECT_BRAND_REVISION_CONFLICT' || result.state.status === 'conflict')) {
         setConflict(true);
-        setEditError('品牌资料已有更新。当前填写仍在表格中，可复制所需内容，再读取最新版。');
+        setEditError('品牌资料已有更新。当前填写内容已保留，可复制所需内容，再读取最新版。');
         return;
       }
       const profile = readResult(result, '保存失败，当前填写已保留。');
@@ -106,7 +101,6 @@ function ProjectBrandWorkspace({ id }: { id: string }) {
   }
 
   const profile = draft ?? loaded?.profile;
-  const editing = draft !== undefined;
   const evidenceView = view === 'evidence';
   const detailTitle = evidenceView ? '证据链' : '核心宣传主张';
 
@@ -146,54 +140,81 @@ function ProjectBrandWorkspace({ id }: { id: string }) {
     {editError && <div className="projects-inline-message" role="alert">{editError}</div>}
     {notice && <p className="projects-inline-message" role="status">{notice}</p>}
     {loaded && profile && <>
-      <section className="project-brand-section" aria-labelledby="brand-summary-title">
-        <header className="project-brand-section__heading"><h2 id="brand-summary-title">项目概览</h2></header>
-        <div className="project-brand-table-wrap"><table className="project-brand-table project-brand-table--overview" aria-label="项目概览">
-          <thead><tr><th scope="col">项目名</th>{fields.map(field => <th scope="col" key={field.key}>{field.label}</th>)}</tr></thead>
-          <tbody><tr><th scope="row">{loaded.name}</th>{fields.map(field => <td key={field.key}>
-            {draft ? (field.key === 'category'
-              ? <input className="project-brand-input" aria-label={field.label} maxLength={field.limit} disabled={saving} value={draft[field.key]}
-                onChange={event => setDraft({ ...draft, [field.key]: event.target.value })} />
-              : <textarea className="project-brand-textarea" aria-label={field.label} maxLength={field.limit} rows={3} disabled={saving} value={draft[field.key]}
-                onChange={event => setDraft({ ...draft, [field.key]: event.target.value })} />)
-              : emptyValue(profile[field.key])}
-          </td>)}</tr></tbody>
-        </table></div>
+      <section className="brand-overview" aria-label="项目概览">
+        <div className="brand-overview__identity">
+          {inBrandDetail && <strong>{loaded.name}</strong>}
+          <div>
+            <span>品类</span>
+            {draft ? <input className="project-brand-input" aria-label="品类" maxLength={200} disabled={saving} value={draft.category}
+              onChange={event => setDraft({ ...draft, category: event.target.value })} /> : emptyValue(profile.category)}
+          </div>
+        </div>
+        <div className="brand-overview__position">
+          {draft ? <>
+            <label htmlFor="brand-positioning">品牌定位</label>
+            <textarea id="brand-positioning" className="project-brand-textarea" maxLength={4000} rows={3} disabled={saving} value={draft.positioning}
+              onChange={event => setDraft({ ...draft, positioning: event.target.value })} />
+          </> : <><h2>品牌定位</h2><p>{emptyValue(profile.positioning)}</p></>}
+        </div>
+        <div className="brand-overview__reason">
+          {draft ? <>
+            <label htmlFor="brand-purchase-reason">购买理由</label>
+            <textarea id="brand-purchase-reason" className="project-brand-textarea" maxLength={4000} rows={3} disabled={saving} value={draft.purchaseReason}
+              onChange={event => setDraft({ ...draft, purchaseReason: event.target.value })} />
+          </> : <><h2>购买理由</h2><p>{emptyValue(profile.purchaseReason)}</p></>}
+        </div>
       </section>
-      <section className="project-brand-section" aria-label="品牌定位明细">
-        <header className="project-brand-section__heading">
-          <nav className="project-brand-tabs" aria-label="品牌定位明细">
-            <Link to={tabUrl} aria-current={evidenceView ? 'page' : undefined}>证据链</Link>
-            <Link to={`${tabUrl}?view=claims`} aria-current={evidenceView ? undefined : 'page'}>核心宣传主张</Link>
-          </nav>
+      <nav className="brand-portals" aria-label="品牌定位明细">
+        <Link className="brand-portal brand-portal--evidence" to={tabUrl} aria-label="证据链" aria-current={evidenceView ? 'page' : undefined}>
+          <span className="brand-portal__icon"><Link2 size={21} aria-hidden="true" /></span>
+          <div><strong>证据链</strong><span className="brand-portal__count">{profile.evidence.length} 条依据</span></div>
+          <ArrowUpRight size={18} aria-hidden="true" />
+        </Link>
+        <Link className="brand-portal brand-portal--claims" to={`${tabUrl}?view=claims`} aria-label="核心宣传主张" aria-current={evidenceView ? undefined : 'page'}>
+          <span className="brand-portal__icon"><Megaphone size={21} aria-hidden="true" /></span>
+          <div><strong>核心宣传主张</strong><span className="brand-portal__count">{profile.claims.length} 条主张</span></div>
+          <ArrowUpRight size={18} aria-hidden="true" />
+        </Link>
+      </nav>
+      <section className="brand-details" aria-label={detailTitle}>
+        <header className="brand-details__heading">
+          <h2>{detailTitle}</h2>
           {draft && <button type="button" className="projects-button projects-button--quiet" disabled={saving || profile[view].length >= 50} onClick={() => setDraft(evidenceView
             ? { ...draft, evidence: [...draft.evidence, { fact: '', source: '' }] }
             : { ...draft, claims: [...draft.claims, { claim: '' }] })}>
             <Plus size={15} aria-hidden="true" />{evidenceView ? '添加证据' : '添加主张'}
           </button>}
         </header>
-        <div className="project-brand-table-wrap"><table className={`project-brand-table project-brand-table--${view}`} aria-label={detailTitle}>
-          <thead><tr>{evidenceView ? <><th scope="col">依据</th><th scope="col">出处</th></> : <th scope="col">主张内容</th>}
-            {editing && <th scope="col" className="project-brand-row-actions">操作</th>}
-          </tr></thead>
-          <tbody>
-            {profile[view].length === 0 && <tr><td colSpan={(evidenceView ? 2 : 1) + Number(editing)} className="project-brand-empty">{evidenceView ? '尚未填写证据' : '尚未填写核心宣传主张'}</td></tr>}
-            {profile[view].map((row, index) => {
-              const number = index + 1;
-              return <tr key={`${view}-${index}`}>
-                {'fact' in row ? (['fact', 'source'] as const).map(key => <td key={key}>{draft
-                  ? <textarea className="project-brand-textarea" rows={2} aria-label={`${key === 'fact' ? '依据' : '出处'} ${number}`} maxLength={key === 'fact' ? 2000 : 1000}
-                    disabled={saving} value={row[key]} onChange={event => setDraft({ ...draft, evidence: draft.evidence.map((item, i) => i === index ? { ...item, [key]: event.target.value } : item) })} />
-                  : emptyValue(row[key])}</td>) : <td>{draft
-                    ? <textarea className="project-brand-textarea" rows={2} aria-label={`主张内容 ${number}`} maxLength={2000}
-                      disabled={saving} value={row.claim} onChange={event => setDraft({ ...draft, claims: draft.claims.map((item, i) => i === index ? { claim: event.target.value } : item) })} />
-                    : row.claim}</td>}
-                {editing && <td className="project-brand-row-actions"><button type="button" className="projects-icon-button" disabled={saving}
-                  aria-label={`移除${evidenceView ? '证据' : '主张'} ${number}`} onClick={() => removeRow(index)}><Trash2 size={15} aria-hidden="true" /></button></td>}
-              </tr>;
-            })}
-          </tbody>
-        </table></div>
+        {profile[view].length === 0 && <div className="brand-details__empty">
+          {evidenceView ? <Link2 aria-hidden="true" /> : <Megaphone aria-hidden="true" />}
+          <p>{evidenceView ? '尚未填写证据。记录支持品牌定位的事实与出处。' : '尚未填写核心宣传主张。留下品牌希望传达的一句话。'}</p>
+        </div>}
+        <div className="brand-entry-list">
+          {profile[view].map((row, index) => {
+            const number = index + 1;
+            return <article className="brand-entry" key={`${view}-${index}`} aria-label={`${evidenceView ? '证据' : '主张'} ${number}`}>
+              {'fact' in row ? (['fact', 'source'] as const).map(key => {
+                const label = key === 'fact' ? '依据' : '出处';
+                const fieldId = `brand-evidence-${index}-${key}`;
+                return <div className="brand-entry__field" key={key}>
+                  {draft ? <>
+                    <label className="brand-entry__label" htmlFor={fieldId}>{label}</label>
+                    <textarea id={fieldId} className="project-brand-textarea" rows={2} aria-label={`${label} ${number}`} maxLength={key === 'fact' ? 2000 : 1000}
+                      disabled={saving} value={row[key]} onChange={event => setDraft({ ...draft, evidence: draft.evidence.map((item, i) => i === index ? { ...item, [key]: event.target.value } : item) })} />
+                  </> : <><span className="brand-entry__label">{label}</span><p>{emptyValue(row[key])}</p></>}
+                </div>;
+              }) : <div className="brand-entry__field">
+                {draft ? <>
+                  <label className="brand-entry__label" htmlFor={`brand-claim-${index}`}>主张内容</label>
+                  <textarea id={`brand-claim-${index}`} className="project-brand-textarea" rows={2} aria-label={`主张内容 ${number}`} maxLength={2000}
+                    disabled={saving} value={row.claim} onChange={event => setDraft({ ...draft, claims: draft.claims.map((item, i) => i === index ? { claim: event.target.value } : item) })} />
+                </> : <><span className="brand-entry__label">主张内容</span><p>{row.claim}</p></>}
+              </div>}
+              {draft && <button type="button" className="projects-icon-button brand-entry__remove" disabled={saving}
+                aria-label={`移除${evidenceView ? '证据' : '主张'} ${number}`} onClick={() => removeRow(index)}><Trash2 size={15} aria-hidden="true" /></button>}
+            </article>;
+          })}
+        </div>
       </section>
     </>}
   </section>;

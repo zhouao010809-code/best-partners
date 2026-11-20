@@ -73,7 +73,7 @@ for (const mode of ['development', 'packaged'] as const) {
 
       launched = await launchBulk(mode, fixture, attempts, errors); instance = launched.instance; window = launched.window;
       await window.getByRole('link', { name: '我的项目', exact: true }).click();
-      await window.locator(`a[href="/projects/${projectId}"]`).click();
+      await window.getByRole('link', { name: '隔离批量回收项目', exact: true }).click();
       await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       await window.getByRole('tab', { name: '回收站', exact: true }).click();
       await window.getByRole('button', { name: '全选当前列表', exact: true }).click();

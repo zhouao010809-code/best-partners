@@ -29,12 +29,15 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
 
-it('keeps both editable detail tables when navigating between views and saves them with the overview', async () => {
+it('keeps both editable detail card lists when navigating between views and saves them with the overview', async () => {
   const user = userEvent.setup();
   renderPage();
   await user.click(await screen.findByRole('button', { name: '编辑品牌资料' }));
-  expect(within(screen.getByRole('table', { name: '项目概览' })).getAllByRole('columnheader').map(cell => cell.textContent))
-    .toEqual(['项目名', '品类', '品牌定位', '购买理由']);
+  const overview = within(screen.getByRole('region', { name: '项目概览' }));
+  expect(overview.getByText('甲项目')).toBeVisible();
+  for (const label of ['品类', '品牌定位', '购买理由']) {
+    expect(overview.getByRole('textbox', { name: label })).toBeVisible();
+  }
   await user.type(screen.getByRole('textbox', { name: '品牌定位' }), '定位甲');
   await user.click(screen.getByRole('button', { name: '添加证据' }));
   await user.type(screen.getByRole('textbox', { name: '依据 1' }), '事实甲');
@@ -50,9 +53,9 @@ it('keeps both editable detail tables when navigating between views and saves th
     claims: [{ claim: '主张甲' }], expectedRevision: 0
   });
   expect(await screen.findByText('品牌资料已保存。')).toBeVisible();
-  expect(within(screen.getByRole('table', { name: '证据链' })).getByText('事实甲')).toBeVisible();
+  expect(within(screen.getByRole('region', { name: '证据链' })).getByText('事实甲')).toBeVisible();
   await user.click(screen.getByRole('link', { name: '核心宣传主张' }));
-  expect(within(screen.getByRole('table', { name: '核心宣传主张' })).getByText('主张甲')).toBeVisible();
+  expect(within(screen.getByRole('region', { name: '核心宣传主张' })).getByText('主张甲')).toBeVisible();
 });
 
 it('keeps an edit on a version conflict and fetches the new revision when the draft is explicitly discarded', async () => {

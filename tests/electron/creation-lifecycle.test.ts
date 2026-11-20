@@ -117,7 +117,7 @@ for (const mode of ['development', 'packaged'] as const) {
       // No further AI-shaped request is allowed after restart.
       await window.route(/\/api\/v1\/projects\/[^/]+\/creation-suggestions$/u, route => route.abort('blockedbyclient'));
       await window.getByRole('link', { name: '我的项目', exact: true }).click();
-      await window.locator(`a[href="/projects/${projectId}"]`).click();
+      await window.getByRole('link', { name: '隔离生命周期项目', exact: true }).click();
       await window.getByRole('link', { name: '进入创作台', exact: true }).click();
       await expect(window.getByRole('region', { name: '待选择的选题', exact: true })).toHaveCount(0);
       await window.getByRole('tab', { name: '回收站', exact: true }).click();
