@@ -28,7 +28,12 @@ function fixture(options: { modern?: boolean; modelConfigured?: boolean; empty?:
     : { pending: 1, generating: 1, ready: 3, unfinished: 1 };
   const list = vi.fn(async (query: ExtractionQueueQuery) => ok({ counts, items: query.visibility === 'removed' || query.reviewState === 'complete' ? [] : items.filter(item => item.view === query.view) }));
   const health = { status: 'ready' as const, vaultSource: { status: 'ready' as const, adapter: 'filesystem' as const, displayName: 'Test', ...(options.layout ? {layout: options.layout} : {}) }, index: { status: 'ready' as const, version: 1, refreshedAt: '2026-09-10T00:00:00Z' }, model: options.modelConfigured ? { status: 'configured' as const, providerHost: 'test.invalid', name: 'test-model' } : { status: 'unconfigured' as const, providerHost: 'test.invalid' }, writeGate: { status: 'blocked' as const, missing: [], fingerprintMatches: true }, schemaIssues: { status: 'available' as const, count: 0 } };
-  const api = { getHealth: vi.fn(async () => ok(health)), listMaterials: vi.fn(async () => ok({ items: items.map(item => ({ path: item.materialPath, title: item.title, rawSha256: sha, knowledgeStatus: options.layout === 'current' ? '全面探讨完成' : '未提炼', processingStatus: '已归档', sourcePlatform: '个人', generatedKnowledge: [] })) })), listKnowledge: vi.fn(async () => ok({ items: [] })), listOperations: vi.fn(async () => ok({ items: [] })), extraction: {}, intake: {},
+  const materials = options.layout === 'current' && !options.empty
+    ? (['未探讨', '部分探讨完成', '全面探讨完成'] as const).map(status => ({
+      path: `01图书馆/${status}.md`, title: `${status}的资料`, knowledgeStatus: status
+    }))
+    : items.map(item => ({ path: item.materialPath, title: item.title, knowledgeStatus: '未提炼' }));
+  const api = { getHealth: vi.fn(async () => ok(health)), listMaterials: vi.fn(async () => ok({ items: materials.map(material => ({ ...material, rawSha256: sha, processingStatus: '已归档', sourcePlatform: '个人', generatedKnowledge: [] })) })), listKnowledge: vi.fn(async () => ok({ items: [] })), listOperations: vi.fn(async () => ok({ items: [] })), extraction: {}, intake: {},
     ...(modern ? { extractionQueue: { list } } : {}) } as unknown as ReadConsoleApi;
   runtime = { api, health: { status: 'ready', data: health }, refreshHealth: vi.fn(), dataRevision: 0 };
   return { api, list, items, counts, health };
@@ -36,11 +41,13 @@ function fixture(options: { modern?: boolean; modelConfigured?: boolean; empty?:
 function Location() { const location = useLocation(); return <output aria-label="location">{location.pathname}{location.search}</output>; }
 function show() { render(<MemoryRouter><DashboardPage /><Location /></MemoryRouter>); }
 
-it('opens a discussion from current-vault cards without querying extraction history', async () => {
+it('only counts and offers unfinished discussions on the current-vault dashboard', async () => {
   const f = fixture({ layout: 'current' }); const user = userEvent.setup(); show();
-  expect(await screen.findByTestId('metric-materials')).toHaveTextContent('4');
+  expect(await screen.findByTestId('metric-materials')).toHaveTextContent('2 份');
+  expect(screen.getByRole('button', { name: '未探讨的资料:discuss' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: '全面探讨完成的资料:discuss' })).not.toBeInTheDocument();
   expect(screen.queryByRole('link', { name: '提炼队列' })).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'ready:discuss' }));
+  await user.click(screen.getByRole('button', { name: '部分探讨完成的资料:discuss' }));
   expect(screen.getByLabelText('location')).toHaveTextContent('/discussion?materialPath=01');
   expect(f.list).not.toHaveBeenCalled();
 });

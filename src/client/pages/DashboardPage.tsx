@@ -182,11 +182,13 @@ function stableVersion(snapshot: HealthSnapshot): number | undefined {
 }
 
 function discussionCards(materials: readonly MaterialItem[]): MaterialDeckCard[] {
-  return materials.map(record => ({
-    key: record.path, path: record.path, title: record.title, sourcePlatform: record.sourcePlatform,
-    ...(record.collectedAt ? { collectedAt: record.collectedAt } : {}),
-    knowledgeStatus: record.knowledgeStatus, nextAction: record.processingStatus === '已归档' ? 'discuss' : 'archive'
-  }));
+  return materials
+    .filter(record => record.knowledgeStatus === '未探讨' || record.knowledgeStatus === '部分探讨完成')
+    .map(record => ({
+      key: record.path, path: record.path, title: record.title, sourcePlatform: record.sourcePlatform,
+      ...(record.collectedAt ? { collectedAt: record.collectedAt } : {}),
+      knowledgeStatus: record.knowledgeStatus, nextAction: record.processingStatus === '已归档' ? 'discuss' : 'archive'
+    }));
 }
 
 function deckCards(materials: readonly MaterialItem[], completed: ReadonlySet<string>, queue?: DashboardQueue): readonly MaterialDeckCard[] {
@@ -352,7 +354,7 @@ export function DashboardPage() {
       <div className="dashboard-workspace">
       <section className="dashboard-materials" aria-labelledby="materials-title">
         <header className="dashboard-section-heading">
-          <div><h2 id="materials-title">{currentLayout ? '探讨资料' : data.queue ? '待处理资料' : '待提炼材料'} <span data-testid="metric-materials">{cards.length} 份</span></h2></div>
+          <div><h2 id="materials-title">{currentLayout ? '待探讨资料' : data.queue ? '待处理资料' : '待提炼材料'} <span data-testid="metric-materials">{cards.length} 份</span></h2></div>
           <div className="dashboard-heading-links">
             <Link to="/knowledge" className="dashboard-knowledge-total" data-testid="metric-knowledge" title={currentLayout ? '打开知识库' : '包含已标记为过时的知识笔记'}>已积累 {data.knowledge.length} 篇知识</Link>
             <Link to={currentLayout ? '/discussion' : '/queue'} className="dashboard-text-link">{currentLayout ? '进入探讨' : '提炼队列'} <ArrowUpRight aria-hidden="true" /></Link>
