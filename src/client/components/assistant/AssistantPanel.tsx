@@ -53,7 +53,7 @@ export function AssistantPanel({ api, currentLayout = false, open, onClose, widt
   const service = api.assistant;
   const location = useLocation();
   const projectId = projectIdProp ?? (() => {
-    const match = location.pathname.match(/^\/projects\/([^/]+)$/u);
+    const match = location.pathname.match(/^\/projects\/([^/]+)(?:\/brand)?\/?$/u);
     if (!match?.[1]) return undefined;
     try { return decodeURIComponent(match[1]); } catch { return undefined; }
   })();

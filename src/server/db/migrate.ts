@@ -37,7 +37,8 @@ function initialMigrations(): readonly Migration[] {
     { version: 22, sql: readFileSync(bundledMigrationPath('022_project_creations.sql'), 'utf8') },
     { version: 23, sql: readFileSync(bundledMigrationPath('023_project_creative_context.sql'), 'utf8') },
     { version: 24, sql: readFileSync(bundledMigrationPath('024_project_creation_lifecycle.sql'), 'utf8') },
-    { version: 25, sql: readFileSync(bundledMigrationPath('025_discussions.sql'), 'utf8') }
+    { version: 25, sql: readFileSync(bundledMigrationPath('025_discussions.sql'), 'utf8') },
+    { version: 26, sql: readFileSync(bundledMigrationPath('026_project_brand_profiles.sql'), 'utf8') }
   ];
 }
 

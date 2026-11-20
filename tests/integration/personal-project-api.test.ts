@@ -65,6 +65,41 @@ describe('personal project API', () => {
     expect(file.json().data.content).toContain('第一版选题');
   });
 
+  it('persists brand tables per project and rejects stale or invalid updates', async () => {
+    const f = await fixture();
+    async function bind(rootPath: string): Promise<string> {
+      const scan = await f.app.inject({ method: 'POST', url: '/api/v1/projects/scan', headers: f.authHeaders, payload: { rootPath } });
+      const { scanId, sourceSha256 } = scan.json().data;
+      const result = await f.app.inject({ method: 'POST', url: '/api/v1/projects', headers: f.authHeaders, payload: { scanId, sourceSha256 } });
+      expect(result.statusCode).toBe(200);
+      return result.json().data.id;
+    }
+    const otherRoot = f.projectRoot + '-second';
+    await mkdir(otherRoot);
+    const [first, second] = await Promise.all([bind(f.projectRoot), bind(otherRoot)]);
+    const url = `/api/v1/projects/${first}/brand`;
+    const empty = { category: '', positioning: '', purchaseReason: '', evidence: [], claims: [], revision: 0 };
+    expect((await f.app.inject({ url, headers })).json().data).toEqual(empty);
+    const summary = { category: '课程', positioning: '实操课', purchaseReason: '有分步演练' };
+    const profile = { ...summary, evidence: [{ fact: '含演练课', source: '课程说明' }], claims: [{ claim: '逐步练习' }] };
+    const payload = { ...profile, expectedRevision: 0 };
+    expect((await f.app.inject({ method: 'PUT', url, headers, payload })).statusCode).toBe(401);
+    expect((await f.app.inject({ method: 'PUT', url, headers: f.authHeaders, payload: { ...payload, claims: [{ claim: '' }] } })).statusCode).toBe(400);
+    const save = await f.app.inject({ method: 'PUT', url, headers: f.authHeaders, payload });
+    expect(save.statusCode).toBe(200);
+    expect(save.json().data).toEqual({ ...profile, revision: 1 });
+    const stale = await f.app.inject({ method: 'PUT', url, headers: f.authHeaders, payload: { ...payload, positioning: '过期修改' } });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().error.code).toBe('PROJECT_BRAND_REVISION_CONFLICT');
+    expect((await f.app.inject({ url, headers })).json().data).toEqual({ ...profile, revision: 1 });
+    expect((await f.app.inject({ url: `/api/v1/projects/${second}/brand`, headers })).json().data).toEqual(empty);
+    const list = await f.app.inject({ url: '/api/v1/projects', headers });
+    expect(list.json().data.projects).toEqual(expect.arrayContaining([expect.objectContaining({ id: first, brand: summary })]));
+    expect((await f.app.inject({ url: `/api/v1/projects/${first}`, headers })).json().data.brand).toEqual(summary);
+    const change = await f.app.inject({ method: 'PUT', url, headers: f.authHeaders, payload: { ...profile, claims: [], expectedRevision: 1 } });
+    expect(change.json().data).toEqual({ ...profile, claims: [], revision: 2 });
+  });
+
   it('enforces validation, not-found, CSRF, unavailable and company boundaries', async () => {
     const f = await fixture();
     expect((await f.app.inject({ method: 'POST', url: '/api/v1/projects/scan', headers, payload: { rootPath: f.projectRoot } })).statusCode).toBe(401);

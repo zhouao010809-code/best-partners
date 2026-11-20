@@ -1,0 +1,112 @@
+.project-register,
+.project-brand-section,
+.project-register__table-wrap,
+.project-brand-table-wrap { min-width: 0; }
+
+.project-register__table-wrap,
+.project-brand-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.project-register__table,
+.project-brand-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+
+.project-register__table :is(th, td),
+.project-brand-table :is(th, td) {
+  padding: 17px 20px;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.project-register__table thead th,
+.project-brand-table thead th {
+  padding-block: 11px;
+  background: var(--surface-control);
+  border-bottom: 1px solid var(--border-muted);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.project-register__table tbody tr + tr,
+.project-brand-table tbody tr + tr { border-top: 1px solid var(--border-hairline); }
+.project-register__table tbody tr:has(a):hover,
+.project-register__table tbody tr:focus-within { background: rgba(194, 222, 202, .035); }
+
+.project-register__name-col { width: 23%; }
+.project-register__category-col { width: 15%; }
+.project-register__position-col { width: 31%; }
+.project-register__name,
+.project-register__position { display: inline-flex; align-items: baseline; gap: 7px; text-decoration: none; }
+.project-register__name { color: var(--text-primary); font-weight: 650; }
+.project-register__name svg { color: var(--text-muted); flex: none; align-self: flex-start; margin-top: 3px; }
+.project-register__position { color: #b4eac7; }
+.project-register__position svg { flex: none; align-self: flex-start; margin-top: 5px; }
+.project-register__table a:hover { text-decoration: underline; text-underline-offset: 4px; color: var(--accent-primary); }
+.project-register__category { display: inline-block; max-width: 100%; padding: 1px 7px; border: 1px solid var(--border-hairline); border-radius: 4px; background: var(--surface-panel); color: var(--text-secondary); font-size: 12px; }
+.project-register__blank, .project-brand-muted { color: var(--text-faint); font-weight: 400; }
+.project-register__status { display: flex; gap: 4px; align-items: center; margin-top: 4px; color: var(--status-amber); font-size: 11px; }
+.project-register__count { margin: 10px 2px 0; color: var(--text-muted); font-size: 12px; }
+.project-register__empty { display: grid; justify-items: center; padding: 35px 6px; gap: 8px; text-align: center; }
+.project-register__empty-icon { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 4px; border-radius: 10px; background: rgb(76 242 139 / 7%); color: #a9dbbb; }
+.project-register__empty h2 { margin: 0; font-size: 17px; }
+.project-register__empty p { margin: 0 0 9px; color: var(--text-muted); font-size: 13px; }
+
+.project-workspace__actions,
+.project-brand-actions,
+.project-brand-breadcrumbs,
+.project-brand-section__heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.project-brand-breadcrumbs { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.project-brand-breadcrumbs a { color: var(--text-secondary); text-decoration: none; }
+.project-brand-breadcrumbs a:hover { color: var(--accent-primary); }
+.project-brand-section { display: grid; gap: 12px; }
+.project-brand-section__heading { justify-content: space-between; }
+.project-brand-section h2 { margin: 0; color: var(--text-primary); font-size: 17px; font-weight: 650; }
+.project-brand-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--border-muted); }
+.project-brand-tabs a { display: inline-flex; align-items: center; gap: 6px; margin-bottom: -1px; padding: 10px 2px; border-bottom: 2px solid transparent; color: var(--text-muted); font-size: 14px; text-decoration: none; }
+.project-brand-tabs a[aria-current=page] { color: var(--text-primary); font-weight: 650; border-bottom-color: var(--accent-primary); }
+.project-brand-tabs a:hover { color: var(--text-primary); }
+.project-brand-table--overview :is(th,td):nth-child(1) { width: 23%; }
+.project-brand-table--overview :is(th,td):nth-child(2) { width: 15%; }
+.project-brand-table--overview :is(th,td):nth-child(3) { width: 31%; }
+.project-brand-table--evidence th:first-child { width: 52%; }
+.project-brand-table .project-brand-empty { padding-block: 28px; text-align: center; color: var(--text-muted); }
+.project-brand-page :is(input.project-brand-input, textarea.project-brand-textarea) { display: block; width: 100%; min-width: 0; padding: 8px 9px; border: 1px solid var(--border-muted); border-radius: 5px; background: var(--surface-base); color: var(--text-primary); font: inherit; line-height: 1.5; }
+.project-brand-textarea { resize: vertical; min-height: 60px; }
+.project-brand-page :is(input, textarea):focus-visible,
+.project-brand-page a:focus-visible,
+.project-register a:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.project-brand-table:has(tbody .projects-icon-button) thead th:last-child { width: 52px; }
+.project-brand-table td:has(.projects-icon-button) { text-align: center; padding-inline: 8px; }
+.project-brand-table .projects-icon-button { margin: auto; }
+.project-brand-table .projects-icon-button:hover { color: var(--status-red); border-color: var(--status-red); }
+
+@container project-page (max-width: 680px) {
+  .project-register__table :is(th, td),
+  .project-brand-table :is(th, td) { padding: 11px 9px; }
+  .project-register__name svg { display: none; }
+  .project-register__name-col { width: 21%; }
+  .project-register__category-col { width: 16%; }
+  .project-register__position-col { width: 30%; }
+  .project-register__name, .project-register__position { gap: 2px; }
+  .project-brand-table-wrap:has(.project-brand-input, .project-brand-textarea) .project-brand-table--overview { min-width: 580px; }
+}
+
+@container project-page (max-width: 420px) {
+  .project-register__table :is(th, td),
+  .project-brand-table :is(th, td) { padding-inline: 6px; font-size: 12px; }
+  .project-register__category { padding-inline: 3px; }
+  .project-register__position svg { display: none; }
+}

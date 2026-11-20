@@ -17,6 +17,7 @@ export const routePages = {
   TrashPage: page('../pages/TrashPage.js', 'TrashPage', async () => import('../pages/TrashPage.js')),
   KnowledgePage: page('../pages/KnowledgePage.js', 'KnowledgePage', async () => import('../pages/KnowledgePage.js')),
   ProjectsPage: page('../pages/ProjectsPage.js', 'ProjectsPage', async () => import('../pages/ProjectsPage.js')),
+  ProjectBrandPage: page('../pages/ProjectBrandPage.js', 'ProjectBrandPage', async () => import('../pages/ProjectBrandPage.js')),
   ProjectWorkspacePage: page('../pages/ProjectWorkspacePage.js', 'ProjectWorkspacePage', async () => import('../pages/ProjectWorkspacePage.js')),
   SkillsPage: page('../pages/SkillsPage.js', 'SkillsPage', async () => import('../pages/SkillsPage.js')),
   OperationsPage: page('../pages/OperationsPage.js', 'OperationsPage', async () => import('../pages/OperationsPage.js')),

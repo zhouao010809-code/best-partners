@@ -282,9 +282,9 @@ export interface AppShellProps {
 
 export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = false }: AppShellProps) {
   const location = useLocation();
-  const projectPage = /^\/projects(?:\/[^/]+)?\/?$/u.test(location.pathname);
+  const projectPage = /^\/projects(?:\/[^/]+(?:\/brand)?)?\/?$/u.test(location.pathname);
   const projectRouteId = (() => {
-    const match = location.pathname.match(/^\/projects\/([^/]+)$/u);
+    const match = location.pathname.match(/^\/projects\/([^/]+)(?:\/brand)?\/?$/u);
     if (!match?.[1]) return undefined;
     try { return decodeURIComponent(match[1]); } catch { return undefined; }
   })();
@@ -657,7 +657,7 @@ export function AppShell({ api = browserReadConsoleApi, suspendDataEffects = fal
         <header className="workspace-bar">
           <div className="workspace-bar__context">
             <Activity aria-hidden="true" />
-            <span>{location.pathname.startsWith('/projects/') ? '项目工作区 · 创作工作台' : location.pathname === '/discussion' ? '小兆大脑探讨' : location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
+            <span>{location.pathname.startsWith('/projects/') ? (location.pathname.replace(/\/+$/u, '').endsWith('/brand') ? '项目工作区 · 品牌定位' : '项目工作区 · 创作工作台') : location.pathname === '/discussion' ? '小兆大脑探讨' : location.pathname === '/intake' ? '个人本地归档' : location.pathname.startsWith('/extractions/') || location.pathname === '/queue' ? '个人知识提炼' : location.pathname === '/settings' ? '本地应用设置' : '本地大脑管理'}</span>
           </div>
           <div className="workspace-bar__actions"><div className={`workspace-bar__status${quietOverview ? ' workspace-bar__status--quiet' : ''}`} role="status" aria-label="索引运行状态" title={indexStatus}>
             <CircleDot aria-hidden="true" />

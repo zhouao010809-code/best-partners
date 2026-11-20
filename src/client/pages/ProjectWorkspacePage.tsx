@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Check, FolderKanban, MessageCircle, RefreshCw, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Check, Layers, FolderKanban, MessageCircle, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import type { ApiClientResult } from '../api/client.js';
 import type { ProjectScanPreview, ProjectSummary } from '../../shared/api/projects.js';
@@ -208,7 +208,10 @@ export function ProjectWorkspacePage() {
       <Link className="projects-back-link" to="/projects"><ArrowLeft size={15} aria-hidden="true" />返回我的项目</Link>
       <header className="projects-page__heading project-workspace__heading">
         <div><h1 id="project-workspace-title"><FolderKanban size={editing ? 19 : 24} aria-hidden="true" />{project.displayName}</h1>{!editing && <p>根据项目资料策划选题，写脚本，和问问一起打磨。</p>}</div>
-        <button type="button" className="projects-button projects-button--quiet" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}><MessageCircle size={16} aria-hidden="true" />讨论项目</button>
+        <div className="project-workspace__actions">
+          <Link className="projects-button projects-button--quiet" to={`/projects/${encodeURIComponent(project.id)}/brand`}><Layers size={15} aria-hidden="true" />品牌定位</Link>
+          <button type="button" className="projects-button projects-button--quiet" onClick={() => askAssistant({ prompt: ' ', scope: 'project', projectId: project.id, projectRevision: project.sourceRevision })}><MessageCircle size={16} aria-hidden="true" />讨论项目</button>
+        </div>
       </header>
       {message !== undefined && <p className="projects-inline-message" role="status">{message}</p>}
       {staleNotice && <p className="project-stale-notice" role="status"><ShieldCheck size={15} aria-hidden="true" />重新连接后，旧的项目写入计划不会自动执行；请重新确认当前资料。</p>}

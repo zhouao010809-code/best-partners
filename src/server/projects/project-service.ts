@@ -4,11 +4,15 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { basename, relative, sep } from 'node:path';
 import {
+  projectBrandProfileSchema,
+  projectBrandSaveSchema,
   projectContextSchema,
   projectFileDetailSchema,
   projectFilePageSchema,
   projectScanPreviewSchema,
   projectSummarySchema,
+  type ProjectBrandProfile,
+  type ProjectBrandSave,
   type ProjectContext,
   type ProjectFile,
   type ProjectFileDetail,
@@ -36,6 +40,10 @@ interface ProjectRow {
   id: string;
   root_path: string;
   display_name: string;
+  category: string | null;
+  positioning: string | null;
+  purchase_reason: string | null;
+  brand_revision: number | null;
   source_revision: number;
   source_sha256: string;
   availability: 'ready' | 'scanning' | 'unavailable' | 'reconnect-required';
@@ -129,6 +137,7 @@ function projectSummary(row: ProjectRow, database: Database.Database): ProjectSu
   return projectSummarySchema.parse({
     id: row.id,
     displayName: row.display_name,
+    brand: { category: row.category ?? '', positioning: row.positioning ?? '', purchaseReason: row.purchase_reason ?? '' },
     sourceRevision: row.source_revision,
     availability: row.availability,
     outputRoot: 'AI工作区',
@@ -141,8 +150,14 @@ function projectSummary(row: ProjectRow, database: Database.Database): ProjectSu
   });
 }
 
+const projectSelect = `
+  SELECT p.*, b.category, b.positioning, b.purchase_reason, b.revision AS brand_revision
+  FROM personal_projects AS p
+  LEFT JOIN personal_project_brand_profiles AS b ON b.project_id = p.id
+`;
+
 function rowOrThrow(database: Database.Database, id: string): ProjectRow {
-  const row = database.prepare('SELECT * FROM personal_projects WHERE id = ?').get(id) as ProjectRow | undefined;
+  const row = database.prepare(`${projectSelect} WHERE p.id = ?`).get(id) as ProjectRow | undefined;
   if (row === undefined) throw coded('PROJECT_NOT_FOUND', 'Project not found');
   return row;
 }
@@ -498,11 +513,49 @@ export function createProjectService(input: {
   }
 
   async function list(): Promise<readonly ProjectSummary[]> {
-    return (database.prepare('SELECT * FROM personal_projects ORDER BY created_at ASC, id ASC').all() as ProjectRow[]).map((row) => projectSummary(row, database));
+    return (database.prepare(`${projectSelect} ORDER BY p.created_at ASC, p.id ASC`).all() as ProjectRow[]).map((row) => projectSummary(row, database));
   }
 
   async function get(id: string): Promise<ProjectSummary> {
     return projectSummary(rowOrThrow(database, id), database);
+  }
+
+  async function getBrand(id: string): Promise<ProjectBrandProfile> {
+    const row = database.prepare(`
+      SELECT b.category, b.positioning, b.purchase_reason, b.evidence_json, b.claims_json, b.revision
+      FROM personal_projects AS p LEFT JOIN personal_project_brand_profiles AS b ON b.project_id = p.id
+      WHERE p.id = ?
+    `).get(id) as (Pick<ProjectRow, 'category' | 'positioning' | 'purchase_reason'> & {
+      revision: number | null; evidence_json: string | null; claims_json: string | null
+    }) | undefined;
+    if (!row) throw coded('PROJECT_NOT_FOUND', 'Project not found');
+    return projectBrandProfileSchema.parse({
+      category: row.category ?? '', positioning: row.positioning ?? '', purchaseReason: row.purchase_reason ?? '',
+      evidence: row.evidence_json ? JSON.parse(row.evidence_json) : [],
+      claims: row.claims_json ? JSON.parse(row.claims_json) : [],
+      revision: row.revision ?? 0
+    });
+  }
+
+  async function saveBrand(id: string, input: ProjectBrandSave): Promise<ProjectBrandProfile> {
+    const { expectedRevision, ...profile } = projectBrandSaveSchema.parse(input);
+    return database.transaction(() => {
+      const row = rowOrThrow(database, id);
+      if ((row.brand_revision ?? 0) !== expectedRevision) {
+        throw coded('PROJECT_BRAND_REVISION_CONFLICT', 'Project brand profile changed');
+      }
+      const revision = expectedRevision + 1;
+      database.prepare(`
+        INSERT INTO personal_project_brand_profiles
+          (project_id, category, positioning, purchase_reason, evidence_json, claims_json, revision)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id) DO UPDATE SET category = excluded.category, positioning = excluded.positioning,
+          purchase_reason = excluded.purchase_reason, evidence_json = excluded.evidence_json,
+          claims_json = excluded.claims_json, revision = excluded.revision
+      `).run(id, profile.category, profile.positioning, profile.purchaseReason,
+        JSON.stringify(profile.evidence), JSON.stringify(profile.claims), revision);
+      return { ...profile, revision };
+    }).immediate();
   }
 
   async function listFiles(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }): Promise<ProjectFilePage> {
@@ -593,6 +646,8 @@ export function createProjectService(input: {
     reconnect,
     list,
     get,
+    getBrand,
+    saveBrand,
     refresh,
     ensureFresh,
     listFiles,

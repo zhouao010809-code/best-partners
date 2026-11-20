@@ -4,6 +4,7 @@ import { IntakePage } from '../pages/IntakePage.js';
 import { KnowledgePage } from '../pages/KnowledgePage.js';
 import { LibraryPage } from '../pages/LibraryPage.js';
 import { OperationsPage } from '../pages/OperationsPage.js';
+import { ProjectBrandPage } from '../pages/ProjectBrandPage.js';
 import { ProjectWorkspacePage } from '../pages/ProjectWorkspacePage.js';
 import { ProjectsPage } from '../pages/ProjectsPage.js';
 import { DiscussionPage } from '../pages/DiscussionPage.js';
@@ -23,6 +24,7 @@ export const routePages = {
   KnowledgePage,
   ProjectsPage,
   ProjectWorkspacePage,
+  ProjectBrandPage,
   SkillsPage,
   OperationsPage,
   SettingsPage,

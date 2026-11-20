@@ -57,6 +57,24 @@ export const projectRelativePathSchema = z.string().min(1).max(4096)
 export const projectRootPathSchema = z.string().min(1).max(4096)
   .refine(value => !/[\u0000-\u001f\u007f]/u.test(value), 'PROJECT_ROOT_INVALID');
 
+const projectBrandSummarySchema = z.strictObject({
+  category: z.string().trim().max(200),
+  positioning: z.string().trim().max(4000),
+  purchaseReason: z.string().trim().max(4000)
+});
+const brandFieldsSchema = projectBrandSummarySchema.extend({
+  evidence: z.array(z.strictObject({
+    fact: z.string().trim().min(1).max(2000),
+    source: z.string().trim().max(1000)
+  })).max(50),
+  claims: z.array(z.strictObject({ claim: z.string().trim().min(1).max(2000) })).max(50)
+});
+export const projectBrandProfileSchema = brandFieldsSchema.extend({ revision: z.number().int().nonnegative() });
+export const projectBrandSaveSchema = brandFieldsSchema.extend({ expectedRevision: z.number().int().nonnegative() });
+export const projectBrandResponseSchema = successEnvelopeSchema(projectBrandProfileSchema);
+export type ProjectBrandProfile = z.infer<typeof projectBrandProfileSchema>;
+export type ProjectBrandSave = z.infer<typeof projectBrandSaveSchema>;
+
 export const projectSummarySchema = z.strictObject({
   id: z.uuid(),
   displayName: z.string().min(1).max(255),
@@ -68,6 +86,7 @@ export const projectSummarySchema = z.strictObject({
   issueCount: z.number().int().nonnegative(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  brand: projectBrandSummarySchema.optional(),
   lastScannedAt: z.string().optional()
 });
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
@@ -216,6 +235,8 @@ export interface ProjectService {
   reconnect(id: string, scanId: string, input: { sourceSha256: string; displayName?: string }): Promise<ProjectSummary>;
   list(): Promise<readonly ProjectSummary[]>;
   get(id: string): Promise<ProjectSummary>;
+  getBrand(id: string): Promise<ProjectBrandProfile>;
+  saveBrand(id: string, input: ProjectBrandSave): Promise<ProjectBrandProfile>;
   refresh(id: string, signal?: AbortSignal): Promise<ProjectSummary>;
   ensureFresh(id: string, signal?: AbortSignal): Promise<ProjectSummary>;
   listFiles(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }): Promise<ProjectFilePage>;

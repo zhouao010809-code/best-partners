@@ -3,6 +3,8 @@ import { API_VERSION } from '../../../shared/api/schemas.js';
 import { PublicApiError } from '../../../shared/api/errors.js';
 import {
   projectBindRequestSchema,
+  projectBrandResponseSchema,
+  projectBrandSaveSchema,
   projectFilePageResponseSchema,
   projectFileQuerySchema,
   projectFileReadQuerySchema,
@@ -38,6 +40,9 @@ function projectError(error: unknown): never {
   const code = error instanceof Error && 'code' in error ? String((error as Error & { code: string }).code) : undefined;
   if (code === 'PROJECT_NOT_FOUND' || code === 'PROJECT_SCAN_NOT_FOUND' || code === 'PROJECT_FILE_NOT_FOUND') {
     throw new PublicApiError(code, 'Project resource not found', 404);
+  }
+  if (code === 'PROJECT_BRAND_REVISION_CONFLICT') {
+    throw new PublicApiError(code, '品牌资料已更新，请重新读取后保存。', 409);
   }
   if (code === 'PROJECT_WRITE_PLAN_RESOLVED' || code === 'PROJECT_WRITE_PLAN_PROJECT_MISMATCH' || code === 'PROJECT_OUTPUT_EXISTS') {
     throw new PublicApiError(code, 'Project write plan cannot be applied', 409);
@@ -96,6 +101,21 @@ export function registerProjectRoutes(app: FastifyInstance, service?: ProjectSer
     const { id } = parseApiInput(projectIdParamSchema, request.params);
     const result = await safely(() => requiredService(service).get(id));
     return parseApiOutput(projectSummaryResponseSchema, { data: result, version: API_VERSION });
+  });
+
+  app.get('/api/v1/projects/:id/brand', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { id } = parseApiInput(projectIdParamSchema, request.params);
+    const data = await safely(() => requiredService(service).getBrand(id));
+    return parseApiOutput(projectBrandResponseSchema, { data, version: API_VERSION });
+  });
+
+  app.put('/api/v1/projects/:id/brand', async (request, reply) => {
+    reply.header('cache-control', 'no-store');
+    const { id } = parseApiInput(projectIdParamSchema, request.params);
+    const input = parseApiInput(projectBrandSaveSchema, request.body);
+    const data = await safely(() => requiredService(service).saveBrand(id, input));
+    return parseApiOutput(projectBrandResponseSchema, { data, version: API_VERSION });
   });
 
   app.post('/api/v1/projects/:id/refresh', async (request, reply) => {

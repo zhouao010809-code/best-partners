@@ -54,7 +54,7 @@ describe('personal project registry and index', () => {
     expect(preview).not.toHaveProperty('content_text');
     const summary = await f.service.bind(preview.scanId, { sourceSha256: preview.sourceSha256 });
     expect(summary).toEqual(expect.objectContaining({ displayName: 'client-project', sourceRevision: 1, availability: 'ready', fileCount: 3 }));
-    expect(Object.keys(summary).sort()).toEqual(['availability', 'createdAt', 'displayName', 'fileCount', 'id', 'issueCount', 'lastScannedAt', 'outputRoot', 'readableFileCount', 'sourceRevision', 'updatedAt']);
+    expect(Object.keys(summary).sort()).toEqual(['availability', 'brand', 'createdAt', 'displayName', 'fileCount', 'id', 'issueCount', 'lastScannedAt', 'outputRoot', 'readableFileCount', 'sourceRevision', 'updatedAt']);
     const files = await f.service.listFiles(summary.id, { search: '获客', limit: 10 });
     expect(files.items.map((item) => item.relativePath)).toEqual(['README.md']);
     expect((await f.service.listFiles(summary.id, { origin: 'output' })).items.map((item) => item.relativePath)).toEqual(['AI工作区', 'AI工作区/draft.md']);

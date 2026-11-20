@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, FolderKanban, FolderPlus, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
+import { ChevronRight, FolderKanban, FolderPlus, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { ProjectScanPreview, ProjectSummary } from '../../shared/api/projects.js';
 import type { ApiClientResult } from '../api/client.js';
@@ -146,7 +146,7 @@ export function ProjectsPage() {
   return (
     <section className="projects-page" aria-labelledby="projects-title">
       <header className="projects-page__heading">
-        <div><h1 id="projects-title">我的项目</h1><p>用项目资料策划选题、写脚本，保留定稿，再导出给拍摄和剪辑。</p></div>
+        <div><h1 id="projects-title">我的项目</h1><p>点开品牌定位，查看该项目的证据链和核心宣传主张。</p></div>
         <button type="button" className="projects-button projects-button--primary" onClick={() => void addProject()} disabled={scanning || binding}>
           {scanning ? <LoaderCircle size={16} className="projects-spin" aria-hidden="true" /> : <FolderPlus size={16} aria-hidden="true" />}
           {scanning ? '正在扫描…' : '添加项目'}
@@ -154,16 +154,51 @@ export function ProjectsPage() {
       </header>
       {message !== undefined && <p className="projects-inline-message" role="status">{message}</p>}
       {state === 'loading' && <PageState state={{ status: 'loading', message: '正在读取项目列表。' }} />}
-      {state !== 'loading' && projects.length === 0 && <section className="projects-empty instrument-panel"><FolderKanban size={28} aria-hidden="true" /><h3>添加你的第一个项目</h3><p>选择电脑上的一个项目文件夹，例如客户资料、课程或创作素材。文件保留在原位置。</p><button type="button" className="projects-button projects-button--primary" onClick={() => void addProject()} disabled={scanning}><FolderPlus size={15} aria-hidden="true" />选择项目文件夹</button></section>}
-      {projects.length > 0 && <section className="projects-collection" aria-label="已添加项目">
-        <p className="projects-collection__count">共 {projects.length} 个项目</p>
-        <div className="projects-list">{projects.map((project) => <Link to={`/projects/${encodeURIComponent(project.id)}`} className="project-list-card" key={project.id}>
-          <span className={`project-list-card__icon project-list-card__icon--${project.availability}`}><FolderKanban size={22} aria-hidden="true" /></span>
-          <span className="project-list-card__body"><strong>{project.displayName}</strong><small>{project.readableFileCount} 份可阅读资料 · 共 {project.fileCount} 个文件</small></span>
-          <span className={`project-list-card__status project-list-card__status--${project.availability}`}>{project.availability === 'reconnect-required' && <TriangleAlert size={14} aria-hidden="true" />}{availabilityLabel(project.availability)}</span>
-          <span className="project-list-card__enter">进入项目<ArrowRight size={16} aria-hidden="true" /></span>
-        </Link>)}</div>
-      </section>}
+      {state !== 'loading' && (
+        <section className="project-register" aria-label="已添加项目">
+          <div className="project-register__table-wrap">
+            <table className="project-register__table" aria-label="项目品牌总表">
+              <colgroup><col className="project-register__name-col" /><col className="project-register__category-col" /><col className="project-register__position-col" /><col /></colgroup>
+              <thead><tr>{['项目名', '品类', '品牌定位', '购买理由'].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead>
+              <tbody>
+                {projects.map(project => {
+                  const workspace = `/projects/${encodeURIComponent(project.id)}`;
+                  const brand = project.brand;
+                  return (
+                    <tr key={project.id}>
+                      <th scope="row">
+                        <Link className="project-register__name" to={workspace}>
+                          <FolderKanban size={17} aria-hidden="true" />
+                          <span>{project.displayName}</span>
+                        </Link>
+                        {project.availability !== 'ready' && <small className="project-register__status"><TriangleAlert size={12} aria-hidden="true" />{availabilityLabel(project.availability)}</small>}
+                      </th>
+                      <td>{brand?.category ? <span className="project-register__category">{brand.category}</span> : <span className="project-register__blank" aria-label="未填写">—</span>}</td>
+                      <td>
+                        <Link className="project-register__position" to={`${workspace}/brand`} aria-label={`${project.displayName}的品牌定位`}>
+                          <span>{brand?.positioning || '填写品牌定位'}</span><ChevronRight size={14} aria-hidden="true" />
+                        </Link>
+                      </td>
+                      <td>{brand?.purchaseReason || <span className="project-register__blank" aria-label="未填写">—</span>}</td>
+                    </tr>
+                  );
+                })}
+                {projects.length === 0 && (
+                  <tr><td colSpan={4}>
+                    <div className="project-register__empty">
+                      <span className="project-register__empty-icon"><FolderKanban size={26} aria-hidden="true" /></span>
+                      <h2>添加你的第一个项目</h2>
+                      <p>选择本地项目文件夹后，即可填写品牌资料。</p>
+                      <button type="button" className="projects-button" onClick={() => void addProject()} disabled={scanning}><FolderPlus size={15} aria-hidden="true" />选择项目文件夹</button>
+                    </div>
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <p className="project-register__count">共 {projects.length} 个项目</p>
+        </section>
+      )}
     </section>
   );
 }

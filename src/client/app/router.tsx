@@ -17,6 +17,7 @@ const {
   KnowledgePage: KnowledgeRoutePage,
   ProjectsPage: ProjectsRoutePage,
   ProjectWorkspacePage: ProjectWorkspaceRoutePage,
+  ProjectBrandPage: ProjectBrandRoutePage,
   SkillsPage: SkillsRoutePage,
   OperationsPage: OperationsRoutePage,
   SettingsPage: SettingsRoutePage,
@@ -104,6 +105,7 @@ export function AppRouter({ api, runtimeMode = 'personal' }: AppRouterProps = {}
         <Route path="trash" element={<RouteElement component={TrashRoutePage} />} />
         <Route path="knowledge" element={<RouteElement component={KnowledgeRoutePage} />} />
         <Route path="projects" element={<RouteElement component={ProjectsRoutePage} />} />
+        <Route path="projects/:id/brand" element={<RouteElement component={ProjectBrandRoutePage} />} />
         <Route path="projects/:id" element={<RouteElement component={ProjectWorkspaceRoutePage} />} />
         <Route path="skills" element={<RouteElement component={SkillsRoutePage} />} />
         <Route path="operations" element={<RouteElement component={OperationsRoutePage} />} />

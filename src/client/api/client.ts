@@ -50,6 +50,9 @@ import { trashPreviewResponseSchema, trashDeletePreviewResponseSchema, trashEntr
 import { intakeTrashPreviewResponseSchema, intakeTrashDeletePreviewResponseSchema, intakeTrashEntryResponseSchema, intakeTrashListResponseSchema,
   type IntakeTrashPreview, type IntakeTrashDeletePreview, type IntakeTrashEntry, type IntakeTrashList } from '../../shared/api/intake-trash.js';
 import {
+  projectBrandResponseSchema,
+  type ProjectBrandProfile,
+  type ProjectBrandSave,
   projectFilePageResponseSchema,
   projectFileResponseSchema,
   projectListResponseSchema,
@@ -198,6 +201,8 @@ export interface ReadConsoleApi {
     reconnect(id: string, input: { scanId: string; sourceSha256: string; displayName?: string }): Promise<ApiClientResult<ProjectSummary>>;
     list(signal?: AbortSignal): Promise<ApiClientResult<{ projects: ProjectSummary[] }>>;
     get(id: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectSummary>>;
+    getBrand?(id: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectBrandProfile>>;
+    saveBrand?(id: string, input: ProjectBrandSave): Promise<ApiClientResult<ProjectBrandProfile>>;
     refresh(id: string): Promise<ApiClientResult<ProjectSummary>>;
     files(id: string, query: { search?: string; origin?: 'source' | 'output'; limit?: number }, signal?: AbortSignal): Promise<ApiClientResult<ProjectFilePage>>;
     file(id: string, relativePath: string, signal?: AbortSignal): Promise<ApiClientResult<ProjectFileDetail>>;
@@ -548,6 +553,8 @@ export function createBrowserReadConsoleApi(fetchImplementation?: FetchLike, ini
       reconnect: (id, input) => postWithCsrf(`/api/v1/projects/${encodeURIComponent(id)}/reconnect`, projectSummaryResponseSchema, input),
       list: signal => requestData(fetcher, '/api/v1/projects', projectListResponseSchema, getInit(signal)),
       get: (id, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(id)}`, projectSummaryResponseSchema, getInit(signal)),
+      getBrand: (id, signal) => requestData(fetcher, `/api/v1/projects/${encodeURIComponent(id)}/brand`, projectBrandResponseSchema, getInit(signal)),
+      saveBrand: (id, input) => writeWithCsrf(`/api/v1/projects/${encodeURIComponent(id)}/brand`, projectBrandResponseSchema, 'PUT', JSON.stringify(input)),
       refresh: id => postWithCsrf(`/api/v1/projects/${encodeURIComponent(id)}/refresh`, projectSummaryResponseSchema, {}),
       files: (id, query, signal) => requestData(fetcher, withQuery(`/api/v1/projects/${encodeURIComponent(id)}/files`, parameters => {
         appendQuery(parameters, 'search', query.search);
